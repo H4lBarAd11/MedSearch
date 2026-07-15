@@ -1,37 +1,43 @@
 # MedSearch — macOS install (neurosurgery iMac)
 
-A double-clickable setup: a launcher that sets itself up on first run, plus a
-Desktop icon to start it. Works on any Mac (Intel or Apple Silicon) and keeps
-the in-app **Update** button working, because it runs from a git clone.
+Goal: a Desktop icon that launches MedSearch like a normal Mac app — **no
+Terminal window, ever** — while still updating itself via the in-app Update
+button. Works on any Mac (Intel or Apple Silicon).
 
-**Prerequisite:** Python 3.8+ and Git (both are pre-installed on macOS, or from
+**Prerequisite:** Python 3.8+ and Git (pre-installed on macOS, or from
 [python.org](https://python.org) / `xcode-select --install`).
 
-## Steps (do these on the iMac)
+## Setup (do once, by whoever installs it)
 
-1. **Clone the repo** somewhere permanent (e.g. your home folder):
+1. **Clone the repo** somewhere permanent (e.g. the home folder):
    ```bash
    git clone https://github.com/H4lBarAd11/MedSearch-by-RN.git
    cd MedSearch-by-RN
    ```
 
-2. **First launch.** Double-click **`MedSearch.command`** in the folder. On first
-   run it creates a local environment and installs dependencies (one time,
-   ~1 min), then the MedSearch window opens.
-   > If macOS blocks it ("unidentified developer"): right-click
-   > `MedSearch.command` ▸ **Open** ▸ **Open**. Only needed once.
+2. **Double-click `Create Desktop App.command`.** A Terminal window appears *just
+   for this one-time step* — it sets up the environment, installs dependencies,
+   and builds a **MedSearch** app onto the Desktop. When it says "Done", close
+   that Terminal window.
+   > If macOS blocks it ("unidentified developer"): right-click ▸ **Open** ▸
+   > **Open**, once.
 
-3. **Create the Desktop icon.** Double-click **`Create Desktop Alias.command`**
-   once. A **MedSearch** icon (with the app's own icon) appears on the Desktop —
-   a Finder alias to the launcher. From then on, just double-click that.
-   > The first time, macOS may ask to let Terminal control Finder — click **OK**.
+That's the whole install.
 
-That's it. To update later, use the **Update** button inside the app (or
-`git pull` in the folder).
+## Daily use (what the doctors do)
+
+**Double-click the MedSearch icon on the Desktop.** The app opens in its own
+window — no Terminal, no black window, nothing else to see or close. Quit it like
+any app (⌘Q or close the window).
 
 ## Notes
 
-- Keep the folder in a fixed location. If you move it, re-run
-  `Create Desktop Alias.command` to refresh the alias.
-- Everything runs locally; the only system-wide change is the Python packages,
+- The Desktop app is a thin launcher that runs MedSearch from this git clone, so
+  the in-app **Update** button still works (it does a `git pull`).
+- Keep the cloned folder in a fixed location. If you ever **move or rename** it,
+  re-run `Create Desktop App.command` to rebuild the Desktop app against the new
+  path.
+- `MedSearch.command` is still in the folder as a plain (Terminal-visible)
+  launcher for troubleshooting, but day-to-day nobody needs it.
+- Everything runs locally; the only change to the machine is the Python packages,
   which live inside the folder's `.venv`.
