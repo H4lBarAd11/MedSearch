@@ -88,6 +88,19 @@ for i,(nx,ny) in enumerate(nodes):
 
 d.ellipse([origin[0]-s(16),origin[1]-s(16),origin[0]+s(16),origin[1]+s(16)], fill=node_dark)
 
-img = img.resize((SIZE, SIZE), Image.LANCZOS)
-img.save("icon_preview.png")
-print("✓ Scaled-up version rendered")
+# ════════════════════════════════════════════════════
+#  Embed the rounded-square artwork into a padded canvas
+#  so it matches Apple's macOS icon grid (body ≈ 80% of
+#  the canvas, transparent margin around it). Without this
+#  the edge-to-edge icon renders larger than default apps.
+# ════════════════════════════════════════════════════
+OUT = 1024                       # final icon canvas
+CONTENT_RATIO = 0.80             # Apple grid: 824/1024 ≈ 0.80
+content = round(OUT * CONTENT_RATIO)
+offset = (OUT - content) // 2
+
+art = img.resize((content, content), Image.LANCZOS)
+canvas = Image.new("RGBA", (OUT, OUT), (0, 0, 0, 0))
+canvas.paste(art, (offset, offset), art)
+canvas.save("icon_preview.png")
+print(f"✓ Padded icon rendered ({content}px art in {OUT}px canvas)")
