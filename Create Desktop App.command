@@ -75,6 +75,10 @@ PLIST
 # the Dock icon and app identity are MedSearch's. No terminal is ever shown.
 cat > "$APP/Contents/MacOS/MedSearch" <<LAUNCH
 #!/bin/bash
+# A double-clicked app inherits only a minimal PATH, which can hide 'git' from
+# the in-app Update button. Add the usual git locations (Apple CLT + Homebrew)
+# so auto-update works regardless of how git was installed.
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\$PATH"
 cd "$SCRIPT_DIR"
 if [ ! -x "$SCRIPT_DIR/.venv/bin/python3" ]; then
   osascript -e 'display alert "MedSearch needs setup" message "Re-run \"Create Desktop App.command\" in the MedSearch folder."' >/dev/null 2>&1 || true
