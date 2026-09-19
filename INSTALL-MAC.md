@@ -1,8 +1,8 @@
 # MedSearch — macOS install (neurosurgery iMac)
 
 Goal: a Desktop icon that launches MedSearch like a normal Mac app — **no
-Terminal window, ever** — while still updating itself via the in-app Update
-button. Works on any Mac (Intel or Apple Silicon).
+Terminal window, ever** — while still updating itself when the app offers
+**Update now**. Works on any Mac (Intel or Apple Silicon).
 
 **Prerequisite:** Python 3.8+ and Git (pre-installed on macOS, or from
 [python.org](https://python.org) / `xcode-select --install`).
@@ -33,7 +33,7 @@ any app (⌘Q or close the window).
 ## Notes
 
 - The Desktop app is a thin launcher that runs MedSearch from this git clone, so
-  the in-app **Update** button still works (it does a `git pull`).
+  the in-app **Update now** prompt still works (it does a `git pull`).
 - Keep the cloned folder in a fixed location. If you ever **move or rename** it,
   re-run `Create Desktop App.command` to rebuild the Desktop app against the new
   path.

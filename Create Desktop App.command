@@ -84,7 +84,7 @@ if [ ! -x "$SCRIPT_DIR/.venv/bin/python3" ]; then
   osascript -e 'display alert "MedSearch needs setup" message "Re-run \"Create Desktop App.command\" in the MedSearch folder."' >/dev/null 2>&1 || true
   exit 1
 fi
-exec "$SCRIPT_DIR/.venv/bin/python3" "$SCRIPT_DIR/app.py"
+exec "$SCRIPT_DIR/.venv/bin/python3" "$SCRIPT_DIR/app.py" "\$@"
 LAUNCH
 chmod +x "$APP/Contents/MacOS/MedSearch"
 

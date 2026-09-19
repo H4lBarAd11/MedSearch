@@ -157,11 +157,25 @@ def set_default_source(src):
     save_config(cfg)
 
 
-def _port_is_alive(port):
-    """True if something answers HTTP on 127.0.0.1:<port> (our server)."""
+TOKEN_FILE  = CONFIG_DIR / "server_token"  # main app's per-launch request token
+
+
+def _server_headers():
+    """Headers for a request to the main app. It refuses requests without the
+    token it writes to ~/.medsearch/server_token at launch."""
+    headers = {"Content-Type": "application/json"}
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1.5) as r:
-            return r.status == 200
+        headers["X-MedSearch-Token"] = TOKEN_FILE.read_text().strip()
+    except Exception:
+        pass
+    return headers
+
+
+def _port_is_alive(port):
+    """True if the MedSearch server answers on 127.0.0.1:<port>."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/ping", timeout=1.5) as r:
+            return json.loads(r.read().decode()).get("app") == "medsearch"
     except Exception:
         return False
 
@@ -206,7 +220,7 @@ def _queue_search(port, query, source):
         body = json.dumps({"query": query, "source": source}).encode()
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/queue_search",
-            data=body, headers={"Content-Type": "application/json"}, method="POST")
+            data=body, headers=_server_headers(), method="POST")
         with urllib.request.urlopen(req, timeout=5) as r:
             return r.status == 200
     except Exception as e:
@@ -362,7 +376,7 @@ class MedSearchBar(rumps.App):
                     req = urllib.request.Request(
                         f"http://127.0.0.1:{port}/default_source",
                         data=json.dumps({"source": key}).encode(),
-                        headers={"Content-Type": "application/json"},
+                        headers=_server_headers(),
                         method="POST",
                     )
                     urllib.request.urlopen(req, timeout=2)
