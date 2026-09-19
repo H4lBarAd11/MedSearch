@@ -826,6 +826,15 @@ function applyResultFilters() {
   document.getElementById('rfCount').textContent = active ? `${shown} of ${total} shown` : '';
 }
 
+// The sticky results header paints the band above itself only while stuck
+// (see .results-header.stuck in app.css).
+document.getElementById('resultsScroll').addEventListener('scroll', function () {
+  const h = document.getElementById('resultsHeader');
+  if (!h) return;
+  const stickAt = this.getBoundingClientRect().top + 102;   // css: top -16px + 118px padding
+  h.classList.toggle('stuck', h.getBoundingClientRect().top <= stickAt + 1);
+}, {passive: true});
+
 // Reset the app to its initial state — like just-launched, but in-session
 // (databases, saved searches, recent history, settings all preserved).
 function resetToHome() {
@@ -1204,7 +1213,7 @@ function openSynthesis() {
   const panel = document.getElementById('synthesisPanel');
   const text  = document.getElementById('synthesisText');
   panel.classList.add('open');
-  text.textContent = '';
+  setMd(text, '');
   synthesisOpen = true;
   document.getElementById('synthesisStopBtn').style.display = '';
 
@@ -1212,7 +1221,7 @@ function openSynthesis() {
   synthesisEventSource = es;
   es.onmessage = e => {
     const d = JSON.parse(e.data);
-    if (d.type === 'chunk') { text.textContent += d.text; }
+    if (d.type === 'chunk') { setMd(text, text._raw + d.text); }
     if (d.type === 'done')  { es.close(); synthesisEventSource = null; document.getElementById('synthesisStopBtn').style.display = 'none'; }
     if (d.type === 'error') {
       es.close(); synthesisEventSource = null;
@@ -1227,18 +1236,20 @@ function openSynthesis() {
     document.getElementById('synthesisStopBtn').style.display = 'none';
     // Dropped before a word arrived: nothing to read, so say so rather than
     // leave an empty sheet open.
-    if (!text.textContent) { closeSynthesis(); fail('The connection to MedSearch dropped. Try again.', "Couldn't write the synthesis"); }
+    if (!text._raw) { closeSynthesis(); fail('The connection to MedSearch dropped. Try again.', "Couldn't write the synthesis"); }
   };
 }
 
 function stopSynthesis() {
+  const stopping = !!synthesisEventSource;
   if (synthesisEventSource) {
     synthesisEventSource.close();
     synthesisEventSource = null;
   }
   const text = document.getElementById('synthesisText');
-  if (text && text.textContent) {
-    text.textContent += '\n\n— stopped —';
+  // Only a synthesis cut off mid-stream says so; a finished one is left alone.
+  if (synthesisEventSource === null && stopping && text && text._raw) {
+    setMd(text, text._raw + '\n\n— stopped —');
   }
   document.getElementById('synthesisStopBtn').style.display = 'none';
 }
@@ -1329,7 +1340,7 @@ function renderAssistantMessages() {
 
 // Turn [N] references into clickable spans that scroll to that card
 function linkifyCites(text) {
-  return escHtml(text).replace(/\[(\d+)\]/g, (m, n) =>
+  return renderMd(text).replace(/\[(\d+)\]/g, (m, n) =>
     `<span class="cite-ref" onclick="jumpToCard(${parseInt(n)-1})">[${n}]</span>`);
 }
 
@@ -1487,19 +1498,19 @@ function openExplain(idx) {
   const a = allArticles[idx];
   if (!a) return;
   document.getElementById('explainTitle').textContent = a.title;
-  document.getElementById('explainText').textContent  = '';
+  setMd(document.getElementById('explainText'), '');
   openOverlay('explainOverlay');
 
   const es = new EventSource(withToken('/explain/' + idx));
   es.onmessage = e => {
     const d = JSON.parse(e.data);
-    if (d.type === 'chunk') { document.getElementById('explainText').textContent += d.text; }
+    if (d.type === 'chunk') { const el = document.getElementById('explainText'); setMd(el, el._raw + d.text); }
     if (d.type === 'done')  { es.close(); }
     if (d.type === 'error') { es.close(); closeExplain(); fail(d.text, "Couldn't explain this paper"); }
   };
   es.onerror = () => {
     es.close();
-    if (!document.getElementById('explainText').textContent) {
+    if (!document.getElementById('explainText')._raw) {
       closeExplain(); fail('The connection to MedSearch dropped. Try again.', "Couldn't explain this paper");
     }
   };
@@ -2340,6 +2351,43 @@ function useMesh(term) {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+// The AI answers in Markdown. Shown raw, every heading arrived as "# …" and
+// every emphasis as "**…**" (found on the live walk, 19 Sep). This renders the
+// small subset it uses, AFTER escaping, so the text can never inject markup:
+// headings, bold, italics, inline code, bullet and numbered lists, paragraphs.
+function renderMd(src) {
+  const inline = t => t
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[\s(])\*([^*\s][^*]*)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
+  const out = [];
+  let list = null, para = [];
+  const flushPara = () => { if (para.length) { out.push('<p>' + inline(para.join(' ')) + '</p>'); para = []; } };
+  const flushList = () => { if (list) { out.push(`<${list.tag}>` + list.items.map(i => '<li>' + inline(i) + '</li>').join('') + `</${list.tag}>`); list = null; } };
+  for (const raw of escHtml(src || '').split('\n')) {
+    const line = raw.trimEnd();
+    let m;
+    if (!line.trim()) { flushPara(); flushList(); continue; }
+    if ((m = line.match(/^\s*(#{1,4})\s+(.*)$/))) {
+      flushPara(); flushList();
+      out.push(`<div class="md-h md-h${m[1].length}">` + inline(m[2]) + '</div>');
+    } else if ((m = line.match(/^\s*[-*•]\s+(.*)$/)) || (m = line.match(/^\s*(\d+)[.)]\s+(.*)$/))) {
+      flushPara();
+      const tag = /^\s*\d/.test(line) ? 'ol' : 'ul';
+      if (!list || list.tag !== tag) { flushList(); list = {tag, items: []}; }
+      list.items.push(m[m.length - 1]);
+    } else if (/^\s*(---+|\*\*\*+)\s*$/.test(line)) {
+      flushPara(); flushList(); out.push('<hr>');
+    } else {
+      flushList(); para.push(line.trim());
+    }
+  }
+  flushPara(); flushList();
+  return out.join('');
+}
+// Keep the raw text beside the rendering, so streamed chunks append to it.
+function setMd(el, text) { el._raw = text; el.innerHTML = renderMd(text); }
+
 // One of the drawn line icons in the page's <svg> sprite.
 function ico(name) { return `<svg class="ico" aria-hidden="true"><use href="#i-${name}"/></svg>`; }
 
