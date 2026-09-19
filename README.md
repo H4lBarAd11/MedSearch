@@ -10,17 +10,20 @@ MedSearch runs as a **native desktop window** (macOS, Windows, Linux). It search
 
 ## What it does
 
-- **Searches seven sources at once** — PubMed/MEDLINE, Cochrane Reviews, ClinicalTrials.gov, arXiv, Scopus, Web of Science, and a clinical-**Guidelines** source — and merges the results into one deduplicated list.
+- **Searches seven sources at once, in parallel** — PubMed/MEDLINE, Cochrane Reviews, ClinicalTrials.gov, arXiv, Scopus, Web of Science, and a clinical-**Guidelines** source — and merges the results into one deduplicated list.
 - **Clinical practice guidelines** — a "Guidelines" source surfaces national and society guidelines indexed in PubMed (works for many countries). Plus a **National guidelines** button that opens your country's official body directly — SNLG (Italy), NICE (UK), ECRI (US), AWMF (Germany), HAS (France) — with your search term pre-filled where the site allows.
-- **Sort by relevance or recency** — a toggle beside the search bar reorders results by best match or newest-first, applied per database.
-- **Load more results** — a "Find X more per source" button fetches the next batch from every active source and appends it (deduplicated), so you can dig deeper without re-running the search. X matches the per-source count you set beside the search bar.
+- **Sort by relevance or recency** — a setting under **Options** reorders results by best match or newest-first, applied per database.
+- **Load more results** — a "Find X more per source" button fetches the next batch from every active source and appends it (deduplicated), so you can dig deeper without re-running the search. X matches the per-source count you set under **Options**.
 - **Finds free full-text** via Unpaywall and OpenAlex, with a Sci-Hub fallback when no open-access copy exists.
+- **Retraction warnings** — retracted papers are flagged on the card (from PubMed and from Crossref / the Retraction Watch database), struck through, and flagged to the AI so it doesn't rely on them. Journal *expressions of concern* are flagged too.
+- **Study-design badges and filters** — PubMed publication types (meta-analysis, systematic review, guideline, RCT, …) are shown on each card, and the results can be filtered by study type, free full text, or journal quartile.
 - **Reads PDFs in-app** — a built-in viewer with fit-to-width, zoom, and save-to-disk. Open-access *and* Sci-Hub PDFs open right inside the window.
-- **Institutional library access** — point MedSearch at your university's EZProxy/OpenAthens and paywalled papers your institution subscribes to open through your library login, in a built-in browser window. Save several institutions and switch between them from the search bar.
+- **Institutional library access** — point MedSearch at your university's EZProxy/OpenAthens and paywalled papers your institution subscribes to open through your library login, in a built-in browser window. Save several institutions and switch between them under **Options**.
 - **AI summaries** (optional, needs a Claude API key) — a one-line takeaway per article, a streamed multi-paragraph synthesis across all results, and a per-paper "Explain" breakdown.
 - **AI research assistant** — a chat panel grounded in your current search results. Ask things like *"which of these support X?"* and it answers citing the papers on your screen, or answers general clinical questions.
 - **Citation graphs** — see what a paper cites and what cites it.
 - **Export** to Markdown, BibTeX, or RIS, or send straight to **Zotero** (if the desktop app is running).
+- **Layout** — the search sits in a floating bar at the top, with the sources being searched shown beside it. Everything else is in a macOS-style dock at the bottom. Light or dark follows your Mac's setting.
 - **Quality-of-life**: journal quartile badges, MeSH term hints, year filters, saved searches, recent-search history, and a built-in settings panel for API keys (no config files to edit).
 - **Friendly onboarding** — a first-launch guide (English / Italiano) and one-click auto-update.
 - **macOS menu-bar quick search** (optional companion app) — a small books-and-network icon in your status bar. Click it, type a query, and the search runs **inside the main MedSearch window** (it opens the app first if it isn't already running). Recent searches and the default-source picker live right in the dropdown. The menu uses native macOS styling (Liquid Glass on Tahoe), so it blends in with the system.
@@ -44,7 +47,7 @@ MedSearch opens in its own desktop window. (If the native-window library isn't a
 
 ### macOS — double-clickable launcher (recommended)
 
-After cloning, you don't need the Terminal to start MedSearch day-to-day. Just **double-click `MedSearch.command`** in the project folder. On first run it sets up a local environment and installs dependencies (one time); after that it launches the app directly. The in-app Update button keeps it current.
+After cloning, you don't need the Terminal to start MedSearch day-to-day. Just **double-click `MedSearch.command`** in the project folder. On first run it sets up a local environment and installs dependencies (one time); after that it launches the app directly. The in-app Update button keeps it current: it downloads the new version, installs any new dependencies, and restarts MedSearch for you.
 
 > If macOS blocks it the first time ("unidentified developer"), right-click `MedSearch.command` ▸ **Open** ▸ **Open**. You only do this once.
 
@@ -111,7 +114,7 @@ MedSearch works out of the box with the free databases — **no keys required** 
 | **Web of Science** | [developer.clarivate.com](https://developer.clarivate.com) | Web of Science as a search source |
 | **Unpaywall** | any valid email | Open-access PDF detection |
 
-Add keys from inside the app: **⚙ Settings & API keys**. They're saved locally to `~/.medsearch/config.json` and never leave your machine.
+Add keys from inside the app: **Settings** in the bottom bar. They're saved locally to `~/.medsearch/config.json` and never leave your machine.
 
 > **⚠️ Scopus & Web of Science need your institution's network.** These APIs authenticate by IP address, not just the key. From home you'll get a **401 error** — connect to your university VPN, or ask your library for an Elsevier *institutional token* (there's a field for it in Settings). On campus, the key alone works.
 
@@ -121,15 +124,15 @@ Add keys from inside the app: **⚙ Settings & API keys**. They're saved locally
 
 Many papers aren't open-access but *are* available through a university subscription. MedSearch can route those through your library so they open with your institutional access.
 
-In **⚙ Settings → Institutional libraries**, add your university's proxy address (EZProxy or OpenAthens). To find it: open any journal article *through your library's website* while off-campus, and copy the part of the address that appears in front of the publisher's name (e.g. `ezp.biblio.unitn.it`). Both the hostname-rewriting style and a `…?url=` login prefix are supported.
+In **Settings → Institutional libraries**, add your university's proxy address (EZProxy or OpenAthens). To find it: open any journal article *through your library's website* while off-campus, and copy the part of the address that appears in front of the publisher's name (e.g. `ezp.biblio.unitn.it`). Both the hostname-rewriting style and a `…?url=` login prefix are supported.
 
-Once set, paywalled papers show a **"DOI (via library)"** button that opens them in a built-in browser window carrying your login — so subscribed papers load directly. You can save several institutions and switch the active one from the picker beside the search bar. Anything your library doesn't cover still falls back to a DOI link and a Sci-Hub option.
+Once set, paywalled papers show a **"DOI (via library)"** button that opens them in a built-in browser window carrying your login — so subscribed papers load directly. You can save several institutions and switch the active one under **Options** in the bottom bar. Anything your library doesn't cover still falls back to a DOI link and a Sci-Hub option.
 
 ---
 
 ## How AI cost is kept low
 
-If you use the AI features, MedSearch is careful with tokens: one-line summaries use the cheap Haiku model, the assistant reuses a cached, trimmed context across turns, and outputs are capped. A typical multi-turn assistant conversation costs roughly a few cents. You can turn AI off entirely with the **AI on/off toggle** in the top bar if you'd rather just search.
+If you use the AI features, MedSearch is careful with tokens: one-line summaries use the cheap Haiku model, the assistant reuses a cached, trimmed context across turns, and outputs are capped. A typical multi-turn assistant conversation costs roughly a few cents. You can turn AI off entirely with the **AI on/off** button in the bottom bar if you'd rather just search.
 
 ---
 
@@ -139,13 +142,16 @@ If you use the AI features, MedSearch is careful with tokens: one-line summaries
 MedSearch-by-RN/
 ├── app.py                ← Flask backend + native-window launcher
 ├── templates/
-│   └── index.html        ← The entire UI (HTML/CSS/JS)
+│   └── index.html        ← The page's markup
+├── static/css/app.css    ← Styles (house style, light + dark)
+├── static/js/            ← boot.js (runs first) + app.js (the page's behaviour)
 ├── menubar.py            ← macOS menu-bar quick-search companion (optional)
 ├── MedSearch.command     ← Double-click launcher (sets up + runs the app)
 ├── setup_main.py         ← py2app build for the main app  (→ MedSearch.app)
 ├── setup.py              ← py2app build for the menu-bar app
 ├── requirements.txt      ← Python dependencies (rumps is optional, macOS only)
-├── icon.icns / icon.svg  ← App icons
+├── static/fonts, vendor/ ← Bundled DM Sans (OFL) and PDF.js, so the app works offline
+├── icon.icns             ← App icon
 ├── menubar_icon.png      ← Menu-bar glyph (books + network)
 ├── menubar_app_icon.icns ← Menu-bar app bundle icon
 ├── render_*.py           ← Scripts that generate the icons (reproducible)
@@ -171,7 +177,7 @@ Make sure `rumps` is installed (`pip3 install rumps`) and that the app was launc
 Add a free NCBI API key in Settings — it raises the limit from 3 to 10 requests/sec.
 
 **An API key isn't being picked up.**
-Re-enter it in ⚙ Settings and Save. Most keys take effect immediately; restart the app if one still isn't working.
+Re-enter it in **Settings** (bottom bar) and Save. Most keys take effect immediately; restart the app if one still isn't working.
 
 **"externally managed environment" error from pip (macOS/Linux).**
 Use a virtual environment:

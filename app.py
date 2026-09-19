@@ -24,7 +24,7 @@ Server-Sent Events (SSE).
 
 import sys, os, json, re, time, threading, urllib.parse, urllib.request
 import urllib.error, xml.etree.ElementTree as ET
-import concurrent.futures
+import concurrent.futures, hashlib, hmac, secrets, subprocess
 from datetime import datetime
 from pathlib import Path
 from flask import Flask, render_template, request, Response, jsonify, stream_with_context
@@ -54,8 +54,18 @@ else:
 BASE_DIR = RESOURCE_DIR
 sys.path.insert(0, str(BASE_DIR))
 
-app = Flask(__name__, template_folder=str(BASE_DIR / "templates"))
-app.secret_key = "medsearch_riccardo_2026"
+app = Flask(__name__, template_folder=str(BASE_DIR / "templates"),
+            static_folder=str(BASE_DIR / "static"))
+
+# ── Request token ────────────────────────────────────────────────────────────
+# The server listens on 127.0.0.1, which every web page open in the user's
+# ordinary browser can also reach. Without a check, any site could POST to
+# /update/apply or spend the user's Anthropic credits through /synthesis. A
+# random per-launch token is rendered into our own page (other origins can't
+# read it) and must accompany every request except the page itself. The token
+# is also written to ~/.medsearch/server_token (0600) for the menu-bar app.
+APP_TOKEN = secrets.token_urlsafe(24)
+_OPEN_PATHS = ("/", "/ping")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CONFIG  (shared with medsearch.py logic)
@@ -254,14 +264,50 @@ def get_quartile(j):
 #  HTTP HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
+class _RateLimiter:
+    """Spaces calls to one service evenly across threads."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._next = 0.0
+
+    def wait(self, per_second):
+        with self._lock:
+            now = time.monotonic()
+            slot = max(now, self._next)
+            self._next = slot + 1.0 / per_second
+        if slot > now:
+            time.sleep(slot - now)
+
+# Sources now run in parallel, and Cochrane, Guidelines, PubMed and the PMC
+# lookups all hit NCBI. NCBI allows 3 requests/s without a key and 10 with one,
+# and answers 429 beyond that, so every NCBI call shares one limiter.
+_NCBI_LIMITER = _RateLimiter()
+
+def _throttle(url):
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    if host.endswith("ncbi.nlm.nih.gov"):
+        _NCBI_LIMITER.wait(9 if CONFIG.get("pubmed_api_key") else 2.8)
+
+def _contact_email():
+    """The user's own address for polite-pool APIs (NCBI, Crossref), or None."""
+    return (CONFIG.get("unpaywall_email") or "").strip() or None
+
 def http_get(url, headers=None, timeout=TIMEOUT):
     req = urllib.request.Request(url, headers=headers or {
         "User-Agent": "MedSearch/1.0 (academic literature search)"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.read().decode("utf-8", errors="replace"), r.status
-    except urllib.error.HTTPError as e: return None, e.code
-    except Exception: return None, 0
+    for attempt in (1, 2):
+        _throttle(url)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read().decode("utf-8", errors="replace"), r.status
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt == 1:
+                time.sleep(1.0)
+                continue
+            return None, e.code
+        except Exception:
+            return None, 0
+    return None, 0
 
 def fetch_json(url, headers=None, timeout=TIMEOUT):
     body, status = http_get(url, headers, timeout=timeout)
@@ -274,16 +320,22 @@ def fetch_json(url, headers=None, timeout=TIMEOUT):
 #  DEDUPLICATION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def make_dedup_set(): return set()
+def _dedup_keys(doi, title):
+    # DOIs are case-insensitive, and sources disagree on case (PubMed keeps the
+    # publisher's capitals, Crossref lowercases), so compare them lowercased.
+    keys = []
+    if doi:
+        keys.append("doi:" + doi.strip().lower())
+    norm = re.sub(r"[^a-z0-9]", "", (title or "").lower())
+    if norm:
+        keys.append("title:" + norm)
+    return keys
 
 def is_duplicate(seen, doi, title):
-    if doi and doi in seen: return True
-    norm = re.sub(r"[^a-z0-9]","", title.lower())
-    return norm in seen
+    return any(k in seen for k in _dedup_keys(doi, title))
 
 def register(seen, doi, title):
-    if doi: seen.add(doi)
-    seen.add(re.sub(r"[^a-z0-9]","", title.lower()))
+    seen.update(_dedup_keys(doi, title))
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ACCESS RESOLUTION
@@ -385,51 +437,158 @@ def _pmc_pdf_url(pmcid):
         return None
     if not p.upper().startswith("PMC"):
         p = "PMC" + p
-    return f"https://www.ncbi.nlm.nih.gov/pmc/articles/{p}/pdf/"
+    return f"https://pmc.ncbi.nlm.nih.gov/articles/{p}/pdf/"
 
-_PMC_LOOKUP_CACHE = {}
-def pmcid_for_doi(doi):
+def pmcids_for_dois(dois):
     """
-    Resolve a DOI to a PubMed Central id (or None) via NCBI's ID Converter API.
-    PMC membership means a free full-text PDF exists at a public URL, even for
-    papers whose 'home' is a paywalled publisher (e.g. ScienceDirect/Elsevier).
-    Cached per-process and fails soft (returns None on any error/timeout).
+    Resolve DOIs to PubMed Central ids with ONE call to NCBI's ID Converter
+    (it takes up to 200 ids at once). PMC membership means a free full text
+    exists even when the publisher's copy is paywalled. Returns {doi_lower:
+    pmcid}; DOIs not in PMC are absent. Fails soft to {}.
     """
+    dois = [d for d in dict.fromkeys(d.strip() for d in dois if d)][:200]
+    if not dois:
+        return {}
+    url = ("https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/"
+           f"?ids={urllib.parse.quote(','.join(dois))}&format=json&tool=medsearch")
+    if _contact_email():
+        url += f"&email={urllib.parse.quote(_contact_email())}"
+    # Short timeout: optional enrichment must never hold up the search.
+    data, status = fetch_json(url, timeout=8)
+    out = {}
+    if data and status == 200:
+        for rec in data.get("records") or []:
+            if rec.get("pmcid") and rec.get("doi"):
+                out[rec["doi"].lower()] = rec["pmcid"]
+    return out
+
+# Crossref records retraction notices (including the Retraction Watch database)
+# as works that "update" the original DOI. Expressions of concern are flagged
+# separately: they are a warning, not a retraction.
+_RETRACTING_UPDATES = {"retraction", "withdrawal", "removal"}
+
+def retraction_status(doi):
+    """Return "retracted", "concern" or None for a DOI, via Crossref. Fails soft."""
     if not doi:
         return None
-    key = doi.lower().strip()
-    if key in _PMC_LOOKUP_CACHE:
-        return _PMC_LOOKUP_CACHE[key]
-    pmcid = None
-    try:
-        url = ("https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/"
-               f"?ids={urllib.parse.quote(doi)}&format=json&tool=medsearch&email=medsearch@example.org")
-        # Short timeout: this is optional enrichment, so never let a slow NCBI
-        # response hold up the search — fall back to the DOI link instead.
-        data, status = fetch_json(url, timeout=6)
-        if data and status == 200:
-            recs = data.get("records") or []
-            if recs:
-                pmcid = recs[0].get("pmcid")  # e.g. "PMC1234567" or None if not in PMC
-    except Exception:
-        pmcid = None
-    _PMC_LOOKUP_CACHE[key] = pmcid
-    return pmcid
+    url = (f"https://api.crossref.org/works?filter=updates:{urllib.parse.quote(doi)}"
+           "&rows=20")
+    if _contact_email():
+        url += f"&mailto={urllib.parse.quote(_contact_email())}"
+    data, status = fetch_json(url, timeout=6)
+    if not data or status != 200:
+        return None
+    flag = None
+    target = doi.lower()
+    for item in (data.get("message") or {}).get("items") or []:
+        for upd in item.get("update-to") or []:
+            if (upd.get("DOI") or "").lower() != target:
+                continue
+            kind = (upd.get("type") or "").lower().replace("-", "_")
+            if kind in _RETRACTING_UPDATES:
+                return "retracted"
+            if kind == "expression_of_concern":
+                flag = "concern"
+    return flag
 
-def resolve_access(doi):
-    oa = check_oa(doi)
-    if oa:  return "open", oa
-    # No OA copy from Unpaywall/OpenAlex — but the paper may still be free in
-    # PubMed Central (common for funded clinical research published in otherwise
-    # paywalled journals like those on ScienceDirect). Check PMC by DOI and, if
-    # present, route to the direct PMC PDF.
-    pmcid = pmcid_for_doi(doi)
-    if pmcid:
-        pdf = _pmc_pdf_url(pmcid)
-        if pdf:
-            return "open", pdf
-    if doi: return "doi",  f"https://doi.org/{doi}"
-    return "none", None
+# ── Per-DOI enrichment cache (survives restarts) ─────────────────────────────
+# Open-access location, PMC id and retraction status are looked up per DOI on
+# every search; caching them makes repeated and "load more" searches fast.
+# Entries expire after a few days so newly-freed or newly-retracted papers show.
+DOI_CACHE_FILE = CONFIG_DIR / "doi_cache.json"
+_DOI_CACHE_TTL = 3 * 24 * 3600
+_DOI_CACHE_MAX = 5000
+_DOI_CACHE_LOCK = threading.Lock()
+
+def _load_doi_cache():
+    try:
+        data = json.loads(DOI_CACHE_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+_DOI_CACHE = _load_doi_cache()
+
+def _doi_cache_get(doi):
+    with _DOI_CACHE_LOCK:
+        e = _DOI_CACHE.get(doi.lower())
+    if e and time.time() - e.get("t", 0) < _DOI_CACHE_TTL:
+        return e
+    return None
+
+def _doi_cache_put(doi, kind, link, retraction):
+    with _DOI_CACHE_LOCK:
+        _DOI_CACHE[doi.lower()] = {"t": time.time(), "kind": kind,
+                                   "link": link, "retraction": retraction}
+
+def save_doi_cache():
+    with _DOI_CACHE_LOCK:
+        items = sorted(_DOI_CACHE.items(), key=lambda kv: kv[1].get("t", 0))
+        keep = dict(items[-_DOI_CACHE_MAX:])
+        _DOI_CACHE.clear()
+        _DOI_CACHE.update(keep)
+        text = json.dumps(keep)
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        DOI_CACHE_FILE.write_text(text)
+    except Exception:
+        pass
+
+# One shared pool for the per-article lookups. Source threads submit here and
+# wait; the lookups themselves never submit, so the pool cannot deadlock.
+_ENRICH_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=12)
+
+def enrich_access(articles):
+    """
+    Fill access_kind / access_link / retraction on each article, in parallel.
+    Articles that already carry access_kind (e.g. PubMed ones with a PMC id)
+    keep it but still get the retraction check. Order of preference for the
+    link: Unpaywall/OpenAlex open copy → PubMed Central → the DOI itself.
+    """
+    todo = []
+    for a in articles:
+        doi = a.get("doi")
+        if not doi:
+            if a.get("access_kind") is None:
+                a["access_kind"], a["access_link"] = "none", None
+            continue
+        cached = _doi_cache_get(doi)
+        if cached:
+            if a.get("access_kind") is None:
+                a["access_kind"], a["access_link"] = cached["kind"], cached["link"]
+            a["retraction"] = a.get("retraction") or cached.get("retraction")
+        else:
+            todo.append(a)
+    if not todo:
+        return articles
+
+    need_oa = [a for a in todo if a.get("access_kind") is None]
+    oa_f  = {_ENRICH_POOL.submit(check_oa, a["doi"]): a for a in need_oa}
+    # PubMed records already say "Retracted Publication" themselves, and a
+    # Crossref call costs ~2 s, so Crossref is asked only about papers from
+    # sources that carry no retraction data (Scopus, Web of Science).
+    ret_f = {_ENRICH_POOL.submit(retraction_status, a["doi"]): a for a in todo
+             if not a.get("pmid")}
+    for fut, a in oa_f.items():
+        try: oa = fut.result()
+        except Exception: oa = None
+        if oa:
+            a["access_kind"], a["access_link"] = "open", oa
+    missing = [a for a in need_oa if a.get("access_kind") is None]
+    pmc = pmcids_for_dois([a["doi"] for a in missing]) if missing else {}
+    for a in missing:
+        pmcid = pmc.get(a["doi"].lower())
+        if pmcid:
+            a["access_kind"], a["access_link"] = "open", _pmc_pdf_url(pmcid)
+        else:
+            a["access_kind"], a["access_link"] = "doi", f"https://doi.org/{a['doi']}"
+    for fut, a in ret_f.items():
+        try: flag = fut.result()
+        except Exception: flag = None
+        a["retraction"] = a.get("retraction") or flag
+    for a in todo:
+        _doi_cache_put(a["doi"], a["access_kind"], a["access_link"], a.get("retraction"))
+    return articles
 
 def scihub_links(doi):
     """Return [primary_url, ...alternates] for a DOI, or [] if no DOI."""
@@ -441,138 +600,175 @@ def scihub_links(doi):
 #  AI
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _claude(messages, max_tokens=100, stream=False):
-    key = (CONFIG.get("anthropic_api_key","") or "").strip()
-    if not key: return None
-    payload = json.dumps({"model":"claude-sonnet-4-6","max_tokens":max_tokens,
-                          "stream":stream,"messages":messages}).encode()
-    req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=payload,
-        headers={"x-api-key":key,"anthropic-version":"2023-06-01",
-                 "content-type":"application/json"}, method="POST")
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+# The long-form work (synthesis, Explain, the assistant) uses Sonnet; the
+# per-article one-liners and the suggested questions are short, high-volume
+# jobs, so they use Haiku. A 7-source search makes ~70 one-liner calls.
+MODEL_MAIN = "claude-sonnet-5"
+MODEL_FAST = "claude-haiku-4-5"
+# Sonnet 5 thinks by default. These are short reading tasks where the extra
+# latency and output spend buy nothing, so it is switched off for them.
+_NO_THINKING = {"thinking": {"type": "disabled"}}
+
+def _anthropic_key():
+    return (CONFIG.get("anthropic_api_key") or "").strip()
+
+def ai_active():
+    """AI runs only when a key exists AND the user hasn't switched AI off."""
+    return bool(_anthropic_key()) and CONFIG.get("ai_enabled", True)
+
+def _sse(obj):
+    return "data: " + json.dumps(obj) + "\n\n"
+
+def _anthropic_open(payload, timeout):
+    req = urllib.request.Request(ANTHROPIC_URL, data=json.dumps(payload).encode(),
+        headers={"x-api-key": _anthropic_key(), "anthropic-version": "2023-06-01",
+                 "content-type": "application/json"}, method="POST")
+    return urllib.request.urlopen(req, timeout=timeout)
+
+def _api_error_text(e):
+    """A plain-language message for an HTTPError from the Anthropic API."""
+    try: detail = e.read().decode(errors="replace")
+    except Exception: detail = ""
+    msg = f"Anthropic API error {e.code}. "
+    if e.code == 401:
+        msg += "Your API key is invalid or expired. Re-enter it in Settings (check for typos or extra spaces)."
+    elif e.code == 429:
+        msg += "Rate limit reached or credits exhausted. Check your Anthropic account balance."
+    elif e.code in (500, 502, 503, 529):
+        msg += "The service is busy right now. Try again in a minute."
+    else:
+        try: msg += json.loads(detail)["error"]["message"][:200]
+        except Exception: msg += detail[:200]
+    return msg
+
+def claude_text(payload, timeout=30):
+    """One non-streaming call; returns the reply text. Raises RuntimeError."""
+    if not _anthropic_key():
+        raise RuntimeError("No Anthropic API key set.")
     try:
-        return urllib.request.urlopen(req, timeout=60)
+        with _anthropic_open(payload, timeout) as r:
+            data = json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
-        # Surface the API error so callers can report it
-        try:
-            detail = e.read().decode()
-        except Exception:
-            detail = ""
-        raise RuntimeError(f"Anthropic API error {e.code}: {detail[:300]}")
+        raise RuntimeError(_api_error_text(e))
     except Exception as e:
         raise RuntimeError(f"Anthropic request failed: {e}")
+    if data.get("stop_reason") == "refusal":
+        raise RuntimeError("The model declined this request.")
+    return "".join(b.get("text", "") for b in data.get("content", [])
+                   if b.get("type") == "text").strip()
+
+def claude_stream(payload, timeout=120):
+    """
+    Stream one call as our own SSE events: {"type":"chunk"} per text delta,
+    {"type":"error"} on failure, and always a final {"type":"done"}.
+    """
+    if not _anthropic_key():
+        yield _sse({"type": "error", "text": "No API key set. Add your Anthropic key in Settings."})
+        yield _sse({"type": "done"})
+        return
+    if not CONFIG.get("ai_enabled", True):
+        yield _sse({"type": "error", "text": "AI features are turned off. Turn them on with AI on/off in the bottom bar."})
+        yield _sse({"type": "done"})
+        return
+    payload = dict(payload, stream=True)
+    try:
+        with _anthropic_open(payload, timeout) as r:
+            for raw in r:
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                try: ev = json.loads(line[5:].strip())
+                except Exception: continue
+                kind = ev.get("type")
+                if kind == "content_block_delta":
+                    delta = ev.get("delta") or {}
+                    if delta.get("type") == "text_delta" and delta.get("text"):
+                        yield _sse({"type": "chunk", "text": delta["text"]})
+                elif kind == "message_delta":
+                    if (ev.get("delta") or {}).get("stop_reason") == "refusal":
+                        yield _sse({"type": "error", "text": "The model declined this request."})
+                elif kind == "error":
+                    msg = (ev.get("error") or {}).get("message") or "The AI service reported an error."
+                    yield _sse({"type": "error", "text": msg})
+                    break
+    except urllib.error.HTTPError as e:
+        yield _sse({"type": "error", "text": _api_error_text(e)})
+    except Exception as e:
+        yield _sse({"type": "error", "text": f"Request failed: {e}"})
+    yield _sse({"type": "done"})
 
 def ai_oneliner(title, abstract):
-    if not (CONFIG.get("anthropic_api_key","") or "").strip() or not abstract: return None
+    if not ai_active() or not abstract:
+        return None
     prompt = (f"Title: {title}\n\nAbstract: {abstract}\n\n"
               "In exactly one sentence (≤25 words), state the key finding. No preamble.")
     try:
-        r = _claude([{"role":"user","content":prompt}], max_tokens=80)
-        if r:
-            return json.loads(r.read().decode())["content"][0]["text"].strip()
+        return claude_text({"model": MODEL_FAST, "max_tokens": 80,
+                            "messages": [{"role": "user", "content": prompt}]}) or None
     except Exception:
-        # one-liners fail silently (don't spam errors per-article); synthesis surfaces them
+        # one-liners fail silently (don't spam errors per article); synthesis surfaces them
         return None
-    return None
 
 def ai_synthesis_stream(query, articles):
     """Generator that yields SSE chunks for the synthesis."""
-    key = (CONFIG.get("anthropic_api_key","") or "").strip()
-    if not key: yield "data: " + json.dumps({"type":"error","text":"No API key set. Add your Anthropic key in Settings."}) + "\n\n"; return
-    if not articles: yield "data: " + json.dumps({"type":"error","text":"No articles."}) + "\n\n"; return
-
+    if not articles:
+        yield _sse({"type": "error", "text": "No articles."})
+        yield _sse({"type": "done"})
+        return
     parts = []
-    for i,a in enumerate(articles,1):
+    for i, a in enumerate(articles, 1):
         ol = f" → {a['oneliner']}" if a.get("oneliner") else ""
-        parts.append(f"[{i}] {a['title']} ({a['year']}, {a['source']})\n"
+        flag = " [RETRACTED]" if a.get("retraction") == "retracted" else ""
+        parts.append(f"[{i}] {a['title']}{flag} ({a['year']}, {a['source']})\n"
                      f"    Authors: {a.get('authors','Unknown')}{ol}\n"
                      f"    Abstract: {(a.get('abstract') or '')[:400]}")
     prompt = (f'Literature search query: "{query}"\n\n'
               f"{len(articles)} articles:\n\n" + "\n\n".join(parts) + "\n\n"
               "Write a comprehensive academic synthesis (3–5 paragraphs). Cover: state of evidence, "
               "key findings, consensus, controversies/gaps, clinical implications. "
-              "Reference articles by [number].")
-
-    payload = json.dumps({"model":"claude-sonnet-4-6","max_tokens":1200,"stream":True,
-                          "messages":[{"role":"user","content":prompt}]}).encode()
-    req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=payload,
-        headers={"x-api-key":key,"anthropic-version":"2023-06-01",
-                 "content-type":"application/json"}, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=90) as r:
-            for raw in r:
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data:"): continue
-                ps = line[5:].strip()
-                if ps == "[DONE]": break
-                try:
-                    chunk = json.loads(ps).get("delta",{}).get("text","")
-                    if chunk:
-                        yield "data: " + json.dumps({"type":"chunk","text":chunk}) + "\n\n"
-                except Exception: continue
-    except urllib.error.HTTPError as e:
-        try: detail = e.read().decode()
-        except Exception: detail = ""
-        msg = f"Anthropic API error {e.code}. "
-        if e.code == 401:
-            msg += "Your API key is invalid or expired. Re-enter it in Settings (check for typos or extra spaces)."
-        elif e.code == 429:
-            msg += "Rate limit or insufficient credits. Check your Anthropic account balance."
-        else:
-            msg += detail[:200]
-        yield "data: " + json.dumps({"type":"error","text":msg}) + "\n\n"
-    except Exception as e:
-        yield "data: " + json.dumps({"type":"error","text":f"Request failed: {e}"}) + "\n\n"
-    yield "data: " + json.dumps({"type":"done"}) + "\n\n"
+              "Reference articles by [number]. Do not rely on any article marked [RETRACTED]; "
+              "if one is relevant, say that it was retracted.")
+    yield from claude_stream({"model": MODEL_MAIN, "max_tokens": 2000, **_NO_THINKING,
+                              "messages": [{"role": "user", "content": prompt}]}, timeout=120)
 
 def ai_explain_stream(article):
-    key = CONFIG.get("anthropic_api_key","")
-    if not key: yield "data: "+json.dumps({"type":"error","text":"No API key."})+"\n\n"; return
+    note = ("\nNOTE: this paper has been RETRACTED. Say so first, and treat its findings accordingly.\n"
+            if article.get("retraction") == "retracted" else "")
     prompt = (f"Title: {article['title']}\nAuthors: {article.get('authors','Unknown')}\n"
-              f"Year: {article.get('year','n.d.')}\nAbstract: {article.get('abstract','No abstract.')}\n\n"
+              f"Year: {article.get('year','n.d.')}\nAbstract: {article.get('abstract') or 'No abstract.'}\n"
+              f"{note}\n"
               "Explain this paper for a medical professional. Cover:\n"
               "1. Research question and why it matters\n2. Methodology\n"
               "3. Main findings\n4. Limitations and biases\n5. Clinical implications")
-    payload = json.dumps({"model":"claude-sonnet-4-6","max_tokens":900,"stream":True,
-                          "messages":[{"role":"user","content":prompt}]}).encode()
-    req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=payload,
-        headers={"x-api-key":key,"anthropic-version":"2023-06-01",
-                 "content-type":"application/json"}, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=90) as r:
-            for raw in r:
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data:"): continue
-                ps = line[5:].strip()
-                if ps == "[DONE]": break
-                try:
-                    chunk = json.loads(ps).get("delta",{}).get("text","")
-                    if chunk: yield "data: "+json.dumps({"type":"chunk","text":chunk})+"\n\n"
-                except Exception: continue
-    except Exception as e:
-        yield "data: "+json.dumps({"type":"error","text":str(e)})+"\n\n"
-    yield "data: "+json.dumps({"type":"done"})+"\n\n"
+    yield from claude_stream({"model": MODEL_MAIN, "max_tokens": 1500, **_NO_THINKING,
+                              "messages": [{"role": "user", "content": prompt}]}, timeout=120)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  AI ASSISTANT  (content-aware clinical chat, grounded in current results)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _articles_context(articles, limit=15, abstract_chars=300):
+def _articles_context(articles, limit=80, abstract_chars=200):
     """Build a compact text digest of the current results for grounding.
 
-    Default mode (used for chat): drops abstracts, keeps title + one-liner.
-    One-liners are AI-distilled summaries of the abstracts, so they capture
-    the key finding in ~25 words instead of 300+. This shrinks per-turn
-    context ~5x while preserving grounding quality.
+    Every loaded result is listed (up to `limit`) so the assistant can answer
+    "which of these…" about the whole list, not just the first page. Each
+    line is title + one-liner; the abstract excerpt is only a fallback when no
+    one-liner exists. The block is prompt-cached, so later turns in the same
+    conversation read it at a fraction of the cost.
     """
     if not articles:
         return "(No search results are currently loaded.)"
     parts = []
     for i, a in enumerate(articles[:limit], 1):
         line = f"[{i}] {a.get('title','')} ({a.get('year','n.d.')}, {a.get('journal','')})"
+        if a.get("pub_types"):
+            line += f" — {', '.join(a['pub_types'])}"
+        if a.get("retraction") == "retracted":
+            line += " — RETRACTED"
         if a.get("oneliner"):
             line += f"\n    → {a['oneliner']}"
         elif abstract_chars > 0 and a.get("abstract"):
-            # Fallback when one-liners aren't available (no AI key, or AI failed)
             line += f"\n    Abstract: {(a.get('abstract') or '')[:abstract_chars]}"
         parts.append(line)
     extra = f"\n\n(+{len(articles)-limit} more results not shown)" if len(articles) > limit else ""
@@ -586,7 +782,7 @@ ASSISTANT_SYSTEM = (
     "When the user's current search results are provided, ground your answers in "
     "them and cite specific papers by their bracket number, e.g. [3]. If you need "
     "the full abstract of a specific paper to answer well, tell the user to click "
-    "'✦ Explain' on that card. If the results don't contain the answer, say so "
+    "'Explain' on that card. If the results don't contain the answer, say so "
     "plainly and answer from general medical knowledge, making clear you're doing so.\n\n"
     "Be accurate, concise, and appropriately cautious. Default to 2-4 short "
     "paragraphs; expand only if asked. Note important uncertainties or "
@@ -599,64 +795,23 @@ def assistant_chat_stream(messages, query, articles):
     """Stream a chat completion grounded in current results. `messages` is the
     running conversation [{role, content}, ...] from the client.
 
-    Uses Anthropic prompt caching on the system block, so subsequent turns in
-    the same conversation pay ~10x less for the article context portion.
+    The article context sits in its own cached system block, so subsequent
+    turns in the same conversation pay ~10x less for it.
     """
-    key = (CONFIG.get("anthropic_api_key","") or "").strip()
-    if not key:
-        yield "data: " + json.dumps({"type":"error","text":"No API key set. Add your Anthropic key in Settings to use the assistant."}) + "\n\n"
-        return
-
     context = _articles_context(articles)
-    # Split system into a tiny instructions block (rarely changes) and a larger
-    # context block (the articles). We mark the context block as cacheable.
     system_blocks = [
-        {"type":"text", "text": ASSISTANT_SYSTEM},
-        {"type":"text",
+        {"type": "text", "text": ASSISTANT_SYSTEM},
+        {"type": "text",
          "text": f"=== CURRENT SEARCH ===\nQuery: {query or '(none)'}\nResults currently loaded:\n{context}",
-         "cache_control": {"type":"ephemeral"}}
+         "cache_control": {"type": "ephemeral"}},
     ]
-
-    payload = json.dumps({
-        "model": "claude-sonnet-4-6",
-        "max_tokens": 512,            # 4-6 short paragraphs is plenty; ↓ from 1024
-        "stream": True,
-        "system": system_blocks,
-        "messages": messages,
-    }).encode()
-    req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=payload,
-        headers={"x-api-key":key,
-                 "anthropic-version":"2023-06-01",
-                 "content-type":"application/json"},
-        method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=120) as r:
-            for raw in r:
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data:"): continue
-                ps = line[5:].strip()
-                if ps == "[DONE]": break
-                try:
-                    chunk = json.loads(ps).get("delta",{}).get("text","")
-                    if chunk:
-                        yield "data: " + json.dumps({"type":"chunk","text":chunk}) + "\n\n"
-                except Exception: continue
-    except urllib.error.HTTPError as e:
-        msg = f"Anthropic API error {e.code}. "
-        if e.code == 401: msg += "Your API key is invalid or expired."
-        elif e.code == 429: msg += "Rate limit or insufficient credits."
-        yield "data: " + json.dumps({"type":"error","text":msg}) + "\n\n"
-    except Exception as e:
-        yield "data: " + json.dumps({"type":"error","text":f"Request failed: {e}"}) + "\n\n"
-    yield "data: " + json.dumps({"type":"done"}) + "\n\n"
+    yield from claude_stream({"model": MODEL_MAIN, "max_tokens": 1024, **_NO_THINKING,
+                              "system": system_blocks, "messages": messages}, timeout=120)
 
 def assistant_suggestions(query, articles):
-    """Generate 3-4 short follow-up questions based on the current search.
-    Uses the cheaper Haiku model — this task doesn't need Sonnet's depth."""
-    key = (CONFIG.get("anthropic_api_key","") or "").strip()
-    if not key or not query:
+    """Generate 3-4 short follow-up questions based on the current search."""
+    if not ai_active() or not query:
         return []
-    # Use a tighter context for suggestions — titles + one-liners only
     context = _articles_context(articles, limit=8, abstract_chars=0)
     prompt = (
         f'A clinician searched for: "{query}"\n\n'
@@ -667,23 +822,14 @@ def assistant_suggestions(query, articles):
         "Respond ONLY with a JSON array of 4 strings, nothing else."
     )
     try:
-        # Use Haiku for this cheap task — ~12x cheaper than Sonnet
-        payload = json.dumps({
-            "model": "claude-haiku-4-5",
-            "max_tokens": 250,
-            "messages": [{"role":"user","content":prompt}]
-        }).encode()
-        req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=payload,
-            headers={"x-api-key":key,"anthropic-version":"2023-06-01",
-                     "content-type":"application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as r:
-            text = json.loads(r.read().decode())["content"][0]["text"].strip()
+        text = claude_text({"model": MODEL_FAST, "max_tokens": 250,
+                            "messages": [{"role": "user", "content": prompt}]})
         text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
         arr = json.loads(text)
         if isinstance(arr, list):
             return [str(q).strip() for q in arr if str(q).strip()][:4]
     except Exception:
-        return []
+        pass
     return []
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -692,24 +838,30 @@ def assistant_suggestions(query, articles):
 
 def get_mesh(query):
     suggestions = []
-    data, _ = fetch_json(f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/espell.fcgi"
-                         f"?db=pubmed&term={urllib.parse.quote(query)}&retmode=json")
-    if data:
-        t = data.get("esearchresult",{}).get("querytranslation","")
-        if t and t.lower() != query.lower(): suggestions.append({"type":"translation","text":t})
+    # ESpell only answers in XML (a retmode=json request still gets XML back),
+    # so it is parsed as XML. Only offered when it actually changes the query.
+    body, _ = http_get(f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/espell.fcgi"
+                       f"?db=pubmed&term={urllib.parse.quote(query)}", timeout=8)
+    if body:
+        try:
+            corrected = (ET.fromstring(body).findtext("CorrectedQuery") or "").strip()
+            if corrected and corrected.lower() != query.lower():
+                suggestions.append({"type": "spelling", "text": corrected})
+        except Exception:
+            pass
     mesh_data, _ = fetch_json(f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
                                f"?db=mesh&term={urllib.parse.quote(query)}&retmax=5&retmode=json")
-    if mesh_data:
-        ids = mesh_data.get("esearchresult",{}).get("idlist",[])
-        if ids:
-            body, _ = http_get(f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
-                                f"?db=mesh&id={','.join(ids[:5])}&retmode=xml")
-            if body:
-                try:
-                    root = ET.fromstring(body)
-                    for t in root.findall(".//DescriptorName")[:5]:
-                        suggestions.append({"type":"mesh","text":t.text})
-                except Exception: pass
+    ids = ((mesh_data or {}).get("esearchresult") or {}).get("idlist") or []
+    if ids:
+        # efetch on db=mesh only returns plain text, so the headings are read
+        # from esummary's JSON instead (first entry of ds_meshterms).
+        summ, _ = fetch_json(f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+                             f"?db=mesh&id={','.join(ids[:5])}&retmode=json")
+        res = (summ or {}).get("result") or {}
+        for uid in res.get("uids") or []:
+            terms = (res.get(uid) or {}).get("ds_meshterms") or []
+            if terms:
+                suggestions.append({"type": "mesh", "text": terms[0]})
     return suggestions
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -720,7 +872,8 @@ def _crossref_meta(doi):
     """Resolve a DOI to {title, year, authors} via Crossref. Returns None on failure."""
     if not doi: return None
     url = f"https://api.crossref.org/works/{urllib.parse.quote(doi)}"
-    data, status = fetch_json(url, headers={"User-Agent":"MedSearch/4.0 (research; mailto:research@example.com)"})
+    ua = "MedSearch/1.0" + (f" (mailto:{_contact_email()})" if _contact_email() else "")
+    data, status = fetch_json(url, headers={"User-Agent": ua})
     if not data or status != 200:
         return None
     msg = data.get("message", {})
@@ -759,37 +912,41 @@ def _resolve_dois(dois, limit=12):
                 pass
     return out
 
+def _doi_from_ids(field):
+    """OpenCitations v2 lists every id of a work in one string
+    ("omid:br/06… doi:10.1/x pmid:123"); return the DOI part, or ""."""
+    for tok in (field or "").split():
+        if tok.startswith("doi:"):
+            return tok[4:]
+    return ""
+
 def get_citation_graph(doi, cap=12):
     """
     Returns {references:[...], citations:[...], counts:{...}} for a DOI.
     references = works this paper cites; citations = works citing this paper.
     Titles resolved via Crossref (capped for speed).
     """
-    base = "https://opencitations.net/index/coci/api/v1"
+    # The v1 COCI API now only redirects; v2 is the live index.
+    base = "https://api.opencitations.net/index/v2"
     result = {"references": [], "citations": [],
               "ref_total": 0, "cit_total": 0, "doi": doi}
     if not doi:
         return result
+    headers = {"User-Agent": "MedSearch/1.0"}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        ref_f = ex.submit(fetch_json, f"{base}/references/doi:{urllib.parse.quote(doi)}", headers, 20)
+        cit_f = ex.submit(fetch_json, f"{base}/citations/doi:{urllib.parse.quote(doi)}", headers, 20)
+        ref_data, _ = ref_f.result()
+        cit_data, _ = cit_f.result()
 
-    # References (outgoing — what this cites)
-    ref_data, _ = fetch_json(f"{base}/references/{urllib.parse.quote(doi)}",
-                             headers={"User-Agent":"MedSearch/4.0"})
-    ref_dois = []
+    ref_dois, cit_dois = [], []
     if isinstance(ref_data, list):
         result["ref_total"] = len(ref_data)
-        ref_dois = [r.get("cited","").replace("coci =>","").strip() for r in ref_data]
-        ref_dois = [d for d in ref_dois if d]
-
-    # Citations (incoming — what cites this)
-    cit_data, _ = fetch_json(f"{base}/citations/{urllib.parse.quote(doi)}",
-                             headers={"User-Agent":"MedSearch/4.0"})
-    cit_dois = []
+        ref_dois = [d for d in (_doi_from_ids(r.get("cited")) for r in ref_data) if d]
     if isinstance(cit_data, list):
         result["cit_total"] = len(cit_data)
-        cit_dois = [r.get("citing","").replace("coci =>","").strip() for r in cit_data]
-        cit_dois = [d for d in cit_dois if d]
+        cit_dois = [d for d in (_doi_from_ids(r.get("citing")) for r in cit_data) if d]
 
-    # Resolve titles (capped)
     result["references"] = _resolve_dois(ref_dois, limit=cap)
     result["citations"]  = _resolve_dois(cit_dois, limit=cap)
     return result
@@ -854,10 +1011,53 @@ def build_pubmed_term(query, strict=True):
         return f"{q}[tiab]" if q else q
     return " AND ".join(f"{w}[tiab]" for w in words)
 
-def search_pubmed(query, max_r, y_from, y_to, seen, strict=True,
-                  extra_filter=None, source_label="PubMed", sort="relevance",
-                  offset=0):
-    results = []
+# PubMed publication types worth showing on a card, strongest evidence first.
+# Everything else PubMed lists ("Journal Article", "Research Support, …") is
+# noise for a clinician scanning results.
+_PUB_TYPE_BADGES = [
+    ("Meta-Analysis",                 "Meta-analysis"),
+    ("Systematic Review",             "Systematic review"),
+    ("Practice Guideline",            "Guideline"),
+    ("Guideline",                     "Guideline"),
+    ("Randomized Controlled Trial",   "RCT"),
+    ("Clinical Trial, Phase IV",      "Clinical trial"),
+    ("Clinical Trial, Phase III",     "Clinical trial"),
+    ("Clinical Trial, Phase II",      "Clinical trial"),
+    ("Clinical Trial, Phase I",       "Clinical trial"),
+    ("Controlled Clinical Trial",     "Clinical trial"),
+    ("Clinical Trial",                "Clinical trial"),
+    ("Observational Study",           "Observational"),
+    ("Review",                        "Review"),
+    ("Case Reports",                  "Case report"),
+    ("Preprint",                      "Preprint"),
+]
+
+def _pub_type_badges(raw_types):
+    raw = set(raw_types)
+    out = []
+    for name, badge in _PUB_TYPE_BADGES:
+        if name in raw and badge not in out:
+            out.append(badge)
+    return out
+
+def _article(**fields):
+    """One result, with every key the UI and the exporters rely on."""
+    a = {"title": "No title", "authors": "", "author_list": [], "year": "n.d.",
+         "journal": "", "quartile": None, "doi": None, "pmid": None,
+         "abstract": "", "source": "", "access_kind": None, "access_link": None,
+         "scihub": None, "oneliner": None, "pub_types": [], "retraction": None}
+    a.update(fields)
+    if a["doi"] and not a["scihub"]:
+        a["scihub"] = scihub_links(a["doi"])
+    if a["journal"] and a["quartile"] is None:
+        a["quartile"] = get_quartile(a["journal"])
+    return a
+
+def _short_authors(names, n=3):
+    return "; ".join(names[:n]) + (" et al." if len(names) > n else "")
+
+def search_pubmed(query, max_r, y_from, y_to, strict=True, extra_filter=None,
+                  source_label="PubMed", sort="relevance", offset=0):
     base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
     kp   = f"&api_key={CONFIG['pubmed_api_key']}" if CONFIG.get("pubmed_api_key") else ""
     dp   = (f"&mindate={y_from or 1900}/01/01&maxdate={y_to or 2099}/12/31&datetype=pdat"
@@ -867,179 +1067,177 @@ def search_pubmed(query, max_r, y_from, y_to, seen, strict=True,
         term = f"({term}) AND {extra_filter}"
     # sort=relevance → PubMed "Best Match"; sort=date → most recent first
     sort_param = "date" if sort == "date" else "relevance"
-    esearch = (f"{base}/esearch.fcgi?db=pubmed&term={urllib.parse.quote(term)}"
-               f"&retstart={offset}&retmax={max_r}&sort={sort_param}&retmode=json{kp}{dp}")
-    data, _ = fetch_json(esearch)
-    if not data: return results, 0
-    ids   = data.get("esearchresult",{}).get("idlist",[])
-    total = int(data.get("esearchresult",{}).get("count",0))
-    if not ids: return results, total
+    data, _ = fetch_json(f"{base}/esearch.fcgi?db=pubmed&term={urllib.parse.quote(term)}"
+                         f"&retstart={offset}&retmax={max_r}&sort={sort_param}&retmode=json{kp}{dp}")
+    if not data:
+        raise RuntimeError(f"{source_label} didn't respond. Check your connection and try again.")
+    ids   = data.get("esearchresult", {}).get("idlist", [])
+    total = int(data.get("esearchresult", {}).get("count", 0))
+    if not ids:
+        return [], total
 
     body, _ = http_get(f"{base}/efetch.fcgi?db=pubmed&id={','.join(ids)}&retmode=xml{kp}")
-    if not body: return results, total
-
+    if not body:
+        raise RuntimeError(f"{source_label} returned no records. Try again in a moment.")
     try:
         root = ET.fromstring(body)
     except Exception:
-        return results, total
+        raise RuntimeError(f"{source_label} sent a response that couldn't be read.")
 
     # Preserve the relevance order returned by esearch
-    articles_by_pmid = {}
+    by_pmid = {}
     for art in root.findall(".//PubmedArticle"):
         pmid_el = art.find(".//MedlineCitation/PMID")
         if pmid_el is not None and pmid_el.text:
-            articles_by_pmid[pmid_el.text] = art
+            by_pmid[pmid_el.text] = art
 
-    ordered = [articles_by_pmid[i] for i in ids if i in articles_by_pmid]
-
-    for art in ordered:
-        med    = art.find(".//MedlineCitation")
+    results = []
+    for pmid in ids:
+        art = by_pmid.get(pmid)
+        med = art.find(".//MedlineCitation") if art is not None else None
         art_el = med.find("Article") if med is not None else None
-        if art_el is None: continue
+        if art_el is None:
+            continue
 
         title_el = art_el.find("ArticleTitle")
-        title = "".join(title_el.itertext()).strip() if title_el is not None else "No title"
-        if not title: title = "No title"
-
-        journal_el = art_el.find(".//Journal/Title")
-        journal = journal_el.text if (journal_el is not None and journal_el.text) else ""
-
+        title = ("".join(title_el.itertext()).strip() if title_el is not None else "") or "No title"
+        journal = art_el.findtext(".//Journal/Title") or ""
         year = _pubmed_year(art_el)
-        if not within_range(year, y_from, y_to): continue
+        if not within_range(year, y_from, y_to):
+            continue
 
-        aus = []
+        names = []
+        for au in art_el.findall(".//AuthorList/Author"):
+            last, fore = au.findtext("LastName"), au.findtext("ForeName")
+            if last:
+                names.append(f"{last}, {fore}" if fore else last)
+            elif au.findtext("CollectiveName"):
+                names.append(au.findtext("CollectiveName"))
+        short = []
         for au in art_el.findall(".//AuthorList/Author")[:3]:
-            ln = au.find("LastName"); fn = au.find("ForeName")
-            if ln is not None and ln.text:
-                initial = f", {fn.text[0]}." if (fn is not None and fn.text) else ""
-                aus.append(f"{ln.text}{initial}")
-        n_authors = len(art_el.findall(".//AuthorList/Author"))
-        authors = "; ".join(aus) + (" et al." if n_authors > 3 else "")
+            last, fore = au.findtext("LastName"), au.findtext("ForeName")
+            if last:
+                short.append(f"{last}, {fore[0]}." if fore else last)
+        authors = "; ".join(short) + (" et al." if len(names) > 3 else "")
 
-        doi  = next((a.text for a in art.findall(".//ArticleId") if a.get("IdType")=="doi"), None)
-        pmid_el = art.find(".//MedlineCitation/PMID")
-        pmid = pmid_el.text if pmid_el is not None else None
-        # PMC ID (when present) means the full text is free in PubMed Central —
-        # we can build a direct PDF link, which is more complete/readable than
-        # the publisher's page and saves the user a hop.
-        pmcid = next((a.text for a in art.findall(".//ArticleId") if a.get("IdType")=="pmc"), None)
+        doi   = next((a.text for a in art.findall(".//PubmedData/ArticleIdList/ArticleId")
+                      if a.get("IdType") == "doi"), None)
+        pmcid = next((a.text for a in art.findall(".//PubmedData/ArticleIdList/ArticleId")
+                      if a.get("IdType") == "pmc"), None)
 
         # Abstract may have multiple labelled sections — join them all
-        abs_parts = art_el.findall(".//Abstract/AbstractText")
-        if abs_parts:
-            chunks = []
-            for ap in abs_parts:
-                label = ap.get("Label")
-                txt = "".join(ap.itertext())
-                chunks.append(f"{label}: {txt}" if label else txt)
-            abstract = " ".join(chunks).strip()
-        else:
-            abstract = ""
+        chunks = []
+        for ap in art_el.findall(".//Abstract/AbstractText"):
+            label, txt = ap.get("Label"), "".join(ap.itertext())
+            chunks.append(f"{label}: {txt}" if label else txt)
 
-        if is_duplicate(seen, doi, title): continue
-        register(seen, doi, title)
-        # PubMed gives us the PMC id directly in its XML when the full text is
-        # free in PubMed Central — use it for a direct PDF link without any extra
-        # network lookup. Otherwise fall back to the normal OA/PMC resolution.
+        raw_types = [pt.text or "" for pt in art_el.findall(".//PublicationTypeList/PublicationType")]
+        retraction = "retracted" if "Retracted Publication" in raw_types else None
+        if not retraction and any(c.get("RefType") == "ExpressionOfConcernIn"
+                                  for c in med.findall(".//CommentsCorrectionsList/CommentsCorrections")):
+            retraction = "concern"
+
+        a = _article(title=title, authors=authors, author_list=names, year=year,
+                     journal=journal, doi=doi, pmid=pmid,
+                     abstract=" ".join(chunks).strip(), source=source_label,
+                     pub_types=_pub_type_badges(raw_types), retraction=retraction)
+        # A PMC id in the record means the full text is free in PubMed Central:
+        # link its PDF directly, with no extra lookup.
         if pmcid:
-            kind, link = "open", _pmc_pdf_url(pmcid)
-        else:
-            kind, link = resolve_access(doi)
-        scihub = scihub_links(doi)
-        results.append({"title":title,"authors":authors,"year":year,"journal":journal,
-                        "quartile":get_quartile(journal),"doi":doi,"pmid":pmid,
-                        "abstract":abstract,"source":source_label,"access_kind":kind,
-                        "access_link":link,"scihub":scihub,
-                        "oneliner":None})
-        time.sleep(0.12)
-    return results, total
+            a["access_kind"], a["access_link"] = "open", _pmc_pdf_url(pmcid)
+        results.append(a)
+    return enrich_access(results), total
 
-def search_cochrane(query, max_r, y_from, y_to, seen, strict=True, sort="relevance",
-                    offset=0):
+def search_cochrane(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0):
     """
     Cochrane systematic reviews are indexed in PubMed under the journal
     'Cochrane Database of Systematic Reviews'. We search PubMed restricted to
     that journal, giving real inline results instead of a dead external link.
     """
     # [ta] = journal title abbreviation field; covers the current journal name.
-    cochrane_filter = '"Cochrane Database Syst Rev"[ta]'
-    res, total = search_pubmed(query, max_r, y_from, y_to, seen,
-                               strict=strict, extra_filter=cochrane_filter,
-                               source_label="Cochrane", sort=sort, offset=offset)
-    return res, total
+    return search_pubmed(query, max_r, y_from, y_to, strict=strict,
+                         extra_filter='"Cochrane Database Syst Rev"[ta]',
+                         source_label="Cochrane", sort=sort, offset=offset)
 
-def search_arxiv(query, max_r, y_from, y_to, seen, sort="relevance", offset=0):
-    results = []
+def search_guidelines(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0):
+    # Clinical practice guidelines: PubMed restricted to guideline publication
+    # types. Captures national/society guidelines from many countries.
+    return search_pubmed(query, max_r, y_from, y_to, strict=strict,
+                         extra_filter='(Guideline[ptyp] OR "Practice Guideline"[ptyp])',
+                         source_label="Guidelines", sort=sort, offset=offset)
+
+def search_arxiv(query, max_r, y_from, y_to, sort="relevance", offset=0):
     # sortBy=relevance ↔ submittedDate (most recent first)
     sort_by = "submittedDate" if sort == "date" else "relevance"
     body, _ = http_get(f"https://export.arxiv.org/api/query?search_query=all:"
-                       f"{urllib.parse.quote(query)}&start={offset}&max_results={max_r}&sortBy={sort_by}&sortOrder=descending")
-    if not body: return results
-    ns   = {"a":"http://www.w3.org/2005/Atom"}
-    root = ET.fromstring(body)
-    for e in root.findall("a:entry", ns):
-        published = e.find("a:published",ns).text[:10]
-        year = published[:4]
-        if not within_range(year, y_from, y_to): continue
-        title      = e.find("a:title",ns).text.strip().replace("\n"," ")
-        authors    = [a.find("a:name",ns).text for a in e.findall("a:author",ns)[:3]]
-        author_str = "; ".join(authors)+(" et al." if len(e.findall("a:author",ns))>3 else "")
-        summary    = e.find("a:summary",ns).text.strip()
-        arxiv_id   = e.find("a:id",ns).text.strip()
-        pdf_link   = arxiv_id.replace("/abs/","/pdf/")
-        if is_duplicate(seen, None, title): continue
-        register(seen, None, title)
-        results.append({"title":title,"authors":author_str,"year":year,"journal":"arXiv",
-                        "quartile":None,"doi":None,"pmid":None,"abstract":summary,
-                        "source":"arXiv","access_kind":"open","access_link":pdf_link,
-                        "scihub":None,"oneliner":None})
-    return results
-
-def search_clinicaltrials(query, max_r, y_from, y_to, seen, sort="relevance", offset=0):
+                       f"{urllib.parse.quote(query)}&start={offset}&max_results={max_r}"
+                       f"&sortBy={sort_by}&sortOrder=descending", timeout=20)
+    if not body:
+        raise RuntimeError("arXiv didn't respond. Try again in a moment.")
+    ns = {"a": "http://www.w3.org/2005/Atom"}
+    try:
+        root = ET.fromstring(body)
+    except Exception:
+        raise RuntimeError("arXiv sent a response that couldn't be read.")
     results = []
+    for e in root.findall("a:entry", ns):
+        # One malformed entry must not cost the whole source.
+        try:
+            year  = (e.findtext("a:published", "", ns) or "")[:4] or "n.d."
+            if not within_range(year, y_from, y_to):
+                continue
+            title = " ".join((e.findtext("a:title", "", ns) or "").split()) or "No title"
+            names = [n for n in (a.findtext("a:name", "", ns).strip()
+                                 for a in e.findall("a:author", ns)) if n]
+            arxiv_id = (e.findtext("a:id", "", ns) or "").strip()
+            results.append(_article(
+                title=title, authors=_short_authors(names), author_list=names,
+                year=year, journal="arXiv",
+                abstract=(e.findtext("a:summary", "", ns) or "").strip(),
+                source="arXiv", access_kind="open" if arxiv_id else "none",
+                access_link=arxiv_id.replace("/abs/", "/pdf/") or None,
+                pub_types=["Preprint"]))
+        except Exception:
+            continue
+    return results, 0
+
+def search_clinicaltrials(query, max_r, y_from, y_to, sort="relevance", offset=0):
     # ClinicalTrials v2: default ordering is relevance; LastUpdatePostDate:desc
     # gives most-recently-updated first.
     sort_p = "&sort=LastUpdatePostDate%3Adesc" if sort == "date" else ""
-    data, _ = fetch_json(f"https://clinicaltrials.gov/api/v2/studies"
-                         f"?query.term={urllib.parse.quote(query)}&pageSize={max_r + offset}&format=json{sort_p}")
-    if not data: return results
     # The v2 API paginates by opaque token, not numeric offset, so for "load
-    # more" we over-fetch (offset+max_r) and skip the first `offset` studies.
-    studies = data.get("studies", [])
-    if offset:
-        studies = studies[offset:]
-    for study in studies:
-        proto  = study.get("protocolSection",{})
-        id_mod = proto.get("identificationModule",{})
-        sm     = proto.get("statusModule",{})
-        dm     = proto.get("descriptionModule",{})
-        des    = proto.get("designModule",{})
-        nct    = id_mod.get("nctId","N/A")
-        title  = id_mod.get("briefTitle","No title")
-        status = sm.get("overallStatus","Unknown")
-        phases = des.get("phases",["N/A"])
-        phase  = ", ".join(phases) if isinstance(phases,list) else str(phases)
-        brief  = dm.get("briefSummary","")
-        start  = sm.get("startDateStruct",{}).get("date","n.d.")
-        year   = start[:4] if start!="n.d." else "n.d."
-        if not within_range(year, y_from, y_to): continue
-        if is_duplicate(seen, None, title): continue
-        register(seen, None, title)
-        results.append({"title":title,"authors":"ClinicalTrials.gov","year":year,
-                        "journal":f"Phase: {phase} | Status: {status}","quartile":None,
-                        "doi":None,"pmid":None,"nct_id":nct,"abstract":brief,
-                        "source":"ClinicalTrials","access_kind":"open",
-                        "access_link":f"https://clinicaltrials.gov/study/{nct}",
-                        "scihub":None,"oneliner":None})
-        time.sleep(0.1)
-    return results
+    # more" we over-fetch (offset+max_r, max 1000) and skip the first `offset`.
+    data, status = fetch_json(f"https://clinicaltrials.gov/api/v2/studies"
+                              f"?query.term={urllib.parse.quote(query)}"
+                              f"&pageSize={min(max_r + offset, 1000)}&format=json{sort_p}")
+    if not data:
+        raise RuntimeError(f"ClinicalTrials.gov didn't respond (HTTP {status or 'no answer'}).")
+    results = []
+    for study in (data.get("studies") or [])[offset:]:
+        proto  = study.get("protocolSection", {})
+        id_mod = proto.get("identificationModule", {})
+        sm     = proto.get("statusModule", {})
+        phases = proto.get("designModule", {}).get("phases", ["N/A"])
+        phase  = ", ".join(phases) if isinstance(phases, list) else str(phases)
+        nct    = id_mod.get("nctId", "N/A")
+        start  = sm.get("startDateStruct", {}).get("date", "")
+        year   = start[:4] if start else "n.d."
+        if not within_range(year, y_from, y_to):
+            continue
+        results.append(_article(
+            title=id_mod.get("briefTitle", "No title"), authors="ClinicalTrials.gov",
+            year=year, journal=f"Phase: {phase} | Status: {sm.get('overallStatus', 'Unknown')}",
+            nct_id=nct, abstract=proto.get("descriptionModule", {}).get("briefSummary", ""),
+            source="ClinicalTrials", access_kind="open",
+            access_link=f"https://clinicaltrials.gov/study/{nct}",
+            pub_types=["Registered trial"]))
+    return results, 0
 
 # NOTE: medRxiv/bioRxiv were removed — their official API has no keyword-search
 # endpoint (only date-range or DOI fetch), and the PMC-based workaround simply
 # duplicated PubMed results via dedup. arXiv stays (it has a real search API).
 
-def search_scopus(query, max_r, y_from, y_to, seen, sort="relevance", offset=0):
-    results = []
+def search_scopus(query, max_r, y_from, y_to, sort="relevance", offset=0):
     key = (CONFIG.get("scopus_api_key","") or "").strip()
     if not key:
         raise RuntimeError("No Scopus API key set.")
@@ -1061,7 +1259,7 @@ def search_scopus(query, max_r, y_from, y_to, seen, sort="relevance", offset=0):
         if status == 401:
             raise RuntimeError("Scopus rejected the request (401). The API key may be wrong, "
                                "or you're off your institution's network — Scopus needs you on "
-                               "the campus IP range, or an institutional token (set in config).")
+                               "the campus IP range, or an institutional token (set in Settings).")
         if status == 403:
             raise RuntimeError("Scopus access forbidden (403). Your key may lack entitlement "
                                "for the Search API, or your subscription doesn't cover it.")
@@ -1070,120 +1268,166 @@ def search_scopus(query, max_r, y_from, y_to, seen, sort="relevance", offset=0):
                                "key is depleted; it resets ~1 week after first use.")
         if status == 400:
             raise RuntimeError("Scopus rejected the query (400) — likely a query-syntax issue.")
-        raise RuntimeError(f"Scopus returned HTTP {status}.")
-    if not data:
-        return results
-    for e in data.get("search-results",{}).get("entry",[]):
-        # An error can also come back inside a 200 body
-        if "error" in e:
-            raise RuntimeError(f"Scopus: {e.get('error')}")
-        title    = e.get("dc:title","No title")
-        creator  = e.get("dc:creator","Unknown")
-        pub      = e.get("prism:publicationName","")
-        year     = e.get("prism:coverDate","")[:4]
-        doi      = e.get("prism:doi")
-        cited    = e.get("citedby-count","?")
-        abstract = e.get("dc:description","")
-        if is_duplicate(seen, doi, title): continue
-        register(seen, doi, title)
-        kind, link = resolve_access(doi)
-        scihub = scihub_links(doi)
-        results.append({"title":title,"authors":creator,"year":year,"journal":pub,
-                        "quartile":get_quartile(pub),"doi":doi,"pmid":None,
-                        "cited_by":cited,"abstract":abstract,"source":"Scopus",
-                        "access_kind":kind,"access_link":link,"scihub":scihub,
-                        "oneliner":None})
-        time.sleep(0.2)
-    return results
-
-def search_wos(query, max_r, y_from, y_to, seen, sort="relevance", offset=0):
+        raise RuntimeError(f"Scopus returned HTTP {status or 'no answer'}.")
     results = []
+    for e in (data or {}).get("search-results", {}).get("entry", []):
+        # An error can also come back inside a 200 body ("Result set was empty")
+        if "error" in e:
+            if "empty" in str(e.get("error")).lower():
+                break
+            raise RuntimeError(f"Scopus: {e.get('error')}")
+        creator = e.get("dc:creator", "")
+        results.append(_article(
+            title=e.get("dc:title", "No title"), authors=creator,
+            author_list=[creator] if creator else [],
+            year=e.get("prism:coverDate", "")[:4] or "n.d.",
+            journal=e.get("prism:publicationName", ""), doi=e.get("prism:doi"),
+            cited_by=e.get("citedby-count"), abstract=e.get("dc:description", ""),
+            source="Scopus"))
+    return enrich_access(results), 0
+
+def search_wos(query, max_r, y_from, y_to, sort="relevance", offset=0):
     key = (CONFIG.get("wos_api_key","") or "").strip()
     if not key:
         raise RuntimeError("No Web of Science API key set.")
     # WoS Starter sortField: RS = Relevance, PY+D = Publication Year descending
     sort_p = "&sortField=PY%2BD" if sort == "date" else "&sortField=RS"
-    # WoS paginates by 1-indexed page of size `limit`. Convert offset → page.
+    # WoS paginates by 1-indexed page of size `limit`. Offsets are always a
+    # multiple of max_r, so this lands exactly on the next page.
     wos_page = (offset // max_r) + 1 if max_r else 1
     data, status = fetch_json(
         f"https://api.clarivate.com/apis/wos-starter/v1/documents"
         f"?db=WOS&q={urllib.parse.quote(query)}&limit={max_r}&page={wos_page}{sort_p}",
-        headers={"X-ApiKey":key})
+        headers={"X-ApiKey": key})
     if status != 200:
         if status in (401, 403):
             raise RuntimeError(f"Web of Science rejected the request ({status}). The API key may "
                                "be wrong/expired, or not entitled to the WoS Starter API.")
         if status == 429:
             raise RuntimeError("Web of Science quota exceeded (429). Try again later.")
-        raise RuntimeError(f"Web of Science returned HTTP {status}.")
-    if not data:
-        return results
-    for h in data.get("hits",[]):
-        src     = h.get("source",{})
-        year    = str(src.get("publishYear","n.d."))
-        if not within_range(year, y_from, y_to): continue
-        title   = h.get("title","No title")
-        journal = src.get("sourceTitle","")
-        doi     = next((i.get("value") for i in h.get("identifiers",[]) if i.get("type")=="doi"),None)
-        aus     = [a.get("displayName","") for a in h.get("names",{}).get("authors",[])[:3]]
-        authors = "; ".join(aus)+(" et al." if len(h.get("names",{}).get("authors",[]))>3 else "")
-        abstract = h.get("abstract","")
-        if is_duplicate(seen, doi, title): continue
-        register(seen, doi, title)
-        kind, link = resolve_access(doi)
-        scihub = scihub_links(doi)
-        results.append({"title":title,"authors":authors,"year":year,"journal":journal,
-                        "quartile":get_quartile(journal),"doi":doi,"pmid":None,
-                        "abstract":abstract,"source":"Web of Science",
-                        "access_kind":kind,"access_link":link,"scihub":scihub,
-                        "oneliner":None})
-        time.sleep(0.2)
-    return results
+        raise RuntimeError(f"Web of Science returned HTTP {status or 'no answer'}.")
+    results = []
+    for h in (data or {}).get("hits", []):
+        src  = h.get("source", {})
+        year = str(src.get("publishYear") or "n.d.")
+        if not within_range(year, y_from, y_to):
+            continue
+        names = [a.get("displayName", "") for a in h.get("names", {}).get("authors", [])
+                 if a.get("displayName")]
+        doi = next((i.get("value") for i in h.get("identifiers", []) if i.get("type") == "doi"), None)
+        results.append(_article(
+            title=h.get("title", "No title"), authors=_short_authors(names),
+            author_list=names, year=year, journal=src.get("sourceTitle", ""), doi=doi,
+            abstract=h.get("abstract", ""), source="Web of Science"))
+    return enrich_access(results), 0
+
+# Every source, in dedup-priority order: when two sources return the same
+# paper, the earlier one keeps it. Cochrane and Guidelines come before plain
+# PubMed so systematic reviews and guidelines are labelled as such.
+SOURCES = [
+    # key,             label,                 runner,                takes strict
+    ("cochrane",       "Cochrane",            search_cochrane,       True),
+    ("guidelines",     "Guidelines",          search_guidelines,     True),
+    ("pubmed",         "PubMed",              search_pubmed,         True),
+    ("scopus",         "Scopus",              search_scopus,         False),
+    ("wos",            "Web of Science",      search_wos,            False),
+    ("clinicaltrials", "ClinicalTrials.gov",  search_clinicaltrials, False),
+    ("arxiv",          "arXiv",               search_arxiv,          False),
+]
+_KEY_REQUIRED = {"scopus": ("scopus_api_key", "Scopus"),
+                 "wos":    ("wos_api_key", "Web of Science")}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  EXPORT
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _author_names(a):
+    """Full author list for export: the source's complete list when we have
+    it, else the display string split back into names (minus "et al.")."""
+    if a.get("author_list"):
+        return list(a["author_list"])
+    raw = (a.get("authors") or "").replace(" et al.", "")
+    if raw == "ClinicalTrials.gov":
+        return []
+    return [n.strip() for n in raw.split(";") if n.strip()]
+
+_BIB_SPECIAL = {"\\": r"\textbackslash{}", "{": r"\{", "}": r"\}", "&": r"\&",
+                "%": r"\%", "#": r"\#", "_": r"\_", "$": r"\$",
+                "~": r"\textasciitilde{}", "^": r"\textasciicircum{}"}
+
+def _bib(text):
+    """Escape a value for a BibTeX field. Unbalanced braces in a title used to
+    break the whole .bib file; LaTeX specials break the document that cites it."""
+    return "".join(_BIB_SPECIAL.get(ch, ch) for ch in str(text or ""))
+
+def _bib_key(a, i, used):
+    first = (_author_names(a) or ["anon"])[0]
+    surname = first.split(",")[0].split()[-1] if first.strip() else "anon"
+    base = re.sub(r"[^A-Za-z0-9]", "", surname) or "anon"
+    base += re.sub(r"\D", "", str(a.get("year", "")))[:4]
+    key, n = base, 1
+    while key in used:
+        n += 1
+        key = f"{base}{chr(ord('a') + n - 2)}" if n <= 27 else f"{base}_{i}"
+    used.add(key)
+    return key
+
 def do_export(articles, query, fmt, synthesis=""):
     ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe = re.sub(r"[^\w]+","_",query)[:40]
+    safe = re.sub(r"[^\w]+", "_", query)[:40]
     base = Path.home() / "medsearch_exports"
     base.mkdir(parents=True, exist_ok=True)
     paths = []
-    if fmt in ("md","all"):
-        p = base/f"medsearch_{safe}_{ts}.md"
+    if fmt in ("md", "all"):
+        p = base / f"medsearch_{safe}_{ts}.md"
         lines = [f"# MedSearch Results\n\n**Query:** {query}  \n"
                  f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}  \n"
                  f"**Articles:** {len(articles)}\n\n---\n"]
-        for i,a in enumerate(articles,1):
+        for i, a in enumerate(articles, 1):
             lines.append(f"## {i}. {a['title']}\n")
+            if a.get("retraction") == "retracted":
+                lines.append("**⚠ RETRACTED**  \n")
             lines.append(f"**Source:** {a['source']} | **Year:** {a['year']}  \n")
-            lines.append(f"**Authors:** {a.get('authors','')}  \n")
+            if a.get("pub_types"):
+                lines.append(f"**Type:** {', '.join(a['pub_types'])}  \n")
+            lines.append(f"**Authors:** {'; '.join(_author_names(a))}  \n")
             if a.get("doi"): lines.append(f"**DOI:** https://doi.org/{a['doi']}  \n")
+            if a.get("pmid"): lines.append(f"**PMID:** {a['pmid']}  \n")
             if a.get("oneliner"): lines.append(f"**Summary:** _{a['oneliner']}_  \n")
             lines.append(f"\n{a.get('abstract','')}\n\n---\n")
         if synthesis: lines.append(f"\n## AI Synthesis\n\n{synthesis}\n")
         p.write_text("".join(lines), encoding="utf-8"); paths.append(str(p))
-    if fmt in ("bib","all"):
-        p = base/f"medsearch_{safe}_{ts}.bib"
-        entries = []
-        for i,a in enumerate(articles,1):
-            key = re.sub(r"[^\w]","",a.get("authors","anon").split(";")[0].split(",")[0]
-                         +str(a.get("year",""))+str(i))
-            df = f"  doi = {{{a['doi']}}},\n" if a.get("doi") else ""
-            entries.append(f"@article{{{key},\n  title={{{a['title']}}},\n"
-                           f"  author={{{a.get('authors','')}}},\n  year={{{a.get('year','')}}},\n"
-                           f"  journal={{{a.get('journal','')}}},\n{df}}}")
-        p.write_text("\n\n".join(entries), encoding="utf-8"); paths.append(str(p))
-    if fmt in ("ris","all"):
-        p = base/f"medsearch_{safe}_{ts}.ris"
+    if fmt in ("bib", "all"):
+        p = base / f"medsearch_{safe}_{ts}.bib"
+        entries, used = [], set()
+        for i, a in enumerate(articles, 1):
+            fields = [("title", "{" + _bib(a["title"]) + "}"),
+                      # BibTeX separates authors with " and "; "; " made one garbled name
+                      ("author", " and ".join(_bib(n) for n in _author_names(a))),
+                      ("year", _bib(re.sub(r"\D", "", str(a.get("year", "")))[:4])),
+                      ("journal", _bib(a.get("journal", "")))]
+            if a.get("doi"):  fields.append(("doi", _bib(a["doi"])))
+            if a.get("pmid"): fields.append(("pmid", _bib(a["pmid"])))
+            if a.get("abstract"): fields.append(("abstract", _bib(a["abstract"])))
+            if a.get("retraction") == "retracted": fields.append(("note", "RETRACTED"))
+            body = ",\n".join(f"  {k} = {{{v}}}" for k, v in fields if v)
+            entries.append(f"@article{{{_bib_key(a, i, used)},\n{body}\n}}")
+        p.write_text("\n\n".join(entries) + "\n", encoding="utf-8"); paths.append(str(p))
+    if fmt in ("ris", "all"):
+        p = base / f"medsearch_{safe}_{ts}.ris"
         lines = []
         for a in articles:
-            lines += ["TY  - JOUR",f"TI  - {a['title']}",f"AU  - {a.get('authors','')}",
-                      f"PY  - {a.get('year','')}",f"JO  - {a.get('journal','')}"]
+            lines += ["TY  - JOUR", f"TI  - {a['title']}"]
+            # RIS takes one AU line per author
+            lines += [f"AU  - {n}" for n in _author_names(a)]
+            lines += [f"PY  - {re.sub(r'[^0-9]', '', str(a.get('year', '')))[:4]}",
+                      f"T2  - {a.get('journal','')}"]
             if a.get("doi"):      lines.append(f"DO  - {a['doi']}")
-            if a.get("abstract"): lines.append(f"AB  - {a['abstract'][:500]}")
-            lines.append("ER  -\n")
+            if a.get("pmid"):     lines.append(f"AN  - {a['pmid']}")
+            if a.get("access_link"): lines.append(f"UR  - {a['access_link']}")
+            if a.get("abstract"): lines.append(f"AB  - {' '.join(a['abstract'].split())}")
+            if a.get("retraction") == "retracted": lines.append("N1  - RETRACTED")
+            lines += ["ER  - ", ""]
         p.write_text("\n".join(lines), encoding="utf-8"); paths.append(str(p))
     return paths
 
@@ -1222,7 +1466,7 @@ def article_to_zotero_item(a):
     item = {
         "itemType":         "journalArticle",
         "title":            a.get("title",""),
-        "creators":         _parse_creators(a.get("authors","")),
+        "creators":         _parse_creators("; ".join(_author_names(a))),
         "publicationTitle": a.get("journal",""),
         "date":             str(a.get("year","")),
         "abstractNote":     a.get("abstract","") or "",
@@ -1267,11 +1511,9 @@ def zotero_save(articles):
                  "X-Zotero-Connector-API-Version":"3"},
         method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30):
             return True, f"{len(items)} item(s) sent to Zotero."
     except urllib.error.HTTPError as e:
-        if e.code == 201:
-            return True, f"{len(items)} item(s) sent to Zotero."
         body = ""
         try: body = e.read().decode()[:200]
         except Exception: pass
@@ -1284,20 +1526,87 @@ def zotero_save(articles):
 #  SESSION STORE  (in-memory, per-process)
 # ══════════════════════════════════════════════════════════════════════════════
 
-SESSION = {"articles": [], "query": "", "history": [], "last_synthesis": ""}
+HISTORY_FILE = CONFIG_DIR / "history.json"
+_HISTORY_MAX = 50
+
+def _load_history():
+    try:
+        items = json.loads(HISTORY_FILE.read_text())
+        return [str(q) for q in items if str(q).strip()][-_HISTORY_MAX:]
+    except Exception:
+        return []
+
+def _save_history():
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        HISTORY_FILE.write_text(json.dumps(SESSION["history"][-_HISTORY_MAX:], indent=2))
+    except Exception:
+        pass
+
+# Recent searches persist across launches; results stay per-process.
+# offsets: per-source start of the NEXT "load more" batch.
+SESSION = {"articles": [], "query": "", "history": _load_history(),
+           "last_synthesis": "", "offsets": {}}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  FLASK ROUTES
 # ══════════════════════════════════════════════════════════════════════════════
 
+@app.before_request
+def _guard():
+    # Only answer requests addressed to the loopback name we serve on. A DNS-
+    # rebinding page arrives with its own hostname and is refused here.
+    host = (request.host or "").rsplit(":", 1)[0]
+    if host not in ("127.0.0.1", "localhost"):
+        return "Forbidden", 403
+    if request.path in _OPEN_PATHS or request.path.startswith("/static/"):
+        return None
+    token = request.headers.get("X-MedSearch-Token") or request.args.get("t") or ""
+    if not hmac.compare_digest(token, APP_TOKEN):
+        return jsonify({"ok": False, "error": "forbidden",
+                        "message": "This request didn't come from the MedSearch window."}), 403
+    return None
+
+@app.after_request
+def _no_framing(resp):
+    resp.headers["X-Frame-Options"] = "DENY"
+    return resp
+
+def _json_body():
+    """The request's JSON object, or {} for a missing or malformed body."""
+    data = request.get_json(silent=True)
+    return data if isinstance(data, dict) else {}
+
+def _int_or_none(v):
+    try:
+        return int(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+def _asset_version():
+    """A short hash of the page's own CSS/JS, appended to their URLs. The
+    embedded browser caches static files, and after an update it must never
+    pair the new HTML with yesterday's script."""
+    h = hashlib.sha256()
+    for rel in ("static/css/app.css", "static/js/boot.js", "static/js/app.js"):
+        try:
+            h.update((RESOURCE_DIR / rel).read_bytes())
+        except OSError:
+            pass
+    return h.hexdigest()[:10]
+
+ASSET_V = _asset_version()
+
 @app.route("/")
 def index():
-    has_key = bool((CONFIG.get("anthropic_api_key","") or "").strip())
+    has_key = bool(_anthropic_key())
     ai_pref = CONFIG.get("ai_enabled", True)
     # Optional deep-link from the menu-bar quick search: /?q=...&src=...
     auto_query  = (request.args.get("q") or "").strip()
     auto_source = (request.args.get("src") or CONFIG.get("default_source","pubmed") or "pubmed").strip()
     return render_template("index.html",
+                           token=APP_TOKEN,
+                           asset_v=ASSET_V,
                            ai_on=(has_key and ai_pref),   # active only if key AND enabled
                            has_ai_key=has_key,             # whether a key exists at all
                            history=SESSION["history"][-10:],
@@ -1311,10 +1620,32 @@ def index():
                            auto_query=auto_query,
                            auto_source=auto_source)
 
+@app.route("/ping")
+def ping():
+    """Lets a second launch recognise that MedSearch is already running."""
+    return jsonify({"app": "medsearch", "version": get_local_version()})
+
+# The native window, once created, so a second launch can bring it forward.
+_MAIN_WINDOW = None
+
+@app.route("/focus", methods=["POST"])
+def focus_window():
+    w = _MAIN_WINDOW
+    if w is not None:
+        try:
+            w.restore()
+            w.show()
+            # Toggling on_top is pywebview's portable way to raise a window.
+            w.on_top = True
+            w.on_top = False
+        except Exception:
+            pass
+    return jsonify({"ok": w is not None})
+
 @app.route("/ai/toggle", methods=["POST"])
 def ai_toggle():
     """Turn AI features on/off (user preference, persisted)."""
-    data = request.json or {}
+    data = _json_body()
     CONFIG["ai_enabled"] = bool(data.get("enabled", True))
     save_config(CONFIG)
     return jsonify({"ok": True, "ai_enabled": CONFIG["ai_enabled"]})
@@ -1327,7 +1658,7 @@ def set_active_proxy():
     which buildInstitutions() reconstructs deterministically, so we just store
     the integer. -1 means "no library / don't proxy".
     """
-    data = request.json or {}
+    data = _json_body()
     try:
         CONFIG["active_proxy"] = int(data.get("index", 0))
     except Exception:
@@ -1353,7 +1684,7 @@ def guideline_link():
     the portal/search URL for the user to type into. Also persists the chosen
     country so it's remembered.
     """
-    data = request.json or {}
+    data = _json_body()
     code = (data.get("country") or "").strip().lower()
     query = (data.get("query") or "").strip()
     body = NATIONAL_GUIDELINE_BODIES.get(code)
@@ -1384,7 +1715,7 @@ def onboarding_dismiss():
 def default_source():
     """Get or set the menu-bar quick-search default source (shared config)."""
     if request.method == "POST":
-        data = request.json or {}
+        data = _json_body()
         src = (data.get("source") or "").strip() or "pubmed"
         CONFIG["default_source"] = src
         save_config(CONFIG)
@@ -1401,7 +1732,7 @@ _PENDING_SEARCH = {"query": None, "source": None, "ts": 0}
 @app.route("/queue_search", methods=["POST"])
 def queue_search():
     """Menu-bar app posts a search request to be picked up by the native window."""
-    data = request.json or {}
+    data = _json_body()
     query = (data.get("query") or "").strip()
     source = (data.get("source") or CONFIG.get("default_source", "pubmed")).strip()
     if not query:
@@ -1445,6 +1776,12 @@ def update_check():
         "can_apply": is_git,
     })
 
+def _requirements_digest():
+    try:
+        return hashlib.sha256((APP_DIR_PATH / "requirements.txt").read_bytes()).hexdigest()
+    except Exception:
+        return ""
+
 @app.route("/update/apply", methods=["POST"])
 def update_apply():
     """
@@ -1452,15 +1789,18 @@ def update_apply():
     Uses fetch + hard reset to the remote branch so local file changes
     (e.g. a flipped executable bit, or an accidental edit) can't block the
     update. User config and data live in ~/.medsearch/, outside the repo,
-    so they're never touched.
+    so they're never touched. If requirements.txt changed, the new
+    dependencies are installed into the running interpreter's environment
+    before the app offers to restart — otherwise an update that adds a
+    dependency would leave an app that no longer starts.
     """
     if not (APP_DIR_PATH / ".git").exists():
         return jsonify({"ok": False,
                         "message": "This copy isn't a git checkout, so it can't auto-update. "
                                    "Please re-clone from GitHub."}), 200
-    import subprocess
     git = ["git", "-C", str(APP_DIR_PATH)]
     version_before = get_local_version()
+    reqs_before = _requirements_digest()
     try:
         # 1. Fetch the latest commits from origin
         fetch = subprocess.run(git + ["fetch", "origin"],
@@ -1473,7 +1813,9 @@ def update_apply():
         # 2. Determine the current branch (usually 'main')
         branch_res = subprocess.run(git + ["rev-parse", "--abbrev-ref", "HEAD"],
                                     capture_output=True, text=True, timeout=15)
-        branch = (branch_res.stdout.strip() or "main")
+        branch = branch_res.stdout.strip()
+        if not branch or branch == "HEAD":      # detached checkout
+            branch = "main"
 
         # 3. Hard reset to origin/<branch> — guarantees we match the remote
         reset = subprocess.run(git + ["reset", "--hard", f"origin/{branch}"],
@@ -1483,20 +1825,25 @@ def update_apply():
                             "message": "Update failed while applying changes.",
                             "error": (reset.stderr or reset.stdout).strip()[-400:]}), 200
 
-        # 4. Verify the version actually changed (catch silent no-ops)
+        # 4. New or changed dependencies → install them now, into this venv
+        if _requirements_digest() != reqs_before:
+            pip = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
+                                  "-r", str(APP_DIR_PATH / "requirements.txt")],
+                                 capture_output=True, text=True, timeout=600)
+            if pip.returncode != 0:
+                return jsonify({"ok": False,
+                                "message": "The update was downloaded, but installing its new "
+                                           "components failed. MedSearch may not start until this "
+                                           "is fixed — run \"Create Desktop App.command\" again.",
+                                "error": (pip.stderr or pip.stdout).strip()[-400:]}), 200
+
+        # 5. Verify the version actually changed (catch silent no-ops)
         version_after = get_local_version()
         if _version_tuple(version_after) <= _version_tuple(version_before):
-            # Already at latest, or VERSION didn't move — report honestly
-            return jsonify({"ok": True,
-                            "new_version": version_after,
-                            "unchanged": True,
+            return jsonify({"ok": True, "new_version": version_after, "unchanged": True,
                             "message": f"Already up to date (version {version_after})."})
-
-        return jsonify({"ok": True,
-                        "new_version": version_after,
-                        "unchanged": False,
-                        "output": reset.stdout.strip()[-300:]})
-
+        return jsonify({"ok": True, "new_version": version_after, "unchanged": False,
+                        "can_restart": not getattr(sys, "frozen", False)})
     except subprocess.TimeoutExpired:
         return jsonify({"ok": False, "message": "Update timed out."}), 200
     except FileNotFoundError:
@@ -1505,183 +1852,208 @@ def update_apply():
     except Exception as e:
         return jsonify({"ok": False, "message": f"Update error: {e}"}), 200
 
+def _relaunch_and_exit():
+    """Start a fresh copy of MedSearch once this process has gone, then exit.
+
+    Launched from the Desktop wrapper, the app is re-opened through
+    LaunchServices (`open -b`) so it comes back as MedSearch, with its icon and
+    no Terminal. A small detached shell waits for this PID to disappear first,
+    so the new copy gets port 5050 instead of finding this one still alive.
+    """
+    time.sleep(0.4)          # let the HTTP response reach the window
+    pid = os.getpid()
+    bundle_id = os.environ.get("__CFBundleIdentifier", "")
+    app_py = str(APP_DIR_PATH / "app.py")
+    try:
+        if os.name == "posix":
+            import shlex
+            if sys.platform == "darwin" and bundle_id.startswith("com.riccardonevoso."):
+                relaunch = f"open -b {shlex.quote(bundle_id)}"
+            else:
+                relaunch = (f"cd {shlex.quote(str(APP_DIR_PATH))} && "
+                            f"exec {shlex.quote(sys.executable)} {shlex.quote(app_py)} --relaunch")
+            script = f"while kill -0 {pid} 2>/dev/null; do sleep 0.2; done; {relaunch}"
+            subprocess.Popen(["/bin/sh", "-c", script], cwd=str(APP_DIR_PATH),
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        else:
+            flags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
+                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            subprocess.Popen([sys.executable, app_py, "--relaunch"], cwd=str(APP_DIR_PATH),
+                             creationflags=flags, close_fds=True)
+    finally:
+        os._exit(0)
+
+@app.route("/app/restart", methods=["POST"])
+def app_restart():
+    if getattr(sys, "frozen", False):
+        return jsonify({"ok": False, "message": "Please quit and reopen MedSearch."})
+    threading.Thread(target=_relaunch_and_exit, daemon=True).start()
+    return jsonify({"ok": True})
+
+# Sources that must be released before any later source, so the Cochrane /
+# Guidelines / PubMed labels win the dedup exactly as they did when the
+# sources ran one after another.
+_PRIORITY_SOURCES = {"cochrane", "guidelines", "pubmed"}
+
 @app.route("/search_stream", methods=["POST"])
 def search_stream():
-    """Streaming search — emits results per source via SSE as they complete."""
-    data    = request.json
-    query   = data.get("query","").strip()
-    sources = data.get("sources",[])
-    max_r   = int(data.get("max_results", MAX_RESULTS_DEFAULT))
-    y_from  = int(data["year_from"]) if data.get("year_from") else None
-    y_to    = int(data["year_to"])   if data.get("year_to")   else None
-    strict  = data.get("strict", True)   # strict by default
-    sort    = data.get("sort", "relevance")   # "relevance" (default) or "date"
-    offset  = int(data.get("offset", 0))      # >0 = "load more" (next batch)
-    if sort not in ("relevance", "date"):
-        sort = "relevance"
+    """Streaming search — every source runs at once; results stream via SSE."""
+    data    = _json_body()
+    query   = (data.get("query") or "").strip()
+    wanted  = data.get("sources") or []
+    try:
+        max_r = max(1, min(int(data.get("max_results") or MAX_RESULTS_DEFAULT), 100))
+    except (TypeError, ValueError):
+        max_r = MAX_RESULTS_DEFAULT
+    y_from  = _int_or_none(data.get("year_from"))
+    y_to    = _int_or_none(data.get("year_to"))
+    strict  = data.get("strict", True) is not False
+    sort    = data.get("sort") if data.get("sort") in ("relevance", "date") else "relevance"
+    load_more = bool(data.get("load_more"))
 
+    def one_event(obj):
+        return Response(_sse(obj), mimetype="text/event-stream")
     if not query:
-        return Response("data: "+json.dumps({"type":"error","text":"Empty query"})+"\n\n",
-                        mimetype="text/event-stream")
+        return one_event({"type": "error", "text": "Empty query"})
+    if load_more and query != SESSION.get("query"):
+        return one_event({"type": "error",
+                          "text": "The search changed since these results loaded. Run it again first."})
 
-    # Fresh search resets the session; "load more" (offset>0) keeps existing
-    # results and appends to them.
-    if offset == 0:
+    selected = [src for src in SOURCES if src[0] in wanted or "all" in wanted]
+
+    # Fresh search resets the session; "load more" keeps existing results and
+    # asks each source for its OWN next batch. (The window used to send the
+    # total shown across all sources as every source's offset, so with three
+    # sources the second batch skipped results 11–30 of each.)
+    if not load_more:
         SESSION["articles"] = []
         SESSION["query"]    = query
         SESSION["last_synthesis"] = ""
-        if query not in SESSION["history"]: SESSION["history"].append(query)
+        SESSION["offsets"]  = {}
+        if query in SESSION["history"]:
+            SESSION["history"].remove(query)
+        SESSION["history"].append(query)
+        _save_history()
+    starts = {}
+    for key, *_ in selected:
+        starts[key] = SESSION["offsets"].get(key, 0) if load_more else 0
+        SESSION["offsets"][key] = starts[key] + max_r
 
-    # Ordered list of (key, label, callable) to run
-    def make_runners(seen):
-        runners = []
-        # Cochrane first: systematic reviews are also in PubMed, so claiming them
-        # here (before general PubMed) labels them as Cochrane in the dedup.
-        if "cochrane" in sources or "all" in sources:
-            runners.append(("cochrane", "Cochrane",
-                            lambda: search_cochrane(query, max_r, y_from, y_to, seen, strict=strict, sort=sort, offset=offset)))
-        # Clinical practice guidelines: PubMed restricted to guideline publication
-        # types. Captures national/society guidelines from many countries indexed
-        # in PubMed (incl. Italy's SNLG, US, UK, etc.). Runs BEFORE plain PubMed so
-        # guideline papers are claimed and labelled "Guidelines" (same pattern as
-        # Cochrane claiming systematic reviews first).
-        if "guidelines" in sources or "all" in sources:
-            runners.append(("guidelines", "Guidelines",
-                            lambda: search_pubmed(
-                                query, max_r, y_from, y_to, seen, strict=strict, sort=sort,
-                                extra_filter="(Guideline[ptyp] OR \"Practice Guideline\"[ptyp])",
-                                source_label="Guidelines", offset=offset)))
-        if "pubmed" in sources or "all" in sources:
-            runners.append(("pubmed", "PubMed",
-                            lambda: search_pubmed(query, max_r, y_from, y_to, seen, strict=strict, sort=sort, offset=offset)))
-        if "scopus" in sources or "all" in sources:
-            runners.append(("scopus", "Scopus",
-                            lambda: (search_scopus(query, max_r, y_from, y_to, seen, sort=sort, offset=offset), 0)))
-        if "wos" in sources or "all" in sources:
-            runners.append(("wos", "Web of Science",
-                            lambda: (search_wos(query, max_r, y_from, y_to, seen, sort=sort, offset=offset), 0)))
-        if "clinicaltrials" in sources or "all" in sources:
-            runners.append(("clinicaltrials", "ClinicalTrials.gov",
-                            lambda: (search_clinicaltrials(query, max_r, y_from, y_to, seen, sort=sort, offset=offset), 0)))
-        if "arxiv" in sources or "all" in sources:
-            runners.append(("arxiv", "arXiv",
-                            lambda: (search_arxiv(query, max_r, y_from, y_to, seen, sort=sort, offset=offset), 0)))
-        return runners
+    def run_source(key, fn, takes_strict):
+        kwargs = dict(sort=sort, offset=starts[key])
+        if takes_strict:
+            kwargs["strict"] = strict
+        return fn(query, max_r, y_from, y_to, **kwargs)
 
     def generate():
-        seen = make_dedup_set()
-        # For "load more", continue from existing results: rebuild the dedup set
-        # from what's already shown (so new results don't repeat them) and keep
-        # the running index/list going.
-        if offset > 0 and SESSION.get("articles"):
+        seen = set()
+        if load_more:
             all_results = list(SESSION["articles"])
-            global_idx = len(all_results)
             for a in all_results:
                 register(seen, a.get("doi"), a.get("title"))
         else:
             all_results = []
-            global_idx = 0
-        ai_on = bool((CONFIG.get("anthropic_api_key","") or "").strip()) and CONFIG.get("ai_enabled", True)
+        ai_on = ai_active()
 
-        # Send an initial padding comment to defeat buffering in some webviews.
+        # Initial padding comment defeats buffering in some webviews.
         yield ":" + (" " * 2048) + "\n\n"
 
-        # 1. MeSH first (fast, gives the user something immediately) — only on a
-        # fresh search, not when loading more.
-        if offset == 0 and ("pubmed" in sources or "all" in sources):
-            mesh = get_mesh(query)
-            yield "data: " + json.dumps({"type":"mesh","mesh":mesh}) + "\n\n"
+        src_pool = concurrent.futures.ThreadPoolExecutor(max_workers=len(selected) + 1)
+        ai_pool  = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+        pending  = {}          # future → ("mesh",) | ("src", key) | ("ol", idx)
+        finished = {}          # key → (results, total, error_text)
+        released = set()
+        try:
+            total_sources = len(selected)
+            for i, (key, label, fn, takes_strict) in enumerate(selected, 1):
+                yield _sse({"type": "source_start", "source": label,
+                            "index": i, "total": total_sources})
+                if key in _KEY_REQUIRED and not (CONFIG.get(_KEY_REQUIRED[key][0]) or "").strip():
+                    finished[key] = ([], 0, f"Add a {_KEY_REQUIRED[key][1]} API key in Settings "
+                                            "to search this source.")
+                else:
+                    pending[src_pool.submit(run_source, key, fn, takes_strict)] = ("src", key)
 
-        runners = make_runners(seen)
-        total_sources = len(runners)
+            # MeSH hints only on a fresh search that includes a PubMed source
+            if not load_more and any(k in _PRIORITY_SOURCES for k, *_ in selected):
+                pending[src_pool.submit(get_mesh, query)] = ("mesh",)
 
-        # Each source: announce start → emit each article card immediately →
-        # then stream one-liners as they finish (cards fill in live).
-        for i, (key, label, fn) in enumerate(runners, 1):
-            yield "data: " + json.dumps({
-                "type":"source_start", "source":label,
-                "index":i, "total":total_sources
-            }) + "\n\n"
-            yield ":keep-alive\n\n"
+            def release_ready():
+                for key, label, _fn, _s in selected:
+                    if key in released:
+                        continue
+                    if key not in finished:
+                        if key in _PRIORITY_SOURCES:
+                            return          # later sources wait for this one
+                        continue
+                    released.add(key)
+                    res, total, err = finished[key]
+                    if err:
+                        yield _sse({"type": "source_error", "source": label, "text": err})
+                    fresh = []
+                    for a in res:
+                        if is_duplicate(seen, a.get("doi"), a.get("title")):
+                            continue
+                        register(seen, a.get("doi"), a.get("title"))
+                        a["_idx"] = len(all_results)
+                        all_results.append(a)
+                        fresh.append(a)
+                        yield _sse({"type": "article", "source": label, "article": a})
+                    SESSION["articles"] = all_results
+                    yield _sse({"type": "source_done", "source": label, "count": len(fresh),
+                                "total_pubmed": total if key == "pubmed" else 0,
+                                "running_count": len(all_results),
+                                "done_sources": len(released), "total_sources": total_sources})
+                    if ai_on:
+                        for a in fresh:
+                            if a.get("abstract") and not a.get("oneliner"):
+                                fut = ai_pool.submit(ai_oneliner, a.get("title", ""), a["abstract"])
+                                pending[fut] = ("ol", a["_idx"])
 
-            # Premium sources need an API key. If enabled without one, tell the
-            # user clearly instead of silently returning nothing.
-            _key_required = {
-                "scopus": ("scopus_api_key", "Scopus"),
-                "wos":    ("wos_api_key", "Web of Science"),
-            }
-            if key in _key_required:
-                cfg_field, nice = _key_required[key]
-                if not (CONFIG.get(cfg_field,"") or "").strip():
-                    yield "data: " + json.dumps({
-                        "type":"source_error", "source":label,
-                        "text":f"Add a {nice} API key in Settings to search this source."
-                    }) + "\n\n"
-                    yield "data: " + json.dumps({
-                        "type":"source_done", "source":label,
-                        "count":0, "total_pubmed":0, "running_count":len(all_results)
-                    }) + "\n\n"
+            yield from release_ready()
+            while pending:
+                done, _ = concurrent.futures.wait(
+                    list(pending), timeout=10, return_when=concurrent.futures.FIRST_COMPLETED)
+                if not done:
+                    yield ":keep-alive\n\n"
                     continue
+                for fut in done:
+                    tag = pending.pop(fut)
+                    if tag[0] == "mesh":
+                        try: mesh = fut.result()
+                        except Exception: mesh = []
+                        yield _sse({"type": "mesh", "mesh": mesh})
+                    elif tag[0] == "src":
+                        try:
+                            res, total = fut.result()
+                            finished[tag[1]] = (res, total, None)
+                        except Exception as e:
+                            finished[tag[1]] = ([], 0, str(e) or "This source failed.")
+                        yield from release_ready()
+                    else:
+                        try: ol = fut.result()
+                        except Exception: ol = None
+                        if ol and tag[1] < len(all_results):
+                            all_results[tag[1]]["oneliner"] = ol
+                            yield _sse({"type": "oneliner", "idx": tag[1], "text": ol})
 
-            try:
-                r = fn()
-                res = r[0] if isinstance(r, tuple) else r
-                total_pubmed = r[1] if (isinstance(r, tuple) and key=="pubmed") else 0
-            except Exception as e:
-                res = []; total_pubmed = 0
-                yield "data: " + json.dumps({"type":"source_error","source":label,"text":str(e)}) + "\n\n"
-
-            # Assign global indices and emit each card right away (no one-liner yet)
-            indexed = []
-            for a in res:
-                a["_idx"] = global_idx
-                indexed.append(a)
-                all_results.append(a)
-                global_idx += 1
-                yield "data: " + json.dumps({"type":"article","source":label,"article":a}) + "\n\n"
-            SESSION["articles"] = all_results
-
-            # Tell the client this source is done arriving (spinner → count)
-            yield "data: " + json.dumps({
-                "type":"source_done", "source":label,
-                "count":len(res), "total_pubmed":total_pubmed,
-                "running_count":len(all_results)
-            }) + "\n\n"
-            yield ":keep-alive\n\n"
-
-            # Now stream one-liners as they complete, patching each card live.
-            if ai_on:
-                targets = [a for a in indexed if a.get("abstract") and not a.get("oneliner")]
-                if targets:
-                    try:
-                        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
-                            future_to_idx = {
-                                ex.submit(ai_oneliner, a.get("title",""), a.get("abstract","")): a["_idx"]
-                                for a in targets
-                            }
-                            for fut in concurrent.futures.as_completed(future_to_idx):
-                                idx = future_to_idx[fut]
-                                try: ol = fut.result()
-                                except Exception: ol = None
-                                if ol:
-                                    # update session copy too
-                                    for a in all_results:
-                                        if a.get("_idx") == idx: a["oneliner"] = ol; break
-                                    yield "data: " + json.dumps({
-                                        "type":"oneliner","idx":idx,"text":ol
-                                    }) + "\n\n"
-                    except Exception:
-                        pass
-
-        # Final done event
-        yield "data: " + json.dumps({"type":"done","count":len(all_results)}) + "\n\n"
+            yield _sse({"type": "done", "count": len(all_results)})
+        finally:
+            # Also reached when the window stops the search mid-stream.
+            src_pool.shutdown(wait=False, cancel_futures=True)
+            ai_pool.shutdown(wait=False, cancel_futures=True)
+            save_doi_cache()
 
     resp = Response(stream_with_context(generate()), mimetype="text/event-stream")
     resp.headers["Cache-Control"] = "no-cache, no-transform"
     resp.headers["X-Accel-Buffering"] = "no"
-    resp.headers["Connection"] = "keep-alive"
     resp.headers["Content-Encoding"] = "none"   # prevent gzip buffering
     return resp
+
+def _sse_response(gen):
+    return Response(stream_with_context(gen), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @app.route("/synthesis")
 def synthesis():
@@ -1690,23 +2062,23 @@ def synthesis():
     def generate():
         text = ""
         for chunk in ai_synthesis_stream(query, articles):
-            if '"type":"chunk"' in chunk:
-                try: text += json.loads(chunk[6:])["text"]
-                except Exception: pass
+            try:
+                ev = json.loads(chunk[6:])
+                if ev.get("type") == "chunk":
+                    text += ev["text"]
+            except Exception:
+                pass
             yield chunk
         SESSION["last_synthesis"] = text
-    return Response(stream_with_context(generate()), mimetype="text/event-stream",
-                    headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
+    return _sse_response(generate())
 
 @app.route("/explain/<int:idx>")
 def explain(idx):
     articles = SESSION.get("articles",[])
     if idx < 0 or idx >= len(articles):
-        return Response("data: "+json.dumps({"type":"error","text":"Invalid index"})+"\n\n",
-                        mimetype="text/event-stream")
-    return Response(stream_with_context(ai_explain_stream(articles[idx])),
-                    mimetype="text/event-stream",
-                    headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
+        return _sse_response(iter([_sse({"type": "error", "text": "Invalid index"}),
+                                   _sse({"type": "done"})]))
+    return _sse_response(ai_explain_stream(articles[idx]))
 
 @app.route("/citations/<int:idx>")
 def citations(idx):
@@ -1737,25 +2109,27 @@ def assistant_suggestions_route():
 def assistant_chat_route():
     """Streaming chat grounded in the current results.
     Body: {messages: [{role, content}, ...]}"""
-    data     = request.json or {}
-    messages = data.get("messages", [])
+    messages = _json_body().get("messages") or []
     # Basic validation/sanitation of the conversation
     clean = []
-    for m in messages:
+    for m in messages if isinstance(messages, list) else []:
+        if not isinstance(m, dict):
+            continue
         role = m.get("role")
-        content = (m.get("content") or "").strip()
+        content = str(m.get("content") or "").strip()
         if role in ("user","assistant") and content:
             clean.append({"role":role, "content":content[:4000]})
     if not clean or clean[-1]["role"] != "user":
-        return Response("data: "+json.dumps({"type":"error","text":"No question provided."})+"\n\n",
-                        mimetype="text/event-stream")
-    # Keep only the last ~6 turns to bound the prompt size (was 12)
+        return _sse_response(iter([_sse({"type": "error", "text": "No question provided."}),
+                                   _sse({"type": "done"})]))
+    # Keep only the last ~6 turns to bound the prompt size. The API requires
+    # the conversation to open with a user turn, so trim any leading reply.
     clean = clean[-6:]
+    while clean and clean[0]["role"] != "user":
+        clean.pop(0)
     query    = SESSION.get("query","")
     articles = SESSION.get("articles",[])
-    return Response(stream_with_context(assistant_chat_stream(clean, query, articles)),
-                    mimetype="text/event-stream",
-                    headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
+    return _sse_response(assistant_chat_stream(clean, query, articles))
 
 def _is_scihub_url(url):
     """True if the URL points at a known Sci-Hub mirror."""
@@ -1864,6 +2238,27 @@ _BROWSER_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
+def _is_private_host(host):
+    """True for loopback / LAN / link-local hosts. The PDF proxy fetches URLs
+    taken from third-party pages, which must never reach into this machine or
+    the hospital network."""
+    import ipaddress, socket
+    if not host:
+        return True
+    host = host.strip("[]").lower()
+    if host == "localhost" or host.endswith(".local") or host.endswith(".localhost"):
+        return True
+    try:
+        addrs = {ai[4][0] for ai in socket.getaddrinfo(host, None)}
+    except Exception:
+        return False        # unresolvable: the fetch itself will fail
+    for addr in addrs:
+        ip = ipaddress.ip_address(addr.split("%")[0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved \
+                or ip.is_multicast or ip.is_unspecified:
+            return True
+    return False
+
 def _fetch_url_bytes(url, timeout=30, referer=None):
     """
     Fetch a URL with browser-like headers; return (data_bytes, content_type).
@@ -1872,6 +2267,8 @@ def _fetch_url_bytes(url, timeout=30, referer=None):
     Raises urllib.error.HTTPError on 4xx/5xx so callers can react (e.g. 403).
     """
     import gzip, zlib
+    if _is_private_host(urllib.parse.urlparse(url).hostname):
+        raise urllib.error.URLError("refusing to fetch a local-network address")
     headers = dict(_BROWSER_HEADERS)
     # A same-origin Referer placates some publishers' hotlink protection.
     parsed = urllib.parse.urlparse(url)
@@ -1948,19 +2345,26 @@ def pdf_proxy():
         for m in (a.get("scihub") or []): known.add(m)
         if a.get("doi"): known_dois.add(str(a["doi"]).lower())
 
+    # Hosts of the user's configured library proxies. A URL on one of them
+    # (EZProxy rewrites doi.org → doi-org.ezp.biblio.unitn.it) is allowed only
+    # when it carries a DOI or link from the current results. The old check
+    # accepted ANY URL that merely contained a known DOI somewhere, including
+    # one pointing at this machine.
+    proxy_hosts = set()
+    for p in CONFIG.get("institution_proxies") or []:
+        h = urllib.parse.urlparse((p or {}).get("url") or "").hostname
+        if h:
+            proxy_hosts.add(h.lower())
+
     def _is_allowed(u):
         if u in known:
             return True
+        host = (urllib.parse.urlparse(u).hostname or "").lower()
+        if not any(host == h or host.endswith("." + h) for h in proxy_hosts):
+            return False
         low = urllib.parse.unquote(u).lower()
-        # Proxied form embeds the original DOI somewhere in the URL
-        for d in known_dois:
-            if d and d in low:
-                return True
-        # Proxied ?url= form embeds a known access link
-        for k in known:
-            if k and k.lower() in low:
-                return True
-        return False
+        return any(d and d in low for d in known_dois) or \
+               any(k and k.lower() in low for k in known)
 
     if not _is_allowed(url):
         return jsonify({"error":"URL not recognized from current results"}), 403
@@ -2039,16 +2443,31 @@ def pdf_proxy():
         return jsonify({"error":"fetch_failed",
                         "message":f"Couldn't fetch the PDF: {e}"}), 502
 
+def _selected_articles(data):
+    """The articles to export: the ones the window lists in `indices` (what
+    the result filters leave visible), or every result when none are given."""
+    articles = SESSION.get("articles", [])
+    idx = data.get("indices")
+    if not isinstance(idx, list):
+        return articles
+    picked = []
+    for i in idx:
+        if isinstance(i, int) and 0 <= i < len(articles):
+            picked.append(articles[i])
+    return picked
+
 @app.route("/export", methods=["POST"])
 def export():
-    data      = request.json
-    fmt       = data.get("format","md")
+    data      = _json_body()
+    fmt       = data.get("format", "md")
+    if fmt not in ("md", "bib", "ris", "all"):
+        fmt = "md"
     synthesis = SESSION.get("last_synthesis","")
-    articles  = SESSION.get("articles",[])
+    articles  = _selected_articles(data)
     query     = SESSION.get("query","")
     if not articles: return jsonify({"error":"No articles to export"}), 400
     paths = do_export(articles, query, fmt, synthesis)
-    return jsonify({"paths": paths})
+    return jsonify({"paths": paths, "count": len(articles)})
 
 @app.route("/export/zotero/check")
 def export_zotero_check():
@@ -2057,7 +2476,7 @@ def export_zotero_check():
 
 @app.route("/export/zotero", methods=["POST"])
 def export_zotero():
-    articles = SESSION.get("articles",[])
+    articles = _selected_articles(_json_body())
     if not articles:
         return jsonify({"ok": False, "message": "No articles to send."}), 200
     if not zotero_ping():
@@ -2069,7 +2488,7 @@ def export_zotero():
 @app.route("/export/zotero/single", methods=["POST"])
 def export_zotero_single():
     """Send one article (by its session index) straight to Zotero."""
-    data = request.json or {}
+    data = _json_body()
     try:
         idx = int(data.get("idx", -1))
     except Exception:
@@ -2085,12 +2504,18 @@ def export_zotero_single():
 
 @app.route("/settings", methods=["GET","POST"])
 def settings():
-    global CONFIG
     if request.method == "POST":
-        data = request.json
-        for k in ("anthropic_api_key","pubmed_api_key","scopus_api_key",
-                  "scopus_insttoken","wos_api_key","unpaywall_email"):
-            if k in data and data[k]: CONFIG[k] = data[k].strip()
+        data = _json_body()
+        secret_fields = ("anthropic_api_key","pubmed_api_key","scopus_api_key",
+                         "scopus_insttoken","wos_api_key","unpaywall_email")
+        # A blank field means "keep what's saved" (the field shows a masked
+        # placeholder), so removing a key is an explicit request.
+        for k in data.get("clear") or []:
+            if k in secret_fields:
+                CONFIG[k] = ""
+        for k in secret_fields:
+            if isinstance(data.get(k), str) and data[k].strip():
+                CONFIG[k] = data[k].strip()
         # Institutional proxies: list of {label, url}; active index.
         if "institution_proxies" in data and isinstance(data["institution_proxies"], list):
             cleaned = []
@@ -2140,13 +2565,15 @@ def history():
 
 @app.route("/history/delete", methods=["POST"])
 def history_delete():
-    q = (request.json or {}).get("query","")
+    q = _json_body().get("query","")
     SESSION["history"] = [h for h in SESSION["history"] if h != q]
+    _save_history()
     return jsonify({"ok": True, "history": SESSION["history"][-20:]})
 
 @app.route("/history/clear", methods=["POST"])
 def history_clear():
     SESSION["history"] = []
+    _save_history()
     return jsonify({"ok": True})
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2171,7 +2598,7 @@ def saved_list():
 
 @app.route("/saved", methods=["POST"])
 def saved_add():
-    data  = request.json
+    data  = _json_body()
     items = load_saved()
     entry = {
         "id":        str(int(time.time()*1000)),
@@ -2182,6 +2609,7 @@ def saved_add():
         "year_to":   data.get("year_to"),
         "max_results": data.get("max_results", MAX_RESULTS_DEFAULT),
         "strict":    data.get("strict", True),
+        "sort":      data.get("sort") if data.get("sort") in ("relevance", "date") else "relevance",
         "created":   datetime.now().strftime("%Y-%m-%d"),
     }
     # avoid exact duplicates (same name + query)
@@ -2201,26 +2629,84 @@ def saved_delete(sid):
     write_saved(items)
     return jsonify({"ok": True, "saved": items})
 
+def _existing_instance():
+    """(port, token) of a MedSearch already running on this machine, or None."""
+    ports = []
+    try:
+        ports.append(int((CONFIG_DIR / "server_port").read_text().strip()))
+    except Exception:
+        pass
+    if 5050 not in ports:
+        ports.append(5050)
+    for port in ports:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/ping", timeout=1.5) as r:
+                if json.loads(r.read().decode()).get("app") == "medsearch":
+                    token = (CONFIG_DIR / "server_token").read_text().strip()
+                    return port, token
+        except Exception:
+            continue
+    return None
+
+def _post_local(port, token, path, payload):
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(payload).encode(), method="POST",
+        headers={"Content-Type": "application/json", "X-MedSearch-Token": token})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return r.status == 200
+
+def _write_private(path, text):
+    """Write a file only this user can read (the token file)."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+
 if __name__ == "__main__":
-    import threading, socket, argparse
+    import socket, argparse
 
     # Optional deep-link args from the menu-bar app: open the window straight on
     # a search. e.g.  python3 app.py --query "glioma" --source guidelines
     _parser = argparse.ArgumentParser(add_help=False)
     _parser.add_argument("--query", default="")
     _parser.add_argument("--source", default="")
+    _parser.add_argument("--relaunch", action="store_true")   # restart after an update
     _args, _ = _parser.parse_known_args()
 
-    # Find a free port (in case 5050 is taken)
-    def free_port(preferred=5050):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            s.bind(("127.0.0.1", preferred)); s.close(); return preferred
-        except OSError:
-            s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s2.bind(("127.0.0.1", 0)); port = s2.getsockname()[1]; s2.close(); return port
+    # ONE WINDOW. A second double-click used to start a second server on a
+    # random port with a second window. Now it hands its request to the copy
+    # that is already running (bring it forward, or run the search there) and
+    # exits. After an update the old copy is still exiting, so a relaunch
+    # skips this check.
+    if not _args.relaunch:
+        _running = _existing_instance()
+        if _running:
+            _port, _token = _running
+            try:
+                if _args.query.strip():
+                    _post_local(_port, _token, "/queue_search",
+                                {"query": _args.query.strip(), "source": _args.source.strip()})
+                _post_local(_port, _token, "/focus", {})
+            except Exception:
+                pass
+            sys.exit(0)
 
-    PORT = free_port(5050)
+    # Find a free port (in case 5050 is taken). A relaunch waits briefly for
+    # the previous copy to release 5050 rather than moving to a random port.
+    def free_port(preferred=5050, wait=0.0):
+        deadline = time.time() + wait
+        while True:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                s.bind(("127.0.0.1", preferred)); s.close(); return preferred
+            except OSError:
+                s.close()
+                if time.time() >= deadline:
+                    break
+                time.sleep(0.25)
+        s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s2.bind(("127.0.0.1", 0)); port = s2.getsockname()[1]; s2.close(); return port
+
+    PORT = free_port(5050, wait=10.0 if _args.relaunch else 0.0)
     # If launched with a query, point the window straight at the search.
     if _args.query.strip():
         _qs = urllib.parse.urlencode({"q": _args.query.strip(),
@@ -2229,11 +2715,12 @@ if __name__ == "__main__":
     else:
         URL = f"http://127.0.0.1:{PORT}"
 
-    # Record the chosen port so the menu-bar companion app can find this server
-    # (it may be on a non-default port if 5050 was taken). Best-effort.
+    # Record the chosen port and this launch's token so the menu-bar companion
+    # app can find this server and talk to it. Best-effort.
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         (CONFIG_DIR / "server_port").write_text(str(PORT))
+        _write_private(CONFIG_DIR / "server_token", APP_TOKEN)
     except Exception:
         pass
 
@@ -2269,7 +2756,7 @@ if __name__ == "__main__":
         t = threading.Thread(target=run_server, daemon=True)
         t.start()
         print(f"\n  🔬  MedSearch {LOCAL_VERSION}  —  native window on {URL}\n")
-        webview.create_window(
+        _MAIN_WINDOW = webview.create_window(
             "MedSearch",
             URL,
             width=1280, height=860,
@@ -2291,7 +2778,7 @@ if __name__ == "__main__":
     except ImportError:
         import webbrowser
         print(f"\n  🔬  MedSearch {LOCAL_VERSION}  —  starting…")
-        print(f"  (pywebview not installed — opening in browser instead)")
+        print("  (pywebview not installed — opening in browser instead)")
         print(f"  Open: {URL}\n")
         threading.Timer(1.2, lambda: webbrowser.open(URL)).start()
         run_server()

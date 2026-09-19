@@ -1,0 +1,5 @@
+# Development only — not needed to run MedSearch.
+#   pip install -r requirements-dev.txt
+#   python -m pytest
+-r requirements.txt
+pytest>=8.0

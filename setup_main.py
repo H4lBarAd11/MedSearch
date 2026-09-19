@@ -40,6 +40,16 @@ APP = ['app.py']
 # Contents/Resources).
 DATA_FILES = [
     ('templates', ['templates/index.html']),
+    # Fonts and the PDF viewer ship with the app so it works offline and on
+    # networks that block CDNs.
+    ('static/fonts', ['static/fonts/dm-sans-400.woff2', 'static/fonts/dm-sans-500.woff2',
+                      'static/fonts/dm-sans-700.woff2', 'static/fonts/dm-sans-800.woff2',
+                      'static/fonts/OFL.txt']),
+    ('static/css', ['static/css/app.css']),
+    ('static/js', ['static/js/boot.js', 'static/js/app.js']),
+    ('static/vendor/pdfjs', ['static/vendor/pdfjs/pdf.min.js',
+                             'static/vendor/pdfjs/pdf.worker.min.js',
+                             'static/vendor/pdfjs/LICENSE']),
     'VERSION',
 ]
 
@@ -62,7 +72,8 @@ OPTIONS = {
     'packages': ['flask', 'webview', 'jinja2', 'werkzeug', 'click',
                  'markupsafe', 'itsdangerous'],
     'includes': ['webview.platforms.cocoa', 'objc', 'AppKit', 'Foundation',
-                 'WebKit', 'urllib.request', 'urllib.parse', 'xml.etree.ElementTree'],
+                 'WebKit', 'urllib.request', 'urllib.parse', 'xml.etree.ElementTree',
+                 'ipaddress', 'secrets', 'hmac'],
 }
 
 setup(
