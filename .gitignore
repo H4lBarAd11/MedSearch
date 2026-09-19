@@ -38,3 +38,6 @@ dist/
 # extra build artifacts
 *.egg-info/
 "MedSearch Menu Bar.app"/
+
+# Test cache
+.pytest_cache/
