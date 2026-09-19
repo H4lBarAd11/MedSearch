@@ -34,13 +34,13 @@ from setuptools import setup
 APP = ['menubar.py']
 
 # Files bundled into the app's Resources. The menu-bar glyph must be here so
-# menubar.py can find it; we also bundle app.py + templates so the menu-bar app
-# can launch the main MedSearch app even if run from /Applications.
+# menubar.py can find it. The main app is NOT bundled any more: a frozen copy
+# of app.py went stale with every update and, once the page's CSS and scripts
+# moved to static/, opened broken. The menu bar launches the installed
+# MedSearch.app instead (/Applications or the Desktop).
 DATA_FILES = [
     'menubar_icon.png',
-    'app.py',
     'VERSION',
-    ('templates', ['templates/index.html']),
 ]
 
 OPTIONS = {

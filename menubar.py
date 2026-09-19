@@ -93,6 +93,10 @@ def _find_main_app():
     """Return ('bundle', path) or ('script', path) or (None, None)."""
     candidates_bundle = [
         Path("/Applications/MedSearch.app"),
+        # Where "Create Desktop App.command" puts the launcher (the department
+        # iMac). Missing from this list, the menu bar there fell through to its
+        # own frozen copy of app.py.
+        Path.home() / "Desktop" / "MedSearch.app",
         APP_DIR / "MedSearch.app",
         APP_DIR.parent / "MedSearch.app",
     ]
@@ -101,9 +105,11 @@ def _find_main_app():
     for b in candidates_bundle:
         if b.exists():
             return ("bundle", b)
-    # Otherwise look for app.py next to us or in the project folder.
+    # Otherwise look for app.py in the project folder. NEVER a copy frozen
+    # into this bundle: it is as old as the build, cannot update itself, and
+    # since the page's CSS and scripts moved to static/ it opens broken.
     candidates_script = [
-        APP_DIR / "app.py",
+        APP_DIR / "app.py" if not FROZEN else None,
         Path(__file__).resolve().parent / "app.py" if not FROZEN else None,
     ]
     for s in candidates_script:
@@ -213,19 +219,44 @@ def _wait_for_server(timeout=25):
     return None
 
 
+def _post(port, path, payload):
+    """POST JSON to the running app. Returns the decoded reply, or None."""
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}",
+            data=json.dumps(payload).encode(), headers=_server_headers(), method="POST")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.loads(r.read().decode() or "{}") if r.status == 200 else None
+    except Exception as e:
+        _diag(f"_post {path} error: {e}")
+        return None
+
+
 def _queue_search(port, query, source):
     """POST a search to the running app; its native window picks it up and runs
     it in-window. Returns True on success."""
+    reply = _post(port, "/queue_search", {"query": query, "source": source})
+    return bool(reply and reply.get("ok"))
+
+
+def _focus(port):
+    """Bring the app's own window forward (the /focus route the main app has
+    had since the one-window change). True if it has a native window to raise;
+    False when it is running without one (browser-tab mode)."""
+    reply = _post(port, "/focus", {})
+    return bool(reply and reply.get("ok"))
+
+
+def _alert(title, message):
+    """An error is a dialog that has to be answered, never a notification
+    banner (his rule for every app). rumps.alert must run on the main thread,
+    and these errors are raised from worker threads."""
     try:
-        body = json.dumps({"query": query, "source": source}).encode()
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/queue_search",
-            data=body, headers=_server_headers(), method="POST")
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return r.status == 200
+        from PyObjCTools import AppHelper
+        AppHelper.callAfter(lambda: rumps.alert(title=title, message=message, ok="OK"))
     except Exception as e:
-        _diag(f"_queue_search error: {e}")
-        return False
+        _diag(f"_alert failed ({e}); falling back to a notification")
+        rumps.notification("MedSearch", title, message)
 
 
 def _real_python():
@@ -424,39 +455,40 @@ class MedSearchBar(rumps.App):
                 _diag(f"run_query: after launch, port={port}")
             if not port:
                 _diag("run_query: server never came up")
-                rumps.notification(
-                    "MedSearch", "Couldn't reach MedSearch",
-                    "The app didn't start in time — see ~/.medsearch/menubar.log",
-                )
+                _alert("Couldn't reach MedSearch",
+                       "The app didn't start in time. Open MedSearch from the "
+                       "Desktop and try again. Details: ~/.medsearch/menubar.log")
                 return
             # Queue the search; the native window's poller runs it in-window.
             if not _queue_search(port, query, src):
                 _diag("run_query: queue_search failed")
-                rumps.notification(
-                    "MedSearch", "Search couldn't be sent",
-                    "See ~/.medsearch/menubar.log",
-                )
+                _alert("Search couldn't be sent",
+                       "MedSearch is running but didn't accept the search. "
+                       "Details: ~/.medsearch/menubar.log")
+                return
+            # The window runs it; bring the window forward so it is seen.
+            _focus(port)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def open_window(self, _):
         """
         Open MedSearch. If it's not running, launch the native app (its own
-        window appears — nothing else to do). If it's already running, open the
-        window in the browser (we can't raise the existing native window from
-        here). Mirrors run_query's launch-vs-browser logic to avoid opening two
-        windows at once.
+        window appears). If it's already running, bring ITS window forward
+        through the app's /focus route. That used to open a second copy in the
+        browser, from before the app could raise its own window. The browser is
+        only the fallback for an app running without a native window.
         """
         def worker():
             port = find_running_port()
             if port:
-                # Already running → open in the browser (can't raise native window).
-                webbrowser.open(f"http://127.0.0.1:{port}/")
+                if not _focus(port):
+                    webbrowser.open(f"http://127.0.0.1:{port}/")
                 return
             # Not running → launch the native app; its own window will appear.
             if not launch_main_app():
-                rumps.notification("MedSearch", "Couldn't start MedSearch",
-                                   "Try opening the MedSearch app manually.")
+                _alert("Couldn't start MedSearch",
+                       "Open it from the MedSearch icon on the Desktop instead.")
         threading.Thread(target=worker, daemon=True).start()
 
     def clear_recents(self, _):

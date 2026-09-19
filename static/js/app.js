@@ -252,6 +252,14 @@ function runSearchWithSource(q, src, delay) {
   const input = document.getElementById('searchInput');
   if (input) input.value = q;
   if (src) {
+    // A single source that needs a key it doesn't have is REFUSED, and says
+    // so, rather than silently becoming a PubMed search (it used to). "All
+    // sources" means all the usable ones, so it skips keyless ones quietly.
+    const only = document.querySelector(`.db-item[data-db="${src}"]`);
+    if (src !== 'all' && only && only.dataset.needsKey && !dbKeyPresent[only.dataset.needsKey]) {
+      showApiKeyPrompt(only.dataset.needsKey);
+      return;
+    }
     document.querySelectorAll('.db-item').forEach(item => {
       const db = item.dataset.db;
       const shouldCheck = (src === 'all') ? true : (db === src);
