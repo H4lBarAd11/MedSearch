@@ -984,7 +984,15 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 14px;
+  /* PINNED. The sheet follows the text as it streams, which scrolled its own
+     title, Stop and close out of reach (found on the live walk, 19 Sep). */
+  position: sticky;
+  top: -18px;
+  z-index: 1;
+  margin: -18px -24px 14px;
+  padding: 18px 24px 10px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
 }
 .synthesis-title {
   font-size: 0.78rem;
@@ -2268,6 +2276,21 @@ button:active:not(:disabled), .link-btn:active { transform: scale(0.97); }
   box-shadow: 0 1px 0 var(--border);
 }
 
+/* ONCE STUCK, NOTHING SCROLLS ABOVE IT. The header sticks 102px down, and
+   the band between it and the top of the window was open: scrolled titles
+   passed through it, under the status line (found on the first live walk,
+   19 Sep). The band is painted only while stuck (`.stuck`, set in app.js),
+   because at rest the MeSH suggestions sit exactly there. */
+.results-header.stuck::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  bottom: 100%;
+  height: 140px;
+  background: var(--bg);
+  pointer-events: none;
+}
+
 /* TRACKING BY SIZE: large type tightens, body stays at 0, small capitals open. */
 .article-title   { letter-spacing: -0.005em; }
 .modal-title, .settings-title, .update-title, .apikey-prompt-title { letter-spacing: -0.01em; }
@@ -2303,3 +2326,25 @@ button:active:not(:disabled), .link-btn:active { transform: scale(0.97); }
 .assistant-empty .big .ico { width: 28px; height: 28px; }
 .assistant-send { display: inline-flex; align-items: center; justify-content: center; }
 .pdf-action, .pdf-fit-btn, .synthesis-stop { display: inline-flex; align-items: center; gap: 5px; }
+
+/* ── AI text, rendered from Markdown (renderMd in app.js) ─────────────────
+   House typography: headings in ink and weight, no colour; lists indented;
+   inline code as the house code chip. The containers stop preserving raw
+   whitespace, because the paragraphs now carry the spacing. */
+.modal-text, .synthesis-text, .msg.assistant { white-space: normal; }
+.modal-text p, .synthesis-text p, .msg.assistant p { margin: 0 0 0.7em; }
+.modal-text p:last-child, .synthesis-text p:last-child, .msg.assistant p:last-child { margin-bottom: 0; }
+.md-h { color: var(--text); font-weight: 700; letter-spacing: -0.005em; line-height: 1.35; margin: 1em 0 0.4em; }
+.md-h:first-child { margin-top: 0; }
+.md-h1 { font-size: 1.05rem; }
+.md-h2 { font-size: 0.95rem; }
+.md-h3, .md-h4 { font-size: 0.88rem; }
+.modal-text ul, .modal-text ol, .synthesis-text ul, .synthesis-text ol,
+.msg.assistant ul, .msg.assistant ol { margin: 0 0 0.7em; padding-left: 1.3em; }
+.modal-text li, .synthesis-text li, .msg.assistant li { margin-bottom: 0.25em; }
+.modal-text strong, .synthesis-text strong, .msg.assistant strong { color: var(--text); font-weight: 700; }
+.modal-text code, .synthesis-text code, .msg.assistant code {
+  font-family: var(--mono); font-size: 0.85em; background: var(--input-bg);
+  border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
+.modal-text hr, .synthesis-text hr { border: 0; border-top: 1px solid var(--border); margin: 1em 0; }
+.modal-text { line-height: 1.65; }
