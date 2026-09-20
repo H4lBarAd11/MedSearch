@@ -132,14 +132,19 @@ function checkForUpdate() {
       const text = document.getElementById('updateText');
       const actions = document.getElementById('updateActions');
       const btn = document.getElementById('updateNowBtn');
+      // What the new version changes, when it says so.
+      const notes = (data.changes || []).length
+        ? `<ul class="update-changes">${data.changes.map(c => `<li>${escHtml(c)}</li>`).join('')}</ul>`
+        : '';
       if (data.can_apply) {
         text.innerHTML = `A new version of MedSearch is available.<br><br>
-          <span class="ver">${escHtml(data.local)}</span> → <span class="ver">${escHtml(data.remote)}</span>`;
+          <span class="ver">${escHtml(data.local)}</span> → <span class="ver">${escHtml(data.remote)}</span>
+          ${notes}`;
         btn.style.display = '';
       } else {
         // Not a git checkout (e.g. a frozen .app) — can't auto-apply. Point
         // them at the source install, which DOES auto-update.
-        text.innerHTML = `A new version (<span class="ver">${escHtml(data.remote)}</span>) is available, but this copy can't auto-update.<br><br>
+        text.innerHTML = `A new version (<span class="ver">${escHtml(data.remote)}</span>) is available, but this copy can't auto-update.${notes}<br><br>
           To get automatic updates, run MedSearch from a clone of the GitHub repo
           (double-click <span class="mono">MedSearch.command</span>) instead of the packaged app.`;
         btn.style.display = 'none';
