@@ -257,3 +257,125 @@ def test_local_addresses_are_private():
     for host in ("localhost", "127.0.0.1", "10.0.0.5", "192.168.1.20", "printer.local", None):
         assert A._is_private_host(host), host
     assert not A._is_private_host("93.184.216.34")
+
+
+# ── One app: the window, the hand-off, and the installed launcher ───────────
+# (the menu bar item lives in the same process since 20 Sep; these cover the
+#  parts of that change that are testable without AppKit)
+
+def test_queued_search_is_handed_over_once_and_then_cleared(client, auth):
+    """A second launch POSTs its query here; the running window polls for it.
+    Handing it over twice would run the same search twice."""
+    r = client.post("/queue_search", json={"query": "glioma", "source": "pubmed"},
+                    headers=auth, base_url=BASE)
+    assert r.json["ok"] is True
+    first = client.get("/pending_search", headers=auth, base_url=BASE).json
+    assert (first["pending"], first["query"], first["source"]) == (True, "glioma", "pubmed")
+    assert client.get("/pending_search", headers=auth, base_url=BASE).json["pending"] is False
+
+
+def test_an_empty_queued_search_is_refused(client, auth):
+    r = client.post("/queue_search", json={"query": "   "}, headers=auth, base_url=BASE)
+    assert r.json["ok"] is False
+    assert client.get("/pending_search", headers=auth, base_url=BASE).json["pending"] is False
+
+
+def test_queueing_a_search_needs_the_token(client):
+    assert client.post("/queue_search", json={"query": "x"}, base_url=BASE).status_code == 403
+
+
+def test_focus_reports_whether_there_is_a_window_to_show(client, auth, monkeypatch):
+    """The answer is what a second launch uses to decide between raising the
+    window and falling back to the browser."""
+    monkeypatch.setattr(A, "_MAIN_WINDOW", None)
+    monkeypatch.setattr(A, "_STATUSBAR", None)
+    assert client.post("/focus", headers=auth, base_url=BASE).json["ok"] is False
+
+
+def test_open_at_login_writes_and_removes_the_agent(tmp_path, monkeypatch):
+    agent = tmp_path / "LaunchAgents" / "com.halbarad.medsearch.plist"
+    monkeypatch.setattr(A, "_LOGIN_AGENT", agent)
+    monkeypatch.setattr(A, "_launcher_bundle_id", lambda: "com.halbarad.medsearch.launcher")
+    A._set_open_at_login(True)
+    text = agent.read_text()
+    assert "com.halbarad.medsearch.launcher" in text and "--background" in text
+    assert "<key>RunAtLoad</key><true/>" in text
+    A._set_open_at_login(False)
+    assert not agent.exists()
+
+
+def test_open_at_login_without_a_launcher_runs_this_folder(tmp_path, monkeypatch):
+    agent = tmp_path / "com.halbarad.medsearch.plist"
+    monkeypatch.setattr(A, "_LOGIN_AGENT", agent)
+    monkeypatch.setattr(A, "_launcher_bundle_id", lambda: "")
+    A._set_open_at_login(True)
+    assert str(A.APP_DIR_PATH / "app.py") in agent.read_text()
+
+
+def test_a_failing_login_item_still_saves_the_settings(client, auth, monkeypatch):
+    """The keys and libraries are already on disk by then, so the page must
+    finish saving: a login item it couldn't write is a warning, not a failure."""
+    monkeypatch.setattr(A, "_open_at_login_supported", lambda: True)
+
+    def boom(_on):
+        raise PermissionError("read-only LaunchAgents")
+    monkeypatch.setattr(A, "_set_open_at_login", boom)
+    r = client.post("/settings", json={"unpaywall_email": "you@example.com",
+                                       "open_at_login": True}, headers=auth, base_url=BASE)
+    assert r.json["ok"] is True
+    assert "login" in r.json["warning"].lower()
+    assert A.CONFIG["unpaywall_email"] == "you@example.com"
+
+
+def test_settings_reports_the_login_state_it_can_see(client, auth, tmp_path, monkeypatch):
+    agent = tmp_path / "com.halbarad.medsearch.plist"
+    monkeypatch.setattr(A, "_LOGIN_AGENT", agent)
+    assert client.get("/settings", headers=auth, base_url=BASE).json["open_at_login"] is False
+    agent.write_text("<plist/>")
+    assert client.get("/settings", headers=auth, base_url=BASE).json["open_at_login"] is True
+
+
+def _bundle(tmp_path, exec_text):
+    b = tmp_path / "MedSearch.app"
+    (b / "Contents" / "MacOS").mkdir(parents=True)
+    (b / "Contents" / "Resources").mkdir(parents=True)
+    (b / "Contents" / "MacOS" / "MedSearch").write_text(exec_text)
+    return b
+
+
+def test_an_old_launcher_is_rewritten_to_run_launcher_sh(tmp_path, monkeypatch):
+    """git pull cannot reach inside MedSearch.app, so the app converts the
+    launcher that started it — once."""
+    b = _bundle(tmp_path, f'#!/bin/bash\nexec python3 "{A.APP_DIR_PATH / "app.py"}" "$@"\n')
+    monkeypatch.setattr(A.sys, "platform", "darwin")
+    monkeypatch.setattr(A, "_bundle_path_for", lambda _bid: b)
+    A._maintain_launcher("com.halbarad.medsearch.launcher", True)
+    after = (b / "Contents" / "MacOS" / "MedSearch").read_text()
+    assert "launcher.sh" in after and str(A.APP_DIR_PATH) in after
+
+
+def test_a_launcher_for_another_folder_is_left_alone(tmp_path, monkeypatch):
+    b = _bundle(tmp_path, '#!/bin/bash\nexec python3 "/somewhere/else/app.py" "$@"\n')
+    monkeypatch.setattr(A.sys, "platform", "darwin")
+    monkeypatch.setattr(A, "_bundle_path_for", lambda _bid: b)
+    A._maintain_launcher("com.halbarad.medsearch.launcher", True)
+    assert "/somewhere/else/app.py" in (b / "Contents" / "MacOS" / "MedSearch").read_text()
+
+
+def test_the_launcher_icon_is_kept_in_step(tmp_path, monkeypatch):
+    b = _bundle(tmp_path, '#!/bin/bash\nexec /bin/bash "/x/launcher.sh" "$@"\n')
+    icon = b / "Contents" / "Resources" / "MedSearch.icns"
+    icon.write_bytes(b"old icon")
+    monkeypatch.setattr(A.sys, "platform", "darwin")
+    monkeypatch.setattr(A, "_bundle_path_for", lambda _bid: b)
+    A._maintain_launcher("com.halbarad.medsearch.launcher", False)
+    assert icon.read_bytes() == (A.APP_DIR_PATH / "icon.icns").read_bytes()
+
+
+def test_only_our_launcher_identifiers_are_recognised(monkeypatch):
+    for bid, ours in (("com.halbarad.medsearch.launcher", True),
+                      ("com.riccardonevoso.medsearch.launcher", True),   # built before the rename
+                      ("org.python.python", False),
+                      ("", False)):
+        monkeypatch.setitem(A.os.environ, "__CFBundleIdentifier", bid)
+        assert bool(A._launcher_bundle_id()) is ours
