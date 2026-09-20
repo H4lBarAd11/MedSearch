@@ -12,6 +12,18 @@
 # its name in the Dock, the app switcher and the menu bar, and its icon. Instead
 # the interpreter runs from a copy of that same small executable placed INSIDE
 # MedSearch.app, so the process belongs to MedSearch's bundle.
+#
+# SPAWNED, NOT EXEC'D, and this is not a style choice. Measured 20 Sep on macOS
+# 27: a process that IS the one LaunchServices launched for the app is refused a
+# menu bar slot — its NSStatusItem is created, reports itself present and
+# visible, and is never placed (x stays 0, for as long as the app runs). The
+# same interpreter, same bundle, same code, started any other way is placed in
+# under a second. Eleven runs, split cleanly down that line, with an empty forty
+# line app bundle showing the same thing, so it is nothing about MedSearch. So
+# the stub starts the app and steps out of the way: what LaunchServices launched
+# exits immediately, and MedSearch runs on as its child. It keeps the bundle's
+# interpreter, so it is still MedSearch in the Dock and the app switcher — and
+# it gets its icon in the menu bar.
 # __PYVENV_LAUNCHER__ tells it which virtual environment it belongs to, exactly
 # as Python's own launcher does. The copy is refreshed whenever it differs, since
 # a Homebrew update replaces the original. If anything is missing, it falls
@@ -40,7 +52,9 @@ if [ -n "$GUI_PY" ] && [ -d "$BUNDLE/Contents/MacOS" ]; then
   cmp -s "$GUI_PY" "$OWN" || cp -f "$GUI_PY" "$OWN" 2>/dev/null
   if [ -x "$OWN" ]; then
     export __PYVENV_LAUNCHER__="$VENV_PY"
-    exec "$OWN" "$DIR/app.py" "$@"
+    nohup "$OWN" "$DIR/app.py" "$@" >/dev/null 2>&1 &
+    exit 0
   fi
 fi
-exec "$VENV_PY" "$DIR/app.py" "$@"
+nohup "$VENV_PY" "$DIR/app.py" "$@" >/dev/null 2>&1 &
+exit 0
