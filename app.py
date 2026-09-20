@@ -2723,6 +2723,18 @@ _LAUNCHER_STUB = (
     "# MedSearch launcher stub: the logic is in launcher.sh in the MedSearch folder.\n"
     'exec /bin/bash "{dir}/launcher.sh" "$(cd "$(dirname "$0")/../.." && pwd)" "$@"\n')
 
+def _bundle_path_for(bundle_id):
+    """Where macOS says that bundle is, or None. Asking Launch Services keeps
+    this off the disk: searching folders for it can raise a privacy prompt,
+    since the launcher usually sits on the Desktop."""
+    try:
+        from AppKit import NSWorkspace
+        url = NSWorkspace.sharedWorkspace().URLForApplicationWithBundleIdentifier_(bundle_id)
+        return Path(str(url.path())) if url is not None else None
+    except Exception:
+        return None
+
+
 def _maintain_launcher(bundle_id, upgrade_stub):
     """Keep the installed MedSearch.app in step with this folder: convert an
     old-style launcher into the stub, and give it the current icon.
@@ -2736,11 +2748,9 @@ def _maintain_launcher(bundle_id, upgrade_stub):
     if not bundle_id or not (APP_DIR_PATH / "launcher.sh").exists():
         return
     try:
-        from AppKit import NSWorkspace
-        url = NSWorkspace.sharedWorkspace().URLForApplicationWithBundleIdentifier_(bundle_id)
-        if url is None:
+        bundle = _bundle_path_for(bundle_id)
+        if bundle is None:
             return
-        bundle = Path(str(url.path()))
         changed = False
 
         if upgrade_stub:
