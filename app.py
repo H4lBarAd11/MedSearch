@@ -170,14 +170,21 @@ def load_config():
     in_keychain = set()
     if secrets_store.available():
         for k in SECRET_KEYS:
+            from_file = (cfg.get(k) or "").strip()
+            # THE FILE WINS WHEN IT HAS A VALUE. Storing to the Keychain always
+            # blanks the file, so a secret still in the file was written by a
+            # version that wasn't using the Keychain, or by one that couldn't —
+            # either way it is the newer of the two, and preferring the Keychain
+            # here silently threw away a key the user had just entered.
+            if from_file:
+                if secrets_store.set(k, from_file):
+                    in_keychain.add(k)
+                    migrated = True
+                continue
             stored = secrets_store.get(k)
             if stored:
                 cfg[k] = stored
                 in_keychain.add(k)
-            elif (cfg.get(k) or "").strip():
-                if secrets_store.set(k, cfg[k].strip()):
-                    in_keychain.add(k)
-                    migrated = True
     for k, e in {"anthropic_api_key":"ANTHROPIC_API_KEY","pubmed_api_key":"NCBI_API_KEY",
                  "scopus_api_key":"SCOPUS_API_KEY","wos_api_key":"WOS_API_KEY",
                  "unpaywall_email":"UNPAYWALL_EMAIL"}.items():

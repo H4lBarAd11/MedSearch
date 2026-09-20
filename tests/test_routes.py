@@ -434,13 +434,28 @@ def test_a_key_saved_by_an_older_version_moves_into_the_keychain(tmp_path, monke
     assert json.loads(cfg_file.read_text())["anthropic_api_key"] == ""
 
 
-def test_the_keychain_wins_over_a_stale_value_in_the_file(tmp_path, monkeypatch):
+def test_the_keychain_is_used_when_the_file_has_nothing(tmp_path, monkeypatch):
     _use(monkeypatch, _FakeKeychain(items={"anthropic_api_key": "sk-ant-current"}))
     cfg_file = tmp_path / "config.json"
-    cfg_file.write_text(json.dumps({"anthropic_api_key": "sk-ant-stale"}))
+    cfg_file.write_text(json.dumps({"anthropic_api_key": ""}))
     monkeypatch.setattr(A, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(A, "CONFIG_FILE", cfg_file)
     assert A.load_config()["anthropic_api_key"] == "sk-ant-current"
+
+
+def test_a_key_in_the_file_replaces_an_older_one_in_the_keychain(tmp_path, monkeypatch):
+    """The case that cost a real key: a version that didn't use the Keychain
+    saved a NEW key to the file while the Keychain still held a revoked one.
+    Storing always blanks the file, so a value in the file is the newer one."""
+    fake = _use(monkeypatch, _FakeKeychain(items={"anthropic_api_key": "sk-ant-revoked"}))
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(json.dumps({"anthropic_api_key": "sk-ant-brand-new"}))
+    monkeypatch.setattr(A, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(A, "CONFIG_FILE", cfg_file)
+    cfg = A.load_config()
+    assert cfg["anthropic_api_key"] == "sk-ant-brand-new"
+    assert fake.items["anthropic_api_key"] == "sk-ant-brand-new"
+    assert json.loads(cfg_file.read_text())["anthropic_api_key"] == ""
 
 
 def test_without_a_keychain_the_file_keeps_working(tmp_path, monkeypatch):
