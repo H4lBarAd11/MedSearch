@@ -11,9 +11,15 @@ pytest.importorskip("AppKit", reason="the menu bar item is macOS only")
 import statusbar as SB  # noqa: E402
 
 
+class _Frame:
+    def __init__(self, x): self.origin = type("o", (), {"x": x})()
+
+
 class _Window:
-    def __init__(self, visible=True): self.visible = visible
+    def __init__(self, visible=True, x=1113.0):
+        self.visible, self._frame = visible, _Frame(x)
     def isVisible(self): return self.visible
+    def frame(self): return self._frame
 
 
 class _Button:
@@ -22,12 +28,14 @@ class _Button:
 
 
 class _Item:
-    """An NSStatusItem, including the way it lies: an item that has left the bar
-    still has its button, and still calls itself visible."""
-    def __init__(self, on_bar=True): self.button_ = _Button(_Window(on_bar))
+    """An NSStatusItem, including the two ways it lies: an item that has left the
+    bar still has its button and still calls itself visible, and an item macOS
+    never found room for reports exactly the same — except for x."""
+    def __init__(self, on_bar=True, x=1113.0): self.button_ = _Button(_Window(on_bar, x))
     def button(self): return self.button_
     def isVisible(self): return True
     def leave_the_bar(self): self.button_._window.visible = False
+    def find_no_room(self): self.button_._window._frame.origin.x = 0
 
 
 class _Host:
@@ -40,6 +48,7 @@ class _Host:
     # the real ones under test
     on_the_bar = SB.StatusBar.on_the_bar
     _state = SB.StatusBar._state
+    _x = SB.StatusBar._x
     _watch = SB.StatusBar._watch
 
     def _log(self, line): self.lines.append(line)
@@ -108,3 +117,16 @@ def test_what_it_writes_down_is_only_what_changed():
     host.item.leave_the_bar()
     host._watch()
     assert len(host.lines) == 2 and "on bar=False" in host.lines[1]
+
+
+def test_no_room_on_the_bar_is_not_treated_as_the_item_being_gone():
+    """The real case, 20 Sep: the bar was full, so the icon was never placed.
+    Everything says it is fine except x, and building it again would only put
+    it back in the same slot that has no room."""
+    host = _Host()
+    host.item.find_no_room()
+    host._watch(); host._watch(); host._watch()
+    assert host.made == 0                                   # nothing rebuilt
+    assert host.on_the_bar() is True                        # AppKit still says yes
+    assert any("x=0" in line for line in host.lines)
+    assert any("menu bar is full" in line for line in host.lines)
