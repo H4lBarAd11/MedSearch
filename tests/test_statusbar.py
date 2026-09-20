@@ -40,9 +40,9 @@ class _Item:
 
 class _Host:
     """A StatusBar with the AppKit parts replaced, driven by the real methods."""
-    def __init__(self, on_bar=True):
-        self.item, self.log_path = _Item(on_bar), None
-        self._last_state, self._misses, self.rebuilds = None, 0, 0
+    def __init__(self, on_bar=True, x=1113.0):
+        self.item, self.log_path = _Item(on_bar, x), None
+        self._last_state, self._misses, self._noroom, self.rebuilds = None, 0, 0, 0
         self.lines, self.made = [], 0
 
     # the real ones under test
@@ -50,11 +50,12 @@ class _Host:
     _state = SB.StatusBar._state
     _x = SB.StatusBar._x
     _watch = SB.StatusBar._watch
+    _try_again = SB.StatusBar._try_again
 
     def _log(self, line): self.lines.append(line)
-    def _make_item(self): self.made += 1; self.item = _Item(True)
-    def _reseat(self):
-        if not self.on_the_bar():
+    def _make_item(self): self.made += 1; self.item = _Item(True)   # a new item gets a slot
+    def _reseat(self, force=False):
+        if force or not self.on_the_bar():
             self._make_item()
 
 
@@ -99,15 +100,15 @@ def test_one_bad_check_alone_does_not_rebuild_it():
     assert host.made == 0
 
 
-def test_it_stops_rebuilding_rather_than_fight_the_system():
-    """If something else is taking the item off — a full menu bar is the usual
-    reason — rebuilding every three seconds does not win."""
+def test_it_stops_asking_rather_than_fight_a_full_bar():
+    """If the menu bar genuinely has no room, no number of attempts conjures a
+    slot, and an app that keeps asking forever is worse than one that says so."""
     host = _Host()
     host.rebuilds = SB._REBUILD_LIMIT
     host.item.leave_the_bar()
     host._watch(); host._watch()
     assert host.made == 0
-    assert any("leaving it alone" in line for line in host.lines)
+    assert any("leaving it be" in line for line in host.lines)
 
 
 def test_what_it_writes_down_is_only_what_changed():
@@ -119,14 +120,28 @@ def test_what_it_writes_down_is_only_what_changed():
     assert len(host.lines) == 2 and "on bar=False" in host.lines[1]
 
 
-def test_no_room_on_the_bar_is_not_treated_as_the_item_being_gone():
-    """The real case, 20 Sep: the bar was full, so the icon was never placed.
-    Everything says it is fine except x, and building it again would only put
-    it back in the same slot that has no room."""
-    host = _Host()
-    host.item.find_no_room()
-    host._watch(); host._watch(); host._watch()
-    assert host.made == 0                                   # nothing rebuilt
-    assert host.on_the_bar() is True                        # AppKit still says yes
-    assert any("x=0" in line for line in host.lines)
-    assert any("menu bar is full" in line for line in host.lines)
+def test_an_item_refused_a_slot_asks_again_and_gets_one():
+    """THE REAL CASE, 20 Sep. Quitting and relaunching starts the new copy while
+    the old one still holds the only free slot, so the new item is refused and
+    left at x=0 — for the life of the app, because macOS never returns to an
+    item it once refused. Seconds later the old copy is gone and the slot is
+    free, so asking again is the whole fix."""
+    host = _Host(x=0)                                   # started with no slot
+    assert host.on_the_bar() is True                    # and AppKit says it is fine
+    host._watch()                                       # first reading: too early to judge
+    assert host.made == 0
+    host._watch()                                       # second: ask for a place again
+    assert host.made == 1
+    assert host._x() > 0                                # and this time it has one
+    assert any("no slot (x=0)" in line for line in host.lines)
+
+
+def test_the_first_reading_of_all_is_never_believed():
+    """A brand new item reads x=0 until AppKit lays it out. Acting on that would
+    have every launch rebuilding an item that was about to be placed anyway."""
+    host = _Host(x=0)
+    host._watch()
+    assert host.made == 0
+    host.item.button_._window._frame.origin.x = 1113    # laid out, as it would be
+    host._watch()
+    assert host.made == 0

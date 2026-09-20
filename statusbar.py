@@ -21,16 +21,19 @@ with a notch). An item macOS has no room for is simply never placed: it keeps it
 button, keeps its window, keeps answering `isVisible` with true and keeps its length.
 The only thing that gives it away is that it sits at x=0. Filling the bar with 26 items
 and reading them back is what showed this — eleven were placed, fifteen sat at x=0, and
-every one of them called itself visible. So `_x` is logged, because it is the single
-number that separates "macOS is hiding it" from "AppKit has taken it away", and the app
-must not answer a full menu bar by building the item again in the same missing slot.
+every one of them called itself visible. That is why `_x` is logged: it is the single
+number that separates "it was never given a place" from "it had one and lost it".
 
-WHY CLOSING THE WINDOW IS WHEN IT GOES is not proven, but follows: closing it drops
-MedSearch's own menus from the left of the bar and hands the front to an app whose menus
-may be longer, and on a notched screen the room for the icons on the right is whatever
-the titles on the left leave over. Hence `setAutosaveName_`: an item with a name is put
-back where it was last left, so a place he ⌘-drags it to is his for good, instead of
-every launch returning it to the newest slot — the first one a full bar gives up.
+AND AN ITEM REFUSED AT BIRTH IS REFUSED FOR GOOD. macOS never comes back to it: the bar
+can empty completely and the item stays at x=0 for the life of the app. This is what was
+actually happening — quitting MedSearch and starting it again immediately means the new
+copy asks for a slot while the old copy still holds one, is refused, and never shows an
+icon again however long it runs. So the item asks once more, up to `_REBUILD_LIMIT`
+times, and a new item does get a place: reproduced 20 Sep against a deliberately
+saturated bar, refused four times, and placed three seconds after a slot came free.
+
+`setAutosaveName_` is a smaller thing alongside: an item with a name is put back where it
+was last left, so a place he ⌘-drags it to stays his, across relaunches and rebuilds.
 
 THE ACTIVATION POLICY is set in one place (`_set_policy`) and never set to what it
 already is. That is tidiness rather than a cure: it was the first suspect and it was
@@ -116,6 +119,7 @@ class StatusBar:
         self.item = None
         self._last_state = None
         self._misses = 0                        # consecutive checks that found it gone
+        self._noroom = 0                        # consecutive checks that found no slot
         self.rebuilds = 0                       # how often it has had to be put back
         self._make_item()
         self._watch()
@@ -168,9 +172,11 @@ class StatusBar:
         except Exception:
             return False
 
-    def _reseat(self):
-        """Build the item again, but only if it really went."""
-        if self.on_the_bar():
+    def _reseat(self, force=False):
+        """Build the item again. Only if it really went, unless forced — an item
+        that was refused a slot is still "there", and asking again is the only
+        way to get one."""
+        if not force and self.on_the_bar():
             return
         old, self.item = self.item, None
         if old is not None:
@@ -243,44 +249,65 @@ class StatusBar:
     def _watch(self):
         """Every few seconds: still there? If not, put it back.
 
-        TWICE IN A ROW before rebuilding: a single miss can be the bar in the
-        middle of something (a display waking, a space switching), and an item
-        rebuilt for no reason can land in a different place on the bar, which
-        would be its own small annoyance.
+        TWO WAYS TO BE MISSING, and they are counted separately: the bar can let
+        the item go (its window stops being visible), or it can refuse it a slot
+        at the moment it was made, which leaves it at x=0 for good. Both end in
+        asking for the item's place again; only the log says which happened.
 
-        AND NOT FOREVER: if macOS is the one hiding it — a full menu bar is the
-        usual reason — rebuilding cannot win, and an app quietly fighting the
-        system every three seconds is worse than an app that says so. After
-        `_REBUILD_LIMIT` it stops rebuilding and keeps only the record.
+        TWICE IN A ROW before doing anything: a single bad reading is often the
+        bar mid-move — a display waking, a space switching — and the first check
+        of all runs before AppKit has laid the new item out, so an app that
+        believed one reading would shout at every launch.
 
         Only changes are written down, so a quiet day leaves a line or two and
         the day it goes leaves the moment it went."""
         try:
             state = self._state()
+            on_bar, x = state[0], state[1]
             if state != self._last_state:
                 self._log("on bar=%s  x=%s  visible=%s  policy=%s" % state)
-                if state[0] and state[1] == 0:
-                    self._log("   ^ on the bar but never placed (x=0): the menu bar is "
-                              "full, so macOS is hiding it. Nothing to rebuild — free a "
-                              "slot, or ⌘-drag it somewhere it fits and it will stay there.")
                 self._last_state = state
-            if state[0]:
-                self._misses = 0
-            else:
+
+            if on_bar and x > 0:                 # placed, drawn, nothing to do
+                self._misses = self._noroom = 0
+            elif not on_bar:                     # the bar let the item go
                 self._misses += 1
-                if self._misses >= 2 and self.rebuilds < _REBUILD_LIMIT:
-                    self.rebuilds += 1
-                    self._log(f"not on the bar — building it again (#{self.rebuilds})")
-                    self._reseat()
-                    self._misses = 0
-                    self._last_state = self._state()
-                    self._log("rebuilt: on bar=%s  x=%s  visible=%s  policy=%s" % self._last_state)
-                elif self._misses == 2:
-                    self._log(f"not on the bar, and {_REBUILD_LIMIT} rebuilds have not "
-                              "helped — leaving it alone. A full menu bar does this.")
+                if self._misses >= 2:
+                    self._try_again("it is not on the bar")
+            else:                                # on the bar, never given a slot
+                self._noroom += 1
+                if self._noroom >= 2:
+                    self._try_again("it has no slot (x=0)")
         except Exception as e:
             self._log(f"the check itself failed: {e}")
         AppHelper.callLater(_CHECK_EVERY, self._watch)
+
+    def _try_again(self, why):
+        """Ask the bar for the item's place again, up to a point.
+
+        WORTH ASKING AGAIN, because the usual reason for having no slot is that
+        the slot was taken at the moment MedSearch started — by the copy of
+        MedSearch it was replacing, most often — and macOS does not come back to
+        an item it once refused. The slot is free seconds later and a new item
+        takes it, so this is the difference between an icon that is missing for
+        the life of the app and one that is missing for six seconds.
+
+        UP TO A POINT, because if the menu bar is genuinely full no number of
+        attempts will conjure room, and an app that keeps asking forever is
+        worse than one that says so once."""
+        self._misses = self._noroom = 0
+        if self.rebuilds >= _REBUILD_LIMIT:
+            if self.rebuilds == _REBUILD_LIMIT:
+                self.rebuilds += 1               # say this once, then stop
+                self._log(f"{why}, and {_REBUILD_LIMIT} attempts have not helped — "
+                          "leaving it be. A menu bar with no room left does this; "
+                          "closing one other menu bar app is what frees a slot.")
+            return
+        self.rebuilds += 1
+        self._log(f"{why} — asking for a place again (#{self.rebuilds})")
+        self._reseat(force=True)
+        self._last_state = self._state()
+        self._log("   -> on bar=%s  x=%s  visible=%s  policy=%s" % self._last_state)
 
     # ── the menu ────────────────────────────────────────────────────────────
     def _add(self, menu, title, action=None, obj=None, checked=False):
