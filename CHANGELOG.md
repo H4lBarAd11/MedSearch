@@ -6,8 +6,9 @@ one line per change, in plain words, no internals.
 
 ## 1.8
 
-- The menu bar icon stays where you put it: ⌘-drag it along the bar and that is where it will be next time.
-- When the icon does vanish, MedSearch writes down when and why (`~/.medsearch/menubar.log`). A full menu bar is the usual reason — macOS hides what it has no room for.
+- The menu bar icon no longer goes missing after a restart. Starting MedSearch while the previous copy was still closing left the icon with nowhere to go, and macOS never gave it a place afterwards — it now asks again until it has one.
+- The icon stays where you put it: ⌘-drag it along the bar and that is where it will be next time.
+- If the icon is ever missing, MedSearch writes down when and why (`~/.medsearch/menubar.log`).
 
 ## 1.7
 
