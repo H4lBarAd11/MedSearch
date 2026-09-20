@@ -236,7 +236,7 @@ window.addEventListener('load', () => {
 // Apply the initial AI on/off state to the UI (hides the dock's Assistant button if off)
 window.addEventListener('load', () => { applyAIState(); renderProxyPicker(); loadGuidelineBodies(); maybeAutoSearch(); startPendingSearchPolling(); });
 
-// If launched from the menu-bar quick search (/?q=...&src=...), pre-select the
+// If launched with a search (/?q=...&src=...), pre-select the
 // requested source(s), fill the query, and run the search immediately.
 function maybeAutoSearch() {
   const q = MS.autoQuery;
@@ -246,7 +246,8 @@ function maybeAutoSearch() {
 }
 
 // Fill the query, select the requested source(s), and run the search. Shared by
-// the initial deep-link (maybeAutoSearch) and the menu-bar handoff poller.
+// the initial deep-link (maybeAutoSearch), the second-launch handoff poller,
+// and the menu bar's quick search (statusbar.py, via evaluate_js).
 function runSearchWithSource(q, src, delay) {
   if (!q) return;
   const input = document.getElementById('searchInput');
@@ -275,7 +276,7 @@ function runSearchWithSource(q, src, delay) {
   setTimeout(() => { runSearch(); }, delay || 0);
 }
 
-// Poll for searches queued by the menu-bar app, and run them in THIS window so
+// Poll for searches queued by a second launch, and run them in THIS window so
 // the search always happens inside the native app (no browser hop).
 function startPendingSearchPolling() {
   setInterval(async () => {
@@ -1979,6 +1980,8 @@ async function openSettings() {
   try {
     const res  = await fetch('/settings');
     const data = await res.json();
+    document.getElementById('loginField').hidden = !data.can_open_at_login;
+    document.getElementById('set_open_at_login').checked = !!data.open_at_login;
     for (const [key, id] of Object.entries(fields)) {
       const el  = document.getElementById(id);
       const val = data[key];
@@ -2195,12 +2198,17 @@ async function saveSettings() {
     }));
   payload.institution_proxies = cleanProxies;
   payload.active_proxy = activeProxy;
+  if (!document.getElementById('loginField').hidden)
+    payload.open_at_login = document.getElementById('set_open_at_login').checked;
 
-  await fetch('/settings', {
+  const saved = await (await fetch('/settings', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify(payload)
-  });
+  })).json().catch(() => ({ok: false, message: 'MedSearch did not answer.'}));
+  if (!saved.ok) { fail(saved.message || 'Settings could not be saved.', "Couldn't save settings"); return; }
+  // A warning means the settings ARE saved; only a part of them didn't apply.
+  if (saved.warning) fail(saved.warning, 'Opening at login was not changed');
   // Reflect saved proxies locally (rebuild merged list) and refresh the picker
   savedProxies = cleanProxies;
   institutionProxies = buildInstitutions();
@@ -2369,12 +2377,19 @@ function renderMd(src) {
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[\s(])\*([^*\s][^*]*)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
   const out = [];
-  let list = null, para = [];
+  let list = null, para = [], fence = null;
   const flushPara = () => { if (para.length) { out.push('<p>' + inline(para.join(' ')) + '</p>'); para = []; } };
   const flushList = () => { if (list) { out.push(`<${list.tag}>` + list.items.map(i => '<li>' + inline(i) + '</li>').join('') + `</${list.tag}>`); list = null; } };
+  const flushFence = () => { out.push('<pre><code>' + fence.join('\n') + '</code></pre>'); fence = null; };
   for (const raw of escHtml(src || '').split('\n')) {
     const line = raw.trimEnd();
     let m;
+    // A fenced block is kept as typed: it is usually a search string to copy.
+    if (/^\s*```/.test(line)) {
+      if (fence) flushFence(); else { flushPara(); flushList(); fence = []; }
+      continue;
+    }
+    if (fence) { fence.push(raw); continue; }
     if (!line.trim()) { flushPara(); flushList(); continue; }
     if ((m = line.match(/^\s*(#{1,4})\s+(.*)$/))) {
       flushPara(); flushList();
@@ -2391,6 +2406,7 @@ function renderMd(src) {
     }
   }
   flushPara(); flushList();
+  if (fence) flushFence();          // an answer cut off inside a fence
   return out.join('');
 }
 // Keep the raw text beside the rendering, so streamed chunks append to it.

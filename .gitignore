@@ -7,13 +7,17 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Build artifacts
+# Build artifacts (py2app)
 build/
 dist/
 *.spec
+*.egg-info/
 
-# The generated macOS app bundle (colleagues build their own)
+# The generated macOS launcher (colleagues build their own)
 MedSearch.app/
+
+# Icon previews written by the render_*.py scripts
+*_preview.png
 
 # Runtime logs
 .medsearch_app.log
@@ -24,20 +28,6 @@ MedSearch.app/
 
 # User exports (created at runtime)
 medsearch_exports/
-
-# py2app build artifacts
-build/
-dist/
-*.egg-info/
-
-# py2app build artifacts
-build/
-dist/
-*.egg-info/
-
-# extra build artifacts
-*.egg-info/
-"MedSearch Menu Bar.app"/
 
 # Test cache
 .pytest_cache/

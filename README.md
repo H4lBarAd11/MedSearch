@@ -1,186 +1,194 @@
-# MedSearch
+<p align="center">
+  <img src="docs/readme/banner.svg" alt="MedSearch — the medical literature, seven sources at once, with AI summaries, a PDF reader and a research assistant" width="100%">
+</p>
 
-**A desktop app for searching the medical and scientific literature — many databases at once, with AI summaries, an in-app PDF reader, and a research assistant.**
+MedSearch is a desktop application for searching the medical and scientific literature. One
+question goes to PubMed, Cochrane, ClinicalTrials.gov, arXiv, Scopus, Web of Science and a
+clinical-guidelines source at the same time; the answers come back as one list, with the
+duplicates removed, the free full text found where it exists, and retracted papers marked
+before anyone quotes them.
 
-Built by [Riccardo Nevoso](https://github.com/H4lBarAd11) for clinicians and researchers who want one fast, friendly place to search the literature without juggling a dozen browser tabs.
+It is a personal project by [Riccardo Nevoso](https://github.com/H4lBarAd11), built for
+the way clinicians and researchers actually search: one window instead of a dozen browser
+tabs.
 
-MedSearch runs as a **native desktop window** (macOS, Windows, Linux). It searches PubMed, Cochrane, ClinicalTrials.gov, arXiv, Scopus, Web of Science, and clinical guidelines simultaneously, removes duplicates, finds free full-text where it exists, and — if you add a Claude API key — summarizes and helps you reason about the results.
+> [!NOTE]
+> **A search tool, not a source of medical advice.** MedSearch finds and organises what has
+> been published. The AI summaries, the synthesis and the assistant are aids to reading, and
+> they can be wrong: check the paper before relying on anything they say.
+
+<p align="center">
+  <img src="docs/readme/screenshot.png" alt="MedSearch showing PubMed results for 'awake craniotomy glioma'" width="100%">
+</p>
 
 ---
 
 ## What it does
 
-- **Searches seven sources at once, in parallel** — PubMed/MEDLINE, Cochrane Reviews, ClinicalTrials.gov, arXiv, Scopus, Web of Science, and a clinical-**Guidelines** source — and merges the results into one deduplicated list.
-- **Clinical practice guidelines** — a "Guidelines" source surfaces national and society guidelines indexed in PubMed (works for many countries). Plus a **National guidelines** button that opens your country's official body directly — SNLG (Italy), NICE (UK), ECRI (US), AWMF (Germany), HAS (France) — with your search term pre-filled where the site allows.
-- **Sort by relevance or recency** — a setting under **Options** reorders results by best match or newest-first, applied per database.
-- **Load more results** — a "Find X more per source" button fetches the next batch from every active source and appends it (deduplicated), so you can dig deeper without re-running the search. X matches the per-source count you set under **Options**.
-- **Finds free full-text** via Unpaywall and OpenAlex, with a Sci-Hub fallback when no open-access copy exists.
-- **Retraction warnings** — retracted papers are flagged on the card (from PubMed and from Crossref / the Retraction Watch database), struck through, and flagged to the AI so it doesn't rely on them. Journal *expressions of concern* are flagged too.
-- **Study-design badges and filters** — PubMed publication types (meta-analysis, systematic review, guideline, RCT, …) are shown on each card, and the results can be filtered by study type, free full text, or journal quartile.
-- **Reads PDFs in-app** — a built-in viewer with fit-to-width, zoom, and save-to-disk. Open-access *and* Sci-Hub PDFs open right inside the window.
-- **Institutional library access** — point MedSearch at your university's EZProxy/OpenAthens and paywalled papers your institution subscribes to open through your library login, in a built-in browser window. Save several institutions and switch between them under **Options**.
-- **AI summaries** (optional, needs a Claude API key) — a one-line takeaway per article, a streamed multi-paragraph synthesis across all results, and a per-paper "Explain" breakdown.
-- **AI research assistant** — a chat panel grounded in your current search results. Ask things like *"which of these support X?"* and it answers citing the papers on your screen, or answers general clinical questions.
-- **Citation graphs** — see what a paper cites and what cites it.
-- **Export** to Markdown, BibTeX, or RIS, or send straight to **Zotero** (if the desktop app is running).
-- **Layout** — the search sits in a floating bar at the top, with the sources being searched shown beside it. Everything else is in a macOS-style dock at the bottom. Light or dark follows your Mac's setting.
-- **Quality-of-life**: journal quartile badges, MeSH term hints, year filters, saved searches, recent-search history, and a built-in settings panel for API keys (no config files to edit).
-- **Friendly onboarding** — a first-launch guide (English / Italiano) and one-click auto-update.
-- **macOS menu-bar quick search** (optional companion app) — a small books-and-network icon in your status bar. Click it, type a query, and the search runs **inside the main MedSearch window** (it opens the app first if it isn't already running). Recent searches and the default-source picker live right in the dropdown. The menu uses native macOS styling (Liquid Glass on Tahoe), so it blends in with the system.
+**One search, every source.** The seven sources are searched in parallel and merged into a
+single deduplicated list. Each source reports on its own, so one that fails (a missing key,
+an off-campus Scopus) says so in a dialog and the others' results still arrive.
+
+**Guidelines.** A *Guidelines* source finds national and society guidelines indexed in
+PubMed, and the *Guidelines* panel opens a country's official body directly (SNLG, NICE,
+ECRI, AWMF, HAS and others) with the search already filled in where the site allows it.
+
+**What a result tells you.** Study design (meta-analysis, systematic review, RCT, …),
+journal and year, journal quartile for the major journals, citation count, and a
+retraction or expression-of-concern warning above the title. The list can be filtered by
+study type, by free full text and by quartile, and reordered by relevance or recency.
+
+**Reading the paper.** Open-access PDFs open in a built-in viewer with zoom, fit-to-width
+and save. Free copies are found through Unpaywall and OpenAlex. With a library proxy set,
+paywalled papers your institution subscribes to open through your library login, in a
+browser window inside the app that remembers the login.
+
+**AI, if you want it.** With a Claude API key: a one-line takeaway on every result, a
+streamed synthesis across all of them, an *Explain* for any single paper, and a research
+assistant that answers from the papers on screen and cites them by number. One switch, *AI
+on/off* in the bottom bar, turns all of it off.
+
+**Citations and export.** A citation graph for any paper (what it cites, what cites it),
+and export to Markdown, BibTeX or RIS, or straight into Zotero.
+
+**From the menu bar.** MedSearch keeps an icon in the macOS menu bar: a quick search from
+anywhere, your recent searches, and the default source for quick searches. Closing the
+window leaves it there; *Quit* or ⌘Q ends it. Settings can open it at login, window closed,
+ready in the menu bar.
 
 ---
 
-## Install
+## Install (macOS)
 
-You need **Python 3.8+** and **Git**. (Both are pre-installed on most Macs; Windows users install Python from [python.org](https://python.org) and tick *"Add Python to PATH"*.)
+You need **Python 3.8+** and **Git**, both preinstalled on most Macs (or
+`xcode-select --install`).
 
 ```bash
 git clone https://github.com/H4lBarAd11/MedSearch-by-RN.git
+```
+
+Then double-click **`Create Desktop App.command`** in the new folder, once. It sets up the
+environment, installs the dependencies and puts a **MedSearch** app on the Desktop. From
+then on, that icon is the way in: it opens MedSearch in its own window, with no Terminal.
+
+> If macOS refuses to open the `.command` file the first time ("unidentified developer"),
+> right-click it ▸ **Open** ▸ **Open**. Once.
+
+The Desktop app is only a launcher: MedSearch runs from the folder you cloned, which is
+what lets it update itself. If you move that folder, run `Create Desktop App.command` again.
+
+## Updates
+
+When MedSearch opens, it compares its `VERSION` with the one on GitHub. If GitHub's is
+newer it offers **Update now**, which downloads the new version, installs any new
+dependencies and restarts the app. Nothing else needs doing: the launcher and the menu bar
+item are part of what updates.
+
+A new version is offered only when `VERSION` goes up, so a change meant to reach other
+Macs is released by raising it.
+
+## Other ways to run it
+
+```bash
 cd MedSearch-by-RN
 pip install -r requirements.txt
-python app.py        # use python3 on macOS/Linux
+python3 app.py
 ```
 
-MedSearch opens in its own desktop window. (If the native-window library isn't available, it falls back to opening in your browser automatically.)
+This works on macOS, Windows and Linux; without the native-window library it opens in the
+browser instead. `MedSearch.command` does the same on macOS with the Terminal visible,
+which is useful when something needs diagnosing. The menu bar item and the Desktop
+launcher are macOS-only.
 
-**Installing from a git clone is the recommended way**, because the in-app **Update** button works only for clones — it runs `git pull` to fetch the latest version. A packaged `.app` can't update itself (see note below).
-
-### macOS — double-clickable launcher (recommended)
-
-After cloning, you don't need the Terminal to start MedSearch day-to-day. Just **double-click `MedSearch.command`** in the project folder. On first run it sets up a local environment and installs dependencies (one time); after that it launches the app directly. The in-app Update button keeps it current: it downloads the new version, installs any new dependencies, and restarts MedSearch for you.
-
-> If macOS blocks it the first time ("unidentified developer"), right-click `MedSearch.command` ▸ **Open** ▸ **Open**. You only do this once.
-
-### macOS — self-contained app bundle (no auto-update)
-
-If you'd rather have a fully packaged `.app` (Python embedded, nothing to install), build one with py2app:
-
-```bash
-pip install py2app
-python3 setup_main.py py2app
-```
-
-This builds **MedSearch.app** in `dist/`. Drag it to `/Applications`. **Caveat:** a packaged bundle *cannot use the in-app Update button* (it has no git repo to pull into) — you'd rebuild or re-download to update. If you want automatic updates, use the git-clone + `MedSearch.command` method above instead.
-
-### macOS — menu-bar quick search (optional)
-
-A lightweight status-bar companion that lets you start a search from anywhere without first opening the main window.
-
-```bash
-pip3 install rumps py2app      # one-time; macOS only
-python3 menubar.py             # run it directly to try it…
-# …or build a proper background app you can add to Login Items:
-python3 setup.py py2app
-```
-
-`python3 setup.py py2app` builds **"MedSearch Menu Bar.app"** in `dist/` — a background app with no Dock icon (just the menu-bar glyph). Move it to `/Applications` and add it to **System Settings ▸ General ▸ Login Items** to have it start automatically. The menu bar and its dropdown use native macOS components, so they automatically adopt the system look (Liquid Glass on macOS Tahoe 26+), while the app's own colours stay in the main window.
-
-When you run a quick search, the menu-bar app opens (or reuses) the main MedSearch window and runs the search **inside it** — if MedSearch isn't already running, it launches automatically first. Clicking the menu-bar icon opens a fresh search prompt; the default database for quick searches is set from the icon's "Default source" submenu.
-
-> **Note:** the menu-bar app is a separate macOS-only bundle. Like the main bundle, editing the code means rebuilding it (`python3 setup.py py2app`) and re-copying to `/Applications`.
-
-### macOS — one-line terminal shortcut
-
-To launch from any terminal with a single command:
-
-```bash
-echo 'alias medsearchgui="cd /path/to/MedSearch-by-RN && python3 app.py"' >> ~/.zshrc
-source ~/.zshrc
-medsearchgui
-```
-
-### Windows
-
-```bat
-git clone https://github.com/H4lBarAd11/MedSearch-by-RN.git
-cd MedSearch-by-RN
-pip install -r requirements.txt
-python app.py
-```
-
-MedSearch opens in its own window. The in-app **Update** button works here too (it runs `git pull`), so running from the clone keeps it current. The double-clickable launcher and the menu-bar companion are macOS-only; on Windows, launch with `python app.py` (or create a shortcut to it).
+A self-contained macOS bundle, with Python inside, can be built with
+`python3 setup_main.py py2app`. It cannot update itself, so the git clone is the
+recommended install.
 
 ---
 
 ## API keys
 
-MedSearch works out of the box with the free databases — **no keys required** for PubMed, Cochrane, ClinicalTrials.gov, or arXiv. Keys unlock optional features:
+The free sources need no keys: PubMed, Cochrane, ClinicalTrials.gov and arXiv work out of
+the box. Keys are added in **Settings** (bottom bar), stored only in
+`~/.medsearch/config.json`, and never leave the machine.
 
-| Key | Where to get it | Unlocks |
+| Key | Where to get it | What it unlocks |
 |---|---|---|
-| **Anthropic (Claude)** | [console.anthropic.com](https://console.anthropic.com) | All AI features: summaries, synthesis, Explain, and the research assistant |
-| **NCBI / PubMed** | [ncbi.nlm.nih.gov/account](https://ncbi.nlm.nih.gov/account) | Higher PubMed rate limits (10 vs 3 req/sec) |
-| **Scopus** | [dev.elsevier.com](https://dev.elsevier.com) | Scopus as a search source |
-| **Web of Science** | [developer.clarivate.com](https://developer.clarivate.com) | Web of Science as a search source |
-| **Unpaywall** | any valid email | Open-access PDF detection |
+| **Anthropic (Claude)** | [console.anthropic.com](https://console.anthropic.com) | The AI features: summaries, synthesis, Explain, the assistant |
+| **NCBI / PubMed** | [ncbi.nlm.nih.gov/account](https://ncbi.nlm.nih.gov/account) | A higher PubMed rate limit (10 requests a second instead of 3) |
+| **Scopus** | [dev.elsevier.com](https://dev.elsevier.com) | Scopus as a source |
+| **Web of Science** | [developer.clarivate.com](https://developer.clarivate.com) | Web of Science as a source |
+| **Unpaywall** | any valid email address | Better detection of free full text |
 
-Add keys from inside the app: **Settings** in the bottom bar. They're saved locally to `~/.medsearch/config.json` and never leave your machine.
+> [!IMPORTANT]
+> **Scopus and Web of Science answer only from a subscribing institution's network.** They
+> authenticate by address as well as by key: off-campus they return *401*. Use the
+> institution's VPN, or ask its library for an Elsevier *institutional token*, which has its
+> own field in Settings.
 
-> **⚠️ Scopus & Web of Science need your institution's network.** These APIs authenticate by IP address, not just the key. From home you'll get a **401 error** — connect to your university VPN, or ask your library for an Elsevier *institutional token* (there's a field for it in Settings). On campus, the key alone works.
+## Institutional library access
+
+In **Settings → Institutional libraries**, add your library's proxy address (EZProxy or
+OpenAthens). To find it, open any journal article *through your library's website* while
+off-campus and copy what appears in front of the publisher's address, for example
+`ezproxy.library.example.edu`. Both the host-rewriting kind and a `…?url=` login prefix
+work. Several libraries can be saved; the active one is chosen under **Options**.
+
+Papers then show **DOI (via library)**, which opens them in a browser window inside
+MedSearch that carries your library login, so subscribed papers load directly.
+
+## What the AI costs
+
+The one-line summaries use the smallest Claude model, the assistant reuses a cached,
+trimmed context from one question to the next, and every answer is capped. A typical
+conversation with the assistant costs a few cents.
+
+## Privacy
+
+Everything runs on your machine. Searches, keys, history and saved searches stay in
+`~/.medsearch/`. The only traffic out is to the literature services you search and, with
+AI on, to the Anthropic API.
 
 ---
 
-## Reading paywalled papers (institutional access)
-
-Many papers aren't open-access but *are* available through a university subscription. MedSearch can route those through your library so they open with your institutional access.
-
-In **Settings → Institutional libraries**, add your university's proxy address (EZProxy or OpenAthens). To find it: open any journal article *through your library's website* while off-campus, and copy the part of the address that appears in front of the publisher's name (e.g. `ezp.biblio.unitn.it`). Both the hostname-rewriting style and a `…?url=` login prefix are supported.
-
-Once set, paywalled papers show a **"DOI (via library)"** button that opens them in a built-in browser window carrying your login — so subscribed papers load directly. You can save several institutions and switch the active one under **Options** in the bottom bar. Anything your library doesn't cover still falls back to a DOI link and a Sci-Hub option.
-
----
-
-## How AI cost is kept low
-
-If you use the AI features, MedSearch is careful with tokens: one-line summaries use the cheap Haiku model, the assistant reuses a cached, trimmed context across turns, and outputs are capped. A typical multi-turn assistant conversation costs roughly a few cents. You can turn AI off entirely with the **AI on/off** button in the bottom bar if you'd rather just search.
-
----
-
-## Project structure
+## Project layout
 
 ```
 MedSearch-by-RN/
-├── app.py                ← Flask backend + native-window launcher
-├── templates/
-│   └── index.html        ← The page's markup
-├── static/css/app.css    ← Styles (house style, light + dark)
-├── static/js/            ← boot.js (runs first) + app.js (the page's behaviour)
-├── menubar.py            ← macOS menu-bar quick-search companion (optional)
-├── MedSearch.command     ← Double-click launcher (sets up + runs the app)
-├── setup_main.py         ← py2app build for the main app  (→ MedSearch.app)
-├── setup.py              ← py2app build for the menu-bar app
-├── requirements.txt      ← Python dependencies (rumps is optional, macOS only)
-├── static/fonts, vendor/ ← Bundled DM Sans (OFL) and PDF.js, so the app works offline
-├── icon.icns             ← App icon
-├── menubar_icon.png      ← Menu-bar glyph (books + network)
-├── menubar_app_icon.icns ← Menu-bar app bundle icon
-├── render_*.py           ← Scripts that generate the icons (reproducible)
-├── LICENSE               ← Apache License 2.0 (full text)
-├── NOTICE                ← Attribution notice (per Apache 2.0)
-└── VERSION               ← Current version
+├── app.py                    the backend (Flask) and the native window
+├── statusbar.py              the macOS menu bar item
+├── launcher.sh               how the Desktop app starts MedSearch (updates with it)
+├── Create Desktop App.command  one-time macOS install
+├── MedSearch.command         the same start, with the Terminal visible
+├── templates/index.html      the page
+├── static/css, static/js     its style and behaviour
+├── static/fonts, vendor/     DM Sans (OFL) and PDF.js, bundled so it works offline
+├── tests/                    pytest suite  (pip install -r requirements-dev.txt)
+├── scripts/make-readme-art.py  draws docs/readme/banner.svg from the app's own style
+├── render_icon.py            draws the app icon's artwork (icon.icns is built from it)
+├── render_menubar_icon.py    draws the menu bar glyph's variants (menubar_icon.png)
+├── setup_main.py             optional self-contained bundle (py2app)
+└── VERSION                   what the update check compares
 ```
 
 ---
 
 ## Troubleshooting
 
-**Scopus / Web of Science return nothing (401).**
-You're off your institution's network. Use your university VPN, or add an Elsevier institutional token in Settings. See the note above.
+**Scopus or Web of Science return 401.** You are off the institution's network: use its VPN,
+or add an Elsevier institutional token in Settings.
 
-**A PDF won't open in the viewer.**
-Some publisher links are landing pages rather than direct PDFs, and Sci-Hub occasionally lacks a paper. In those cases MedSearch opens the article in the built-in browser automatically (and closes the empty PDF window), so you can read it through your institutional login if you have one set up.
+**A PDF opens in a browser window instead of the viewer.** The link leads to a publisher's
+page rather than to a PDF file. MedSearch opens it in its own browser window, where your
+library login applies.
 
-**The menu-bar app icon doesn't appear.**
-Make sure `rumps` is installed (`pip3 install rumps`) and that the app was launched (`python3 menubar.py`, or "MedSearch Menu Bar.app" if built with py2app). It's a background app — there's no Dock icon by design; look for the small books-and-network icon in the menu bar at the top of the screen. The icon needs a framework build of Python (the system/Homebrew `python3`), not a virtual environment — if it never shows, run it with `/opt/homebrew/bin/python3 menubar.py` or build the bundle with py2app.
+**PubMed answers with HTTP 429.** Too many requests: add a free NCBI key in Settings.
 
-**PubMed rate-limiting (HTTP 429).**
-Add a free NCBI API key in Settings — it raises the limit from 3 to 10 requests/sec.
+**A key doesn't seem to take effect.** Enter it again in Settings and press Save; restart
+MedSearch if it still doesn't.
 
-**An API key isn't being picked up.**
-Re-enter it in **Settings** (bottom bar) and Save. Most keys take effect immediately; restart the app if one still isn't working.
+**"Externally managed environment" from pip.** Use a virtual environment:
 
-**"externally managed environment" error from pip (macOS/Linux).**
-Use a virtual environment:
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -188,22 +196,21 @@ pip install -r requirements.txt
 
 ---
 
-## Privacy
+## Open science
 
-Everything runs locally on your machine. Your searches, API keys, and saved data stay on your computer. The only outbound traffic is to the literature databases you search and — if you enable AI — the Anthropic API.
+MedSearch exists to widen access to the literature, not to gate it. It is free, its source
+is open, it looks for the open-access copy first, and it works with the subscriptions its
+users already have. Contributions in the same spirit are welcome.
 
----
+## Licence
 
-## Open access & open science
+**Apache License 2.0.** You may use, study, modify and redistribute it, commercially too,
+provided the copyright and licence notices are kept and significant changes are stated. The
+licence includes an explicit patent grant. See [`LICENSE`](LICENSE) and
+[`NOTICE`](NOTICE).
 
-MedSearch is built in the spirit of open science. The goal is to *widen* access to the medical and scientific literature, not gate it: the app is free, the full source is openly available, and it's designed to help anyone — clinicians, researchers, students — search more thoroughly without paywalls standing between them and the evidence. It surfaces open-access full-text wherever it exists, works with institutional subscriptions so people can use the access they already have, and adds nothing of its own to lock down.
-
-Contributions in the same spirit are welcome. Anyone is free to use, study, adapt, and build on this project — and to share their improvements back, so the tool keeps getting better for everyone.
-
-## License
-
-Licensed under the **Apache License 2.0** — a permissive open-source license. You are free to use, modify, distribute, and build upon this software, including for commercial purposes, provided you retain the copyright and license notices and state any significant changes you make. The license also includes an explicit patent grant, protecting users and contributors. See the [`LICENSE`](LICENSE) file for the full text, and [`NOTICE`](NOTICE) for attribution details.
-
-A note on data: MedSearch queries literature services (PubMed, Cochrane, ClinicalTrials.gov, arXiv, Scopus, Web of Science, Unpaywall, OpenAlex, and others) on your behalf and does not redistribute their content — all article data belongs to its respective publishers and providers, and your use of those services is subject to their own terms.
+MedSearch queries literature services on your behalf and does not redistribute their
+content. All article data belongs to its publishers and providers, and using those
+services is subject to their own terms.
 
 Copyright © 2026 Riccardo Nevoso.

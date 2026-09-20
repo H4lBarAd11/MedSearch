@@ -29,7 +29,7 @@ Move it to /Applications.
 NOTE: build with the Homebrew python3 directly, NOT from inside a virtualenv
 (py2app has known issues with venvs).
 
-This is SEPARATE from setup.py, which builds the menu-bar companion. Keep both.
+The menu bar item is part of this app (statusbar.py); there is no second bundle.
 """
 from setuptools import setup
 
@@ -51,6 +51,7 @@ DATA_FILES = [
                              'static/vendor/pdfjs/pdf.worker.min.js',
                              'static/vendor/pdfjs/LICENSE']),
     'VERSION',
+    'menubar_icon.png',          # the menu bar item's glyph
 ]
 
 OPTIONS = {
@@ -59,9 +60,9 @@ OPTIONS = {
     'plist': {
         'CFBundleName': 'MedSearch',
         'CFBundleDisplayName': 'MedSearch',
-        'CFBundleIdentifier': 'com.riccardonevoso.medsearch',
-        'CFBundleShortVersionString': '1.3',
-        'CFBundleVersion': '1.3',
+        'CFBundleIdentifier': 'com.halbarad.medsearch',
+        'CFBundleShortVersionString': '1.4',
+        'CFBundleVersion': '1.4',
         'LSMinimumSystemVersion': '10.13',
         # The main app is a normal windowed app: it SHOULD have a Dock icon and
         # appear in the app switcher, so we do NOT set LSUIElement here.
@@ -71,7 +72,8 @@ OPTIONS = {
     # we name pyobjc bits pywebview uses on macOS so they're pulled in.
     'packages': ['flask', 'webview', 'jinja2', 'werkzeug', 'click',
                  'markupsafe', 'itsdangerous'],
-    'includes': ['webview.platforms.cocoa', 'objc', 'AppKit', 'Foundation',
+    'includes': ['statusbar', 'PyObjCTools.AppHelper',
+                 'webview.platforms.cocoa', 'objc', 'AppKit', 'Foundation',
                  'WebKit', 'urllib.request', 'urllib.parse', 'xml.etree.ElementTree',
                  'ipaddress', 'secrets', 'hmac'],
 }

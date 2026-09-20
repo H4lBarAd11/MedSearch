@@ -33,9 +33,6 @@
      stroke, round joins, drawn in currentColor so they take the text colour
      of whatever holds them and follow light/dark on their own. -->
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
-  <defs>
-    <g id="ico-base" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></g>
-  </defs>
   <symbol id="i-home" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 11 12 4l8.5 7"/><path d="M6 9.5V20h12V9.5"/><path d="M10 20v-5h4v5"/></g></symbol>
   <symbol id="i-sources" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3.5 8.5 4.5-8.5 4.5L3.5 8z"/><path d="m3.5 12 8.5 4.5 8.5-4.5"/><path d="m3.5 16 8.5 4.5 8.5-4.5"/></g></symbol>
   <symbol id="i-options" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></g></symbol>
@@ -377,6 +374,10 @@
         <div id="proxyList"></div>
         <button class="btn-secondary proxy-add-btn" onclick="openProxyEditor()">+ Add another institution</button>
         <div class="settings-hint">Pick the library you have access to (also switchable under Options in the bottom bar). UniTN is pre-configured; set up ASUIT or FBK with their proxy address, or add another institution. DOI links then open through that library so subscribed papers load with your access.</div>
+      </div>
+      <div class="settings-field" id="loginField" hidden>
+        <label class="settings-check"><input type="checkbox" id="set_open_at_login"> Open at login</label>
+        <div class="settings-hint">MedSearch starts in the menu bar with its window closed, ready for a quick search.</div>
       </div>
     </div>
     <div class="settings-footer">

@@ -1526,6 +1526,11 @@ body {
   transition: background var(--transition);
 }
 .btn-primary:hover { background: var(--accent2); }
+/* A button that can't be pressed says so by going quiet, not by fading: a
+   washed-out sage still read as the primary action (Send to Zotero with
+   Zotero closed). */
+.btn-primary:disabled, .btn-primary:disabled:hover {
+  background: var(--bg3); border-color: var(--border2); color: var(--text3); cursor: not-allowed; }
 .btn-secondary {
   padding: 9px 16px;
   background: var(--bg2);
@@ -2348,3 +2353,15 @@ button:active:not(:disabled), .link-btn:active { transform: scale(0.97); }
   border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
 .modal-text hr, .synthesis-text hr { border: 0; border-top: 1px solid var(--border); margin: 1em 0; }
 .modal-text { line-height: 1.65; }
+
+/* A switch in Settings: the checkbox and its words on one line, in ink. */
+.settings-field label.settings-check { display: flex; align-items: center; gap: 8px;
+  font-size: 0.88rem; color: var(--text); margin: 0; cursor: pointer; }
+.settings-check input { accent-color: var(--accent); margin: 0; }
+/* A fenced block from the AI: usually a search string to copy, so it keeps
+   its own line breaks and the house's code chip colours. */
+.modal-text pre, .synthesis-text pre, .msg.assistant pre {
+  margin: 0 0 0.7em; padding: 10px 12px; overflow-x: auto;
+  background: var(--input-bg); border: 1px solid var(--border); border-radius: var(--radius); }
+.modal-text pre code, .synthesis-text pre code, .msg.assistant pre code {
+  background: none; border: 0; padding: 0; font-size: 0.85em; }
