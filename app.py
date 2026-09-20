@@ -27,6 +27,7 @@ import urllib.error, xml.etree.ElementTree as ET
 import concurrent.futures, hashlib, hmac, secrets, subprocess
 from datetime import datetime
 from pathlib import Path
+from xml.sax.saxutils import escape as escape_xml
 from flask import Flask, render_template, request, Response, jsonify, stream_with_context
 
 # ── resolve paths so app.py works as a script AND as a frozen build ──────────
@@ -63,8 +64,19 @@ app = Flask(__name__, template_folder=str(BASE_DIR / "templates"),
 # /update/apply or spend the user's Anthropic credits through /synthesis. A
 # random per-launch token is rendered into our own page (other origins can't
 # read it) and must accompany every request except the page itself. The token
-# is also written to ~/.medsearch/server_token (0600) for the menu-bar app.
+# is also written to ~/.medsearch/server_token (0600), so that a second launch
+# can find this copy and hand it its request instead of starting another.
 APP_TOKEN = secrets.token_urlsafe(24)
+
+# The installed launcher (MedSearch.app), when MedSearch was started through it:
+# macOS names it in __CFBundleIdentifier. Used to restart, or to open at login,
+# THROUGH the launcher, so MedSearch keeps its own name and icon. Launchers
+# built before the rename carry the old identifier and are still ours.
+_LAUNCHER_IDS = ("com.halbarad.medsearch", "com.riccardonevoso.medsearch")
+
+def _launcher_bundle_id():
+    bid = os.environ.get("__CFBundleIdentifier", "")
+    return bid if bid.startswith(_LAUNCHER_IDS) else ""
 _OPEN_PATHS = ("/", "/ping")
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -94,8 +106,8 @@ DEFAULTS = {
     # Selected national guideline body (country code, e.g. "it"). Used by the
     # "National guidelines" button to open the right authority's search.
     "guideline_country": "",
-    # Default source(s) for the menu-bar quick search. One of the source keys
-    # ("pubmed", "guidelines", "scopus", ...) or "all". Editable from either app.
+    # Default source for the menu bar's quick search. One of the source keys
+    # ("pubmed", "guidelines", "scopus", ...) or "all". Set from that menu.
     "default_source": "pubmed",
     # Mirror priority order. sci-hub.se was DNS-blocked in Jan 2026, so the
     # currently-active mirrors come first. We pass the full list to the UI so
@@ -1601,7 +1613,7 @@ ASSET_V = _asset_version()
 def index():
     has_key = bool(_anthropic_key())
     ai_pref = CONFIG.get("ai_enabled", True)
-    # Optional deep-link from the menu-bar quick search: /?q=...&src=...
+    # Optional deep-link from a launch with --query: /?q=...&src=...
     auto_query  = (request.args.get("q") or "").strip()
     auto_source = (request.args.get("src") or CONFIG.get("default_source","pubmed") or "pubmed").strip()
     return render_template("index.html",
@@ -1627,10 +1639,21 @@ def ping():
 
 # The native window, once created, so a second launch can bring it forward.
 _MAIN_WINDOW = None
+# The menu bar item (statusbar.py), on macOS once the window exists.
+_STATUSBAR = None
 
 @app.route("/focus", methods=["POST"])
 def focus_window():
     w = _MAIN_WINDOW
+    if _STATUSBAR is not None:
+        # The window may be hidden in the menu bar, with no Dock icon: showing it
+        # through the menu bar item brings both back (and un-minimises it).
+        from PyObjCTools import AppHelper
+        AppHelper.callAfter(_STATUSBAR.show)
+        # AppKit work happens on the main thread, so the answer can only say
+        # whether there is a window to show, which is what the caller needs:
+        # false means "no native window here, open the browser instead".
+        return jsonify({"ok": w is not None})
     if w is not None:
         try:
             w.restore()
@@ -1711,22 +1734,11 @@ def onboarding_dismiss():
     save_config(CONFIG)
     return jsonify({"ok": True})
 
-@app.route("/default_source", methods=["GET", "POST"])
-def default_source():
-    """Get or set the menu-bar quick-search default source (shared config)."""
-    if request.method == "POST":
-        data = _json_body()
-        src = (data.get("source") or "").strip() or "pubmed"
-        CONFIG["default_source"] = src
-        save_config(CONFIG)
-        return jsonify({"ok": True, "default_source": src})
-    return jsonify({"default_source": CONFIG.get("default_source", "pubmed")})
-
-# ── Menu-bar → native-window search handoff ────────────────────────────────
-# The menu-bar companion app can't reach into the running native window
-# directly (separate process). Instead it POSTs a search here; the native
-# window polls /pending_search and runs anything queued — so the search happens
-# INSIDE the existing window, no browser hop.
+# ── Second launch → running window search handoff ─────────────────────────
+# A second launch (e.g. `app.py --query …`) can't reach into the running
+# window directly (separate process). It POSTs the search here; the window
+# polls /pending_search and runs anything queued, so the search happens INSIDE
+# the existing window. The menu bar item is in-process and doesn't need this.
 _PENDING_SEARCH = {"query": None, "source": None, "ts": 0}
 
 @app.route("/queue_search", methods=["POST"])
@@ -1862,12 +1874,12 @@ def _relaunch_and_exit():
     """
     time.sleep(0.4)          # let the HTTP response reach the window
     pid = os.getpid()
-    bundle_id = os.environ.get("__CFBundleIdentifier", "")
+    bundle_id = _launcher_bundle_id()
     app_py = str(APP_DIR_PATH / "app.py")
     try:
         if os.name == "posix":
             import shlex
-            if sys.platform == "darwin" and bundle_id.startswith("com.riccardonevoso."):
+            if sys.platform == "darwin" and bundle_id:
                 relaunch = f"open -b {shlex.quote(bundle_id)}"
             else:
                 relaunch = (f"cd {shlex.quote(str(APP_DIR_PATH))} && "
@@ -2502,6 +2514,39 @@ def export_zotero_single():
     ok, msg = zotero_save([articles[idx]])
     return jsonify({"ok": ok, "available": True, "message": msg})
 
+# ── Open at login (macOS) ────────────────────────────────────────────────────
+# A LaunchAgent that starts MedSearch in the menu bar, window hidden. Launched
+# through the installed launcher when there is one (so it is MedSearch in the
+# Dock, not Python), else straight from this folder. A LaunchAgent works on
+# every macOS the app supports; the newer login-item API needs macOS 13.
+_LOGIN_LABEL = "com.halbarad.medsearch"
+_LOGIN_AGENT = Path.home() / "Library" / "LaunchAgents" / f"{_LOGIN_LABEL}.plist"
+
+def _open_at_login_supported():
+    return sys.platform == "darwin" and not getattr(sys, "frozen", False)
+
+def _set_open_at_login(on):
+    if not on:
+        _LOGIN_AGENT.unlink(missing_ok=True)
+        return
+    bundle_id = _launcher_bundle_id()
+    if bundle_id:
+        args = ["/usr/bin/open", "-b", bundle_id, "--args", "--background"]
+    else:
+        args = [sys.executable, str(APP_DIR_PATH / "app.py"), "--background"]
+    items = "".join(f"<string>{escape_xml(a)}</string>" for a in args)
+    _LOGIN_AGENT.parent.mkdir(parents=True, exist_ok=True)
+    _LOGIN_AGENT.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0"><dict>'
+        f'<key>Label</key><string>{_LOGIN_LABEL}</string>'
+        f'<key>ProgramArguments</key><array>{items}</array>'
+        f'<key>WorkingDirectory</key><string>{escape_xml(str(APP_DIR_PATH))}</string>'
+        '<key>RunAtLoad</key><true/>'
+        '</dict></plist>\n')
+
 @app.route("/settings", methods=["GET","POST"])
 def settings():
     if request.method == "POST":
@@ -2541,7 +2586,18 @@ def settings():
             except Exception:
                 CONFIG["active_proxy"] = 0
         save_config(CONFIG)
-        return jsonify({"ok": True})
+        # The login item is a file outside the config, so it can fail on its
+        # own (a managed Mac may refuse ~/Library/LaunchAgents). The settings
+        # are already saved by then, so this is a WARNING, not a failure: the
+        # page must still finish saving, or its proxy list would drift from
+        # what is on disk.
+        warning = None
+        if "open_at_login" in data and _open_at_login_supported():
+            try:
+                _set_open_at_login(bool(data["open_at_login"]))
+            except Exception as e:
+                warning = f"Settings were saved, but opening at login couldn't be changed: {e}"
+        return jsonify({"ok": True, "warning": warning} if warning else {"ok": True})
     # Mask API keys (show only last 4 chars). Email and proxy URL aren't
     # sensitive, so return them in full so the user can see and verify them.
     safe = {}
@@ -2557,6 +2613,8 @@ def settings():
     # Non-string settings the UI needs back in full
     safe["institution_proxies"] = CONFIG.get("institution_proxies", [])
     safe["active_proxy"] = CONFIG.get("active_proxy", 0)
+    safe["can_open_at_login"] = _open_at_login_supported()
+    safe["open_at_login"] = _LOGIN_AGENT.exists()
     return jsonify(safe)
 
 @app.route("/history")
@@ -2655,6 +2713,63 @@ def _post_local(port, token, path, payload):
     with urllib.request.urlopen(req, timeout=5) as r:
         return r.status == 200
 
+# ── The installed launcher (macOS) ──────────────────────────────────────────
+# MedSearch.app is a stub that runs launcher.sh from this folder (see there).
+# Launchers built before launcher.sh existed exec'd Python directly, which is
+# why macOS filed the app under "Python", and git pull never touches them. So a
+# start through one rewrites it into the stub; the next start is MedSearch.
+_LAUNCHER_STUB = (
+    "#!/bin/bash\n"
+    "# MedSearch launcher stub: the logic is in launcher.sh in the MedSearch folder.\n"
+    'exec /bin/bash "{dir}/launcher.sh" "$(cd "$(dirname "$0")/../.." && pwd)" "$@"\n')
+
+def _maintain_launcher(bundle_id, upgrade_stub):
+    """Keep the installed MedSearch.app in step with this folder: convert an
+    old-style launcher into the stub, and give it the current icon.
+
+    Neither reaches it through git: the stub and the icon live inside the bundle.
+    Its location comes from macOS, not from searching folders, so nothing else on
+    the disk is touched (the Desktop is privacy-protected, and reading around in
+    it can raise a prompt)."""
+    if sys.platform != "darwin" or getattr(sys, "frozen", False):
+        return
+    if not bundle_id or not (APP_DIR_PATH / "launcher.sh").exists():
+        return
+    try:
+        from AppKit import NSWorkspace
+        url = NSWorkspace.sharedWorkspace().URLForApplicationWithBundleIdentifier_(bundle_id)
+        if url is None:
+            return
+        bundle = Path(str(url.path()))
+        changed = False
+
+        if upgrade_stub:
+            exe = bundle / "Contents" / "MacOS" / "MedSearch"
+            text = exe.read_text()
+            # Only a launcher for THIS folder, and only the old kind.
+            if "launcher.sh" not in text and str(APP_DIR_PATH / "app.py") in text:
+                exe.write_text(_LAUNCHER_STUB.format(dir=APP_DIR_PATH))
+                exe.chmod(0o755)
+                changed = True
+                print(f"  launcher updated: {bundle}")
+
+        icon_src = APP_DIR_PATH / "icon.icns"
+        icon_dst = bundle / "Contents" / "Resources" / "MedSearch.icns"
+        if icon_src.exists() and icon_dst.exists() and icon_src.read_bytes() != icon_dst.read_bytes():
+            icon_dst.write_bytes(icon_src.read_bytes())
+            changed = True
+            print("  launcher icon updated")
+
+        if changed:
+            # Finder and the Dock cache icons per bundle; a touch plus a
+            # re-register is what makes the new one appear.
+            bundle.touch()
+            subprocess.run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/"
+                            "LaunchServices.framework/Support/lsregister", "-f", str(bundle)],
+                           capture_output=True, timeout=20)
+    except Exception as e:
+        print(f"  (couldn't update the launcher: {e})")
+
 def _write_private(path, text):
     """Write a file only this user can read (the token file)."""
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -2664,12 +2779,22 @@ def _write_private(path, text):
 if __name__ == "__main__":
     import socket, argparse
 
-    # Optional deep-link args from the menu-bar app: open the window straight on
-    # a search. e.g.  python3 app.py --query "glioma" --source guidelines
+    # launcher.sh sets this to tell Python which virtual environment it runs
+    # in. It has done its job once we are here, and must not reach the
+    # processes MedSearch starts itself (pip during an update, a restart). Its
+    # absence under a MedSearch launcher means an old-style launcher, which
+    # exec'd Python directly. Keep both facts; the launcher is maintained
+    # further down, once this launch knows it is the one that stays.
+    _old_style_launcher = "__PYVENV_LAUNCHER__" not in os.environ
+    os.environ.pop("__PYVENV_LAUNCHER__", None)
+
+    # Optional deep-link args: open the window straight on a search. e.g.  python3 app.py --query "glioma" --source guidelines
     _parser = argparse.ArgumentParser(add_help=False)
     _parser.add_argument("--query", default="")
     _parser.add_argument("--source", default="")
     _parser.add_argument("--relaunch", action="store_true")   # restart after an update
+    # Opened at login: start in the menu bar with the window hidden.
+    _parser.add_argument("--background", action="store_true")
     _args, _ = _parser.parse_known_args()
 
     # ONE WINDOW. A second double-click used to start a second server on a
@@ -2685,10 +2810,20 @@ if __name__ == "__main__":
                 if _args.query.strip():
                     _post_local(_port, _token, "/queue_search",
                                 {"query": _args.query.strip(), "source": _args.source.strip()})
-                _post_local(_port, _token, "/focus", {})
+                # A background launch (opened at login, while a copy is already
+                # running) must not pull that copy's window up: the point of
+                # --background is that nothing appears.
+                if not _args.background:
+                    _post_local(_port, _token, "/focus", {})
             except Exception:
                 pass
             sys.exit(0)
+
+    # Only the launch that stays maintains the installed launcher: a launch
+    # that hands its query to a running copy has already exited above, and
+    # keeping this off that path leaves the handoff instant (it reads the
+    # bundle, compares the icon and can call lsregister).
+    _maintain_launcher(_launcher_bundle_id(), _old_style_launcher)
 
     # Find a free port (in case 5050 is taken). A relaunch waits briefly for
     # the previous copy to release 5050 rather than moving to a random port.
@@ -2715,8 +2850,8 @@ if __name__ == "__main__":
     else:
         URL = f"http://127.0.0.1:{PORT}"
 
-    # Record the chosen port and this launch's token so the menu-bar companion
-    # app can find this server and talk to it. Best-effort.
+    # Record the chosen port and this launch's token so a second launch can
+    # find this server and hand it its request. Best-effort.
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         (CONFIG_DIR / "server_port").write_text(str(PORT))
@@ -2762,7 +2897,50 @@ if __name__ == "__main__":
             width=1280, height=860,
             min_size=(940, 640),
             js_api=api,
+            hidden=_args.background,
         )
+
+        def _start_statusbar():
+            """The menu bar item (macOS). Runs in pywebview's start thread; the
+            item itself is built on the main thread once the window exists."""
+            if sys.platform != "darwin":
+                return
+            try:
+                import statusbar
+                from PyObjCTools import AppHelper
+                from webview.platforms.cocoa import BrowserView
+            except Exception as e:
+                print(f"  (menu bar item unavailable: {e})")
+                return
+            for _ in range(100):                      # up to 10 s for the window
+                if _MAIN_WINDOW.uid in BrowserView.instances:
+                    break
+                time.sleep(0.1)
+
+            def _history_newest_first():
+                seen, out = set(), []
+                for q in reversed(SESSION["history"]):
+                    if q not in seen:
+                        seen.add(q); out.append(q)
+                return out
+
+            def _set_default_source(key):
+                CONFIG["default_source"] = key
+                save_config(CONFIG)
+
+            def _install():
+                global _STATUSBAR
+                try:
+                    _STATUSBAR = statusbar.install(
+                        _MAIN_WINDOW, background=_args.background,
+                        icon_path=RESOURCE_DIR / "menubar_icon.png",
+                        recent_searches=_history_newest_first,
+                        get_source=lambda: CONFIG.get("default_source", "pubmed"),
+                        set_source=_set_default_source)
+                    print("  menu bar item ready")
+                except Exception as e:
+                    print(f"  (menu bar item failed: {e})")
+            AppHelper.callAfter(_install)
         # Persist the embedded browser's cookies and session so an institutional
         # login carries across every article window AND survives app restarts —
         # log in once, not for every paper. By default pywebview runs in private
@@ -2772,9 +2950,9 @@ if __name__ == "__main__":
         try:
             browser_data_dir = str(CONFIG_DIR / "browser_data")
             os.makedirs(browser_data_dir, exist_ok=True)
-            webview.start(private_mode=False, storage_path=browser_data_dir)
+            webview.start(_start_statusbar, private_mode=False, storage_path=browser_data_dir)
         except TypeError:
-            webview.start()
+            webview.start(_start_statusbar)
     except ImportError:
         import webbrowser
         print(f"\n  🔬  MedSearch {LOCAL_VERSION}  —  starting…")

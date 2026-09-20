@@ -7,8 +7,9 @@
 #  a normal Mac app with the MedSearch icon in the Dock. Day-to-day, users just
 #  double-click that Desktop icon; they never see a terminal.
 #
-#  It's a thin wrapper that runs the app from THIS git clone, so the in-app
-#  Update button still works. Re-run this if you move the MedSearch folder.
+#  It's a thin wrapper that runs the app from THIS git clone (through
+#  launcher.sh), so the in-app update keeps everything current. Re-run this
+#  only if you move the MedSearch folder.
 # ─────────────────────────────────────────────────────────────────────────────
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,7 +63,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>MedSearch</string>
   <key>CFBundleExecutable</key><string>MedSearch</string>
   <key>CFBundleIconFile</key><string>MedSearch</string>
-  <key>CFBundleIdentifier</key><string>com.riccardonevoso.medsearch.launcher</string>
+  <key>CFBundleIdentifier</key><string>com.halbarad.medsearch.launcher</string>
   <key>CFBundleVersion</key><string>1.0</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -71,20 +72,13 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-# Executable — launches the app from THIS clone, replacing itself with Python so
-# the Dock icon and app identity are MedSearch's. No terminal is ever shown.
+# Executable — a two-line stub. How MedSearch starts lives in the clone's
+# launcher.sh, so it updates with the app and this stub never needs rebuilding.
+# (app.py writes this same stub over launchers built before it existed.)
 cat > "$APP/Contents/MacOS/MedSearch" <<LAUNCH
 #!/bin/bash
-# A double-clicked app inherits only a minimal PATH, which can hide 'git' from
-# the in-app Update button. Add the usual git locations (Apple CLT + Homebrew)
-# so auto-update works regardless of how git was installed.
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:\$PATH"
-cd "$SCRIPT_DIR"
-if [ ! -x "$SCRIPT_DIR/.venv/bin/python3" ]; then
-  osascript -e 'display alert "MedSearch needs setup" message "Re-run \"Create Desktop App.command\" in the MedSearch folder."' >/dev/null 2>&1 || true
-  exit 1
-fi
-exec "$SCRIPT_DIR/.venv/bin/python3" "$SCRIPT_DIR/app.py" "\$@"
+# MedSearch launcher stub: the logic is in launcher.sh in the MedSearch folder.
+exec /bin/bash "$SCRIPT_DIR/launcher.sh" "\$(cd "\$(dirname "\$0")/../.." && pwd)" "\$@"
 LAUNCH
 chmod +x "$APP/Contents/MacOS/MedSearch"
 

@@ -32,8 +32,7 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
-# Install/refresh dependencies. requirements.txt lists flask + pywebview
-# (rumps is optional and only needed for the separate menu-bar app).
+# Install/refresh dependencies. requirements.txt lists flask + pywebview.
 NEED_INSTALL=0
 python3 -c "import flask"   2>/dev/null || NEED_INSTALL=1
 python3 -c "import webview" 2>/dev/null || NEED_INSTALL=1
