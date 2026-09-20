@@ -3178,6 +3178,7 @@ if __name__ == "__main__":
                     _STATUSBAR = statusbar.install(
                         _MAIN_WINDOW, background=_args.background,
                         icon_path=RESOURCE_DIR / "menubar_icon.png",
+                        log_path=CONFIG_DIR / "menubar.log",
                         recent_searches=_history_newest_first,
                         get_source=lambda: CONFIG.get("default_source", "pubmed"),
                         set_source=_set_default_source)
