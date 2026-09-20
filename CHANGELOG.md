@@ -4,6 +4,10 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.7
+
+- Changing a setting no longer asks for your Mac password once for every key you have saved: only a key you actually changed is written to the Keychain.
+
 ## 1.6
 
 - The update prompt now says what the new version changes.
