@@ -116,6 +116,12 @@ revocable from there), so no key is written to a file. A key saved by an older v
 moved into the Keychain the next time MedSearch starts. Where there is no Keychain, they
 stay in `~/.medsearch/config.json`, which is readable only by its owner.
 
+macOS asks for the login password when MedSearch stores a key, and may keep asking when it
+reads one back — a new Keychain item does not yet name the tool allowed to read it.
+`bash scripts/keychain-no-prompt.sh` grants that to Apple's own keychain tool and to
+nothing else; run it once, and again after saving a new key. Saving other settings never
+touches the Keychain, so it never asks.
+
 | Key | Where to get it | What it unlocks |
 |---|---|---|
 | **Anthropic (Claude)** | [console.anthropic.com](https://console.anthropic.com) | The AI features: summaries, synthesis, Explain, the assistant |
