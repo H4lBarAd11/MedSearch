@@ -109,8 +109,11 @@ recommended install.
 ## API keys
 
 The free sources need no keys: PubMed, Cochrane, ClinicalTrials.gov and arXiv work out of
-the box. Keys are added in **Settings** (bottom bar), stored only in
-`~/.medsearch/config.json`, and never leave the machine.
+the box. Keys are added in **Settings** (bottom bar) and never leave the machine: on macOS
+they are kept in the **Keychain** (visible in Keychain Access under *MedSearch*, and
+revocable from there), so no key is written to a file. A key saved by an older version is
+moved into the Keychain the next time MedSearch starts. Where there is no Keychain, they
+stay in `~/.medsearch/config.json`, which is readable only by its owner.
 
 | Key | Where to get it | What it unlocks |
 |---|---|---|
@@ -142,6 +145,12 @@ MedSearch that carries your library login, so subscribed papers load directly.
 The one-line summaries use the smallest Claude model, the assistant reuses a cached,
 trimmed context from one question to the next, and every answer is capped. A typical
 conversation with the assistant costs a few cents.
+
+**Settings shows what it has actually cost this month**, counted from the token usage each
+reply reports, broken down by what was asked of it. A **monthly limit** can be set beside
+it: once the month's spending reaches it, the AI features stop and say so, and searching
+carries on untouched. For a limit that MedSearch itself cannot exceed, give the machine its
+own API key in its own Anthropic console workspace and set the spend limit there.
 
 ## Privacy
 

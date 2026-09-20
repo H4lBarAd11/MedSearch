@@ -12,6 +12,9 @@ from pathlib import Path
 
 _HOME = tempfile.mkdtemp(prefix="medsearch-tests-")
 os.environ["HOME"] = _HOME
+# The suite never touches the real Keychain: the keys-in-the-Keychain path is
+# exercised with a fake store instead (test_routes.py).
+os.environ["MEDSEARCH_KEYCHAIN"] = "0"
 for var in ("ANTHROPIC_API_KEY", "NCBI_API_KEY", "SCOPUS_API_KEY", "WOS_API_KEY", "UNPAYWALL_EMAIL"):
     os.environ.pop(var, None)
 
