@@ -16,12 +16,25 @@ menu bar, ready for a quick search. While the window is hidden, the Dock icon go
 away too, as it does for any menu bar app. Quitting (the menu's Quit, ⌘Q, the Dock,
 logging out) still quits, see `closing` below.
 
-THE DOCK ICON COMES AND GOES BY CHANGING THE ACTIVATION POLICY, and AppKit can take
-the menu bar item off the bar along with it: the app carries on running with no icon
-to click, which is what closing and reopening the window kept doing. So the policy is
-changed in one place (`_set_policy`), never when it is already what we want, and the
-item is checked afterwards and built again if it went. Re-seating an item that is
-still there would make it flicker, so the check has to be the thing that decides.
+WHEN THE ICON DISAPPEARS IT IS USUALLY STILL THERE (measured 20 Sep, on a MacBook Air
+with a notch). An item macOS has no room for is simply never placed: it keeps its
+button, keeps its window, keeps answering `isVisible` with true and keeps its length.
+The only thing that gives it away is that it sits at x=0. Filling the bar with 26 items
+and reading them back is what showed this — eleven were placed, fifteen sat at x=0, and
+every one of them called itself visible. So `_x` is logged, because it is the single
+number that separates "macOS is hiding it" from "AppKit has taken it away", and the app
+must not answer a full menu bar by building the item again in the same missing slot.
+
+WHY CLOSING THE WINDOW IS WHEN IT GOES is not proven, but follows: closing it drops
+MedSearch's own menus from the left of the bar and hands the front to an app whose menus
+may be longer, and on a notched screen the room for the icons on the right is whatever
+the titles on the left leave over. Hence `setAutosaveName_`: an item with a name is put
+back where it was last left, so a place he ⌘-drags it to is his for good, instead of
+every launch returning it to the newest slot — the first one a full bar gives up.
+
+THE ACTIVATION POLICY is set in one place (`_set_policy`) and never set to what it
+already is. That is tidiness rather than a cure: it was the first suspect and it was
+wrong, and the window being hidden or shown is checked in the same breath.
 
 Everything here runs on the main thread: AppKit requires it. The page is driven
 through pywebview from a worker thread, because evaluate_js waits on the main
@@ -121,6 +134,15 @@ class StatusBar:
         else:
             self.item.button().setTitle_("MedSearch")
         self.item.button().setToolTip_("MedSearch")
+        # WHERE IT SITS IS HIS TO CHOOSE. ⌘-dragging an item along the menu bar
+        # moves it, but only an item with an autosave name is put back where it
+        # was left — without one every launch returns it to the newest, leftmost
+        # slot, which on a full bar is the first slot macOS hides. It also keeps
+        # the place when the item has to be built again.
+        try:
+            self.item.setAutosaveName_("MedSearch")
+        except Exception:
+            pass
 
         self.menu = NSMenu.alloc().init()
         self.menu.setDelegate_(self.target)
@@ -188,11 +210,24 @@ class StatusBar:
         except Exception:
             pass
 
+    def _x(self):
+        """Where the item sits along the menu bar, or -1 if it cannot be asked.
+
+        THIS IS THE ONE THAT TELLS THE TRUTH. An item macOS has no room for is
+        never placed: it keeps its window, keeps calling itself visible, and
+        sits at x=0. A real place on the bar is a real x."""
+        try:
+            return int(self.item.button().window().frame().origin.x)
+        except Exception:
+            return -1
+
     def _state(self):
-        """(on the bar, the item's own idea of visible, the activation policy).
-        Two questions, not one: AppKit taking the item off the bar and macOS
-        hiding it are different failures, and only one of them has a button
-        with no window. Logging both is what tells them apart afterwards."""
+        """(on the bar, where, the item's own idea of visible, the policy).
+
+        Three different ways to be missing, and they need telling apart: AppKit
+        letting the item go (the window stops being visible), macOS having no
+        room for it (x=0, everything else unchanged), and the app simply having
+        no Dock icon (the policy). Only the log can say which one happened."""
         visible, policy = "?", "?"
         try:
             if self.item is not None and hasattr(self.item, "isVisible"):
@@ -203,7 +238,7 @@ class StatusBar:
             policy = NSApp.activationPolicy()
         except Exception:
             pass
-        return self.on_the_bar(), visible, policy
+        return self.on_the_bar(), self._x(), visible, policy
 
     def _watch(self):
         """Every few seconds: still there? If not, put it back.
@@ -223,7 +258,11 @@ class StatusBar:
         try:
             state = self._state()
             if state != self._last_state:
-                self._log("on bar=%s  visible=%s  policy=%s" % state)
+                self._log("on bar=%s  x=%s  visible=%s  policy=%s" % state)
+                if state[0] and state[1] == 0:
+                    self._log("   ^ on the bar but never placed (x=0): the menu bar is "
+                              "full, so macOS is hiding it. Nothing to rebuild — free a "
+                              "slot, or ⌘-drag it somewhere it fits and it will stay there.")
                 self._last_state = state
             if state[0]:
                 self._misses = 0
@@ -235,7 +274,7 @@ class StatusBar:
                     self._reseat()
                     self._misses = 0
                     self._last_state = self._state()
-                    self._log("rebuilt: on bar=%s  visible=%s  policy=%s" % self._last_state)
+                    self._log("rebuilt: on bar=%s  x=%s  visible=%s  policy=%s" % self._last_state)
                 elif self._misses == 2:
                     self._log(f"not on the bar, and {_REBUILD_LIMIT} rebuilds have not "
                               "helped — leaving it alone. A full menu bar does this.")
