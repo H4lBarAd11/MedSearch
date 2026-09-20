@@ -2399,3 +2399,11 @@ input[type=checkbox]:hover:not(:disabled), input[type=radio]:hover:not(:disabled
    back for the mouse wherever :focus-visible IS understood. */
 input[type=checkbox]:focus, input[type=radio]:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
 input[type=checkbox]:focus:not(:focus-visible), input[type=radio]:focus:not(:focus-visible) { outline: none; }
+
+/* What the AI has cost this month (Settings). Ink, not a verdict colour —
+   until it has run into the limit, which is a caveat, so caramel. */
+.ai-spend { font-size: 0.95rem; font-weight: 700; color: var(--text);
+  font-variant-numeric: tabular-nums; margin-bottom: 10px; }
+.ai-spend.over { color: var(--yellow); }
+.ai-cap-label { margin-top: 2px; }
+#set_ai_cap { max-width: 160px; }

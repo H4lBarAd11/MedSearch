@@ -375,6 +375,14 @@
         <button class="btn-secondary proxy-add-btn" onclick="openProxyEditor()">+ Add another institution</button>
         <div class="settings-hint">Pick the library you have access to (also switchable under Options in the bottom bar). UniTN is pre-configured; set up ASUIT or FBK with their proxy address, or add another institution. DOI links then open through that library so subscribed papers load with your access.</div>
       </div>
+      <div class="settings-field" id="aiSpendField">
+        <label>AI spending this month</label>
+        <div class="ai-spend" id="aiSpend">—</div>
+        <label for="set_ai_cap" class="ai-cap-label">Monthly limit (US$) — 0 means no limit</label>
+        <input type="number" id="set_ai_cap" min="0" step="1" value="0" aria-label="Monthly AI limit in US dollars">
+        <div class="settings-hint">MedSearch stops using AI once the month's spending reaches this
+          amount; searching is unaffected. Your Anthropic console can set a hard limit as well.</div>
+      </div>
       <div class="settings-field" id="loginField" hidden>
         <label class="settings-check"><input type="checkbox" id="set_open_at_login"> Open at login</label>
         <div class="settings-hint">MedSearch starts in the menu bar with its window closed, ready for a quick search.</div>
