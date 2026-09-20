@@ -1981,6 +1981,8 @@ async function openSettings() {
     const res  = await fetch('/settings');
     const data = await res.json();
     document.getElementById('loginField').hidden = !data.can_open_at_login;
+    document.getElementById('set_ai_cap').value = data.ai_monthly_cap || 0;
+    loadUsage();
     document.getElementById('set_open_at_login').checked = !!data.open_at_login;
     for (const [key, id] of Object.entries(fields)) {
       const el  = document.getElementById(id);
@@ -2032,6 +2034,24 @@ function _addRemoveKeyButton(input, key) {
 
 function closeSettings() {
   closeOverlay('settingsOverlay');
+}
+
+// What the AI has cost this month, shown in Settings. Counted from what the
+// API reports it used, so it follows the real calls rather than guessing.
+async function loadUsage() {
+  const el = document.getElementById('aiSpend');
+  if (!el) return;
+  try {
+    const u = await (await fetch('/usage')).json();
+    const jobs = Object.entries(u.calls || {})
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, n]) => `${n} ${name}`)
+      .join(' · ');
+    el.textContent = `$${(u.cost || 0).toFixed(2)}` + (jobs ? `  —  ${jobs}` : '  —  nothing yet');
+    el.classList.toggle('over', !!u.over_cap);
+  } catch (e) {
+    el.textContent = 'not available';
+  }
 }
 
 // ── Institutional proxy management ──────────────────────────────────────────
@@ -2200,6 +2220,7 @@ async function saveSettings() {
   payload.active_proxy = activeProxy;
   if (!document.getElementById('loginField').hidden)
     payload.open_at_login = document.getElementById('set_open_at_login').checked;
+  payload.ai_monthly_cap = parseFloat(document.getElementById('set_ai_cap').value) || 0;
 
   const saved = await (await fetch('/settings', {
     method: 'POST',

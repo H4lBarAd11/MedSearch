@@ -229,7 +229,7 @@ def test_ai_switched_off_refuses_even_with_a_key():
 def test_one_liners_use_the_fast_model(monkeypatch):
     A.CONFIG["anthropic_api_key"] = "sk-test"
     seen = {}
-    monkeypatch.setattr(A, "claude_text", lambda payload, timeout=30: seen.update(payload) or "x")
+    monkeypatch.setattr(A, "claude_text", lambda payload, timeout=30, **kw: seen.update(payload) or "x")
     A.ai_oneliner("t", "abstract")
     assert seen["model"] == A.MODEL_FAST
 
@@ -379,3 +379,205 @@ def test_only_our_launcher_identifiers_are_recognised(monkeypatch):
                       ("", False)):
         monkeypatch.setitem(A.os.environ, "__CFBundleIdentifier", bid)
         assert bool(A._launcher_bundle_id()) is ours
+
+
+# ── API keys live in the Keychain, not in the config file ───────────────────
+
+class _FakeKeychain:
+    """Stands in for secrets_store: the Keychain's behaviour, in a dict."""
+    def __init__(self, on=True, items=None):
+        self.on, self.items = on, dict(items or {})
+    def available(self):
+        return self.on
+    def get(self, name):
+        return self.items.get(name, "") if self.on else ""
+    def set(self, name, value):
+        if not self.on:
+            return False
+        if value:
+            self.items[name] = value
+        else:
+            self.items.pop(name, None)
+        return True
+    def delete(self, name):
+        return self.set(name, "")
+
+
+def _use(monkeypatch, fake):
+    for f in ("available", "get", "set", "delete"):
+        monkeypatch.setattr(A.secrets_store, f, getattr(fake, f))
+    return fake
+
+
+def test_saving_keeps_the_keys_out_of_the_config_file(tmp_path, monkeypatch):
+    fake = _use(monkeypatch, _FakeKeychain())
+    monkeypatch.setattr(A, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(A, "CONFIG_FILE", tmp_path / "config.json")
+    A.save_config({**A.DEFAULTS, "anthropic_api_key": "sk-ant-secret",
+                   "unpaywall_email": "you@example.com"})
+    on_disk = json.loads((tmp_path / "config.json").read_text())
+    assert on_disk["anthropic_api_key"] == ""            # not in the file
+    assert on_disk["unpaywall_email"] == "you@example.com"   # not a secret
+    assert fake.items["anthropic_api_key"] == "sk-ant-secret"
+
+
+def test_a_key_saved_by_an_older_version_moves_into_the_keychain(tmp_path, monkeypatch):
+    """Upgrading must not lose the key, and must not leave it in the file."""
+    fake = _use(monkeypatch, _FakeKeychain())
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(json.dumps({"anthropic_api_key": "sk-ant-old", "ai_enabled": True}))
+    monkeypatch.setattr(A, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(A, "CONFIG_FILE", cfg_file)
+    cfg = A.load_config()
+    assert cfg["anthropic_api_key"] == "sk-ant-old"       # still usable
+    assert fake.items["anthropic_api_key"] == "sk-ant-old"
+    assert json.loads(cfg_file.read_text())["anthropic_api_key"] == ""
+
+
+def test_the_keychain_wins_over_a_stale_value_in_the_file(tmp_path, monkeypatch):
+    _use(monkeypatch, _FakeKeychain(items={"anthropic_api_key": "sk-ant-current"}))
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(json.dumps({"anthropic_api_key": "sk-ant-stale"}))
+    monkeypatch.setattr(A, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(A, "CONFIG_FILE", cfg_file)
+    assert A.load_config()["anthropic_api_key"] == "sk-ant-current"
+
+
+def test_without_a_keychain_the_file_keeps_working(tmp_path, monkeypatch):
+    """Not macOS, or the Keychain refused: MedSearch still has to run."""
+    _use(monkeypatch, _FakeKeychain(on=False))
+    cfg_file = tmp_path / "config.json"
+    monkeypatch.setattr(A, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(A, "CONFIG_FILE", cfg_file)
+    A.save_config({**A.DEFAULTS, "anthropic_api_key": "sk-ant-plain"})
+    assert json.loads(cfg_file.read_text())["anthropic_api_key"] == "sk-ant-plain"
+    assert A.load_config()["anthropic_api_key"] == "sk-ant-plain"
+
+
+def test_removing_a_key_removes_it_from_the_keychain_too(tmp_path, monkeypatch):
+    fake = _use(monkeypatch, _FakeKeychain(items={"wos_api_key": "old"}))
+    monkeypatch.setattr(A, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(A, "CONFIG_FILE", tmp_path / "config.json")
+    A.save_config({**A.DEFAULTS, "wos_api_key": ""})
+    assert "wos_api_key" not in fake.items
+
+
+def test_the_config_file_is_readable_only_by_its_owner(tmp_path, monkeypatch):
+    _use(monkeypatch, _FakeKeychain())
+    monkeypatch.setattr(A, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(A, "CONFIG_FILE", tmp_path / "config.json")
+    A.save_config(dict(A.DEFAULTS))
+    assert oct((tmp_path / "config.json").stat().st_mode)[-3:] == "600"
+
+
+def test_a_refusing_keychain_never_costs_the_key(tmp_path, monkeypatch):
+    """The Keychain is there but will not store (locked, or no login keychain
+    — which is what a wrong HOME does). The key must stay in the file."""
+    class Refusing(_FakeKeychain):
+        def set(self, name, value):
+            return False
+    _use(monkeypatch, Refusing())
+    monkeypatch.setattr(A, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(A, "CONFIG_FILE", tmp_path / "config.json")
+    A.save_config({**A.DEFAULTS, "anthropic_api_key": "sk-ant-keepme"})
+    assert json.loads((tmp_path / "config.json").read_text())["anthropic_api_key"] == "sk-ant-keepme"
+    assert A.load_config()["anthropic_api_key"] == "sk-ant-keepme"
+
+
+# ── What the AI spends: the meter and the monthly limit ─────────────────────
+
+def _usage_in(tmp_path, monkeypatch):
+    monkeypatch.setattr(A, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(A, "USAGE_FILE", tmp_path / "usage.json")
+
+
+def test_a_call_is_priced_from_what_the_api_reports(tmp_path, monkeypatch):
+    _usage_in(tmp_path, monkeypatch)
+    # Sonnet 5: $2 per 1M in, $10 per 1M out.
+    u = A.record_usage("claude-sonnet-5", "syntheses", 1_000_000, 100_000)
+    assert round(u["cost"], 6) == round(2.00 + 1.00, 6)
+    assert u["calls"] == {"syntheses": 1}
+
+
+def test_cached_tokens_are_priced_at_their_own_rates(tmp_path, monkeypatch):
+    _usage_in(tmp_path, monkeypatch)
+    # A cache write costs 1.25x the input rate, a read 0.1x.
+    u = A.record_usage("claude-sonnet-5", "questions", 0, 0,
+                       cache_write_tokens=1_000_000, cache_read_tokens=1_000_000)
+    assert round(u["cost"], 6) == round(2.00 * 1.25 + 2.00 * 0.10, 6)
+
+
+def test_an_unpriced_model_is_counted_but_not_costed(tmp_path, monkeypatch):
+    _usage_in(tmp_path, monkeypatch)
+    u = A.record_usage("some-future-model", "summaries", 1_000_000, 1_000_000)
+    assert u["cost"] == 0.0 and u["unpriced_calls"] == 1
+    assert u["input_tokens"] == 1_000_000
+
+
+def test_a_new_month_starts_from_zero(tmp_path, monkeypatch):
+    _usage_in(tmp_path, monkeypatch)
+    (tmp_path / "usage.json").write_text(json.dumps(
+        {"month": "1999-01", "cost": 99.0, "calls": {"syntheses": 12}}))
+    assert A.load_usage()["cost"] == 0.0
+    assert A.load_usage()["month"] == A._this_month()
+
+
+def test_the_streamed_answer_is_metered(client, auth, monkeypatch, tmp_path):
+    """The token counts arrive in two different events; both must be picked up."""
+    _usage_in(tmp_path, monkeypatch)
+    A.CONFIG["anthropic_api_key"] = "sk-test"
+    lines = [
+        'data: {"type":"message_start","message":{"usage":{"input_tokens":1000,'
+        '"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}',
+        'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}',
+        'data: {"type":"message_delta","usage":{"output_tokens":500}}',
+    ]
+    monkeypatch.setattr(A, "_anthropic_open", lambda payload, timeout: _FakeStream(lines))
+    list(A.claude_stream({"model": "claude-sonnet-5", "messages": []}, feature="explanations"))
+    u = A.load_usage()
+    assert u["calls"] == {"explanations": 1}
+    assert round(u["cost"], 6) == round(1000 / 1e6 * 2.0 + 500 / 1e6 * 10.0, 6)
+
+
+def test_the_limit_stops_the_ai_and_says_so(client, auth, monkeypatch, tmp_path):
+    _usage_in(tmp_path, monkeypatch)
+    A.CONFIG["anthropic_api_key"] = "sk-test"
+    A.CONFIG["ai_monthly_cap"] = 5.0
+    A.record_usage("claude-sonnet-5", "syntheses", 3_000_000, 0)   # $6, over the $5 limit
+    assert A.ai_over_cap() is True
+
+    attempts = []
+    monkeypatch.setattr(A, "_anthropic_open",
+                        lambda payload, timeout: attempts.append(payload))
+
+    events = [json.loads(c[6:]) for c in
+              A.claude_stream({"model": A.MODEL_MAIN, "messages": []}, feature="syntheses")]
+    assert events[0]["type"] == "error" and "$5.00" in events[0]["text"]
+    assert events[-1]["type"] == "done"                    # the stream still closes
+    assert A.ai_oneliner("t", "abstract") is None          # the cheap calls stop too
+    # Nothing was sent: the limit has to stop the request, not just its answer.
+    assert attempts == []
+
+
+def test_no_limit_means_no_limit(tmp_path, monkeypatch):
+    _usage_in(tmp_path, monkeypatch)
+    A.CONFIG["ai_monthly_cap"] = 0
+    A.record_usage("claude-sonnet-5", "syntheses", 50_000_000, 0)   # $100
+    assert A.ai_over_cap() is False
+
+
+def test_the_usage_route_reports_the_month(client, auth, tmp_path, monkeypatch):
+    _usage_in(tmp_path, monkeypatch)
+    A.record_usage("claude-haiku-4-5", "summaries", 1_000_000, 200_000)
+    r = client.get("/usage", headers=auth, base_url=BASE).json
+    assert r["calls"] == {"summaries": 1}
+    assert round(r["cost"], 4) == round(1.00 + 1.00, 4)
+    assert r["month"] == A._this_month()
+
+
+def test_the_limit_is_saved_from_settings(client, auth):
+    client.post("/settings", json={"ai_monthly_cap": "12.5"}, headers=auth, base_url=BASE)
+    assert A.CONFIG["ai_monthly_cap"] == 12.5
+    assert client.get("/settings", headers=auth, base_url=BASE).json["ai_monthly_cap"] == 12.5
+    client.post("/settings", json={"ai_monthly_cap": "rubbish"}, headers=auth, base_url=BASE)
+    assert A.CONFIG["ai_monthly_cap"] == 0.0

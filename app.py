@@ -30,6 +30,8 @@ from pathlib import Path
 from xml.sax.saxutils import escape as escape_xml
 from flask import Flask, render_template, request, Response, jsonify, stream_with_context
 
+import secrets_store
+
 # ── resolve paths so app.py works as a script AND as a frozen build ──────────
 # Two freezing tools put bundled data files (templates/, VERSION) in different
 # places:
@@ -109,6 +111,10 @@ DEFAULTS = {
     # Default source for the menu bar's quick search. One of the source keys
     # ("pubmed", "guidelines", "scopus", ...) or "all". Set from that menu.
     "default_source": "pubmed",
+    # A monthly ceiling in USD for what the AI features may spend. 0 = no
+    # ceiling. The hard limit belongs in the Anthropic console; this one is
+    # here so the spending is visible and stops before it surprises anyone.
+    "ai_monthly_cap": 0.0,
     # Mirror priority order. sci-hub.se was DNS-blocked in Jan 2026, so the
     # currently-active mirrors come first. We pass the full list to the UI so
     # users can fall through to a backup if a mirror is unreachable.
@@ -120,6 +126,21 @@ DEFAULTS = {
 _LEGACY_BROKEN_MIRRORS = [
     ["https://sci-hub.se", "https://sci-hub.st", "https://sci-hub.ru"],
 ]
+
+# The settings that are secrets. They live in the macOS Keychain when it is
+# available (secrets_store.py); the config file then holds everything else.
+# unpaywall_email is deliberately not one: it is an address, shown in full in
+# Settings, and it is what identifies the caller to Unpaywall.
+SECRET_KEYS = ("anthropic_api_key", "pubmed_api_key", "scopus_api_key",
+               "scopus_insttoken", "wos_api_key")
+
+
+def _config_for_disk(cfg, stored):
+    """What gets written to config.json. A secret is blanked ONLY once the
+    Keychain has confirmed it holds it: a Keychain that is present but refuses
+    (a locked or missing login keychain) must not cost the user their key."""
+    return {k: ("" if k in stored else v) for k, v in cfg.items()}
+
 
 def load_config():
     cfg = dict(DEFAULTS)
@@ -144,6 +165,19 @@ def load_config():
                 cfg["active_proxy"] = 0
                 migrated = True
         except Exception: pass
+    # Keys come from the Keychain; a key still sitting in the file is one
+    # saved by an older version, so it moves across and is wiped from the file.
+    in_keychain = set()
+    if secrets_store.available():
+        for k in SECRET_KEYS:
+            stored = secrets_store.get(k)
+            if stored:
+                cfg[k] = stored
+                in_keychain.add(k)
+            elif (cfg.get(k) or "").strip():
+                if secrets_store.set(k, cfg[k].strip()):
+                    in_keychain.add(k)
+                    migrated = True
     for k, e in {"anthropic_api_key":"ANTHROPIC_API_KEY","pubmed_api_key":"NCBI_API_KEY",
                  "scopus_api_key":"SCOPUS_API_KEY","wos_api_key":"WOS_API_KEY",
                  "unpaywall_email":"UNPAYWALL_EMAIL"}.items():
@@ -153,13 +187,24 @@ def load_config():
         # persist the fix so it doesn't keep migrating each launch
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+            CONFIG_FILE.write_text(json.dumps(_config_for_disk(cfg, in_keychain), indent=2))
         except Exception: pass
     return cfg
 
 def save_config(cfg):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    stored = set()
+    if secrets_store.available():
+        for k in SECRET_KEYS:
+            if secrets_store.set(k, (cfg.get(k) or "").strip()):
+                stored.add(k)
+    CONFIG_FILE.write_text(json.dumps(_config_for_disk(cfg, stored), indent=2))
+    # The file no longer holds keys, but it still holds where this person
+    # works and what they searched for: keep it to this account.
+    try:
+        os.chmod(CONFIG_FILE, 0o600)
+    except Exception:
+        pass
 
 CONFIG = load_config()
 
@@ -622,6 +667,89 @@ MODEL_FAST = "claude-haiku-4-5"
 # latency and output spend buy nothing, so it is switched off for them.
 _NO_THINKING = {"thinking": {"type": "disabled"}}
 
+# ── What the AI spends ──────────────────────────────────────────────────────
+# Every Anthropic reply states how many tokens it used; these are the published
+# per-million-token prices for the two models above (USD, June 2026: Sonnet 5
+# $2/$10, Haiku 4.5 $1/$5). The assistant caches its context, and cached tokens
+# are not billed at the input rate: writing a cache entry costs 1.25x the input
+# rate, reading one 0.1x. A model we don't price is still counted, with its
+# tokens recorded and no cost added — a number that is wrong is worse than one
+# that is missing.
+_PRICES = {                      # model -> (input $/1M, output $/1M)
+    "claude-sonnet-5": (2.00, 10.00),
+    "claude-haiku-4-5": (1.00, 5.00),
+}
+_CACHE_WRITE_RATE, _CACHE_READ_RATE = 1.25, 0.10
+USAGE_FILE = CONFIG_DIR / "usage.json"
+_USAGE_LOCK = threading.Lock()
+
+
+def _this_month():
+    return datetime.now().strftime("%Y-%m")
+
+
+def _empty_usage():
+    return {"month": _this_month(), "cost": 0.0, "input_tokens": 0,
+            "output_tokens": 0, "calls": {}, "unpriced_calls": 0}
+
+
+def load_usage():
+    """This month's spend. A new month starts from zero; last month's total is
+    not kept — this exists to answer "what is this costing me", not to be an
+    accounting record."""
+    try:
+        data = json.loads(USAGE_FILE.read_text())
+        if isinstance(data, dict) and data.get("month") == _this_month():
+            return {**_empty_usage(), **data}
+    except Exception:
+        pass
+    return _empty_usage()
+
+
+def record_usage(model, feature, input_tokens, output_tokens,
+                 cache_write_tokens=0, cache_read_tokens=0):
+    """Add one call to this month's total. Never raises: a failure to write the
+    tally must not break the feature the user asked for."""
+    try:
+        with _USAGE_LOCK:
+            u = load_usage()
+            price = _PRICES.get(model)
+            if price:
+                u["cost"] += (
+                    (input_tokens / 1e6) * price[0]
+                    + (cache_write_tokens / 1e6) * price[0] * _CACHE_WRITE_RATE
+                    + (cache_read_tokens / 1e6) * price[0] * _CACHE_READ_RATE
+                    + (output_tokens / 1e6) * price[1])
+            else:
+                u["unpriced_calls"] += 1
+            u["input_tokens"] += int(input_tokens or 0) + int(cache_write_tokens or 0) + int(cache_read_tokens or 0)
+            u["output_tokens"] += int(output_tokens or 0)
+            u["calls"][feature] = u["calls"].get(feature, 0) + 1
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            USAGE_FILE.write_text(json.dumps(u, indent=2))
+            return u
+    except Exception:
+        return None
+
+
+def ai_cap():
+    """The monthly ceiling in USD, or 0.0 for no ceiling."""
+    try:
+        return max(0.0, float(CONFIG.get("ai_monthly_cap") or 0))
+    except Exception:
+        return 0.0
+
+
+def ai_over_cap():
+    cap = ai_cap()
+    return bool(cap) and load_usage()["cost"] >= cap
+
+
+def _over_cap_message():
+    return (f"This month's AI spending has reached the ${ai_cap():.2f} limit you set. "
+            "Raise it in Settings, or leave it and MedSearch keeps searching without AI.")
+
+
 def _anthropic_key():
     return (CONFIG.get("anthropic_api_key") or "").strip()
 
@@ -654,10 +782,12 @@ def _api_error_text(e):
         except Exception: msg += detail[:200]
     return msg
 
-def claude_text(payload, timeout=30):
+def claude_text(payload, timeout=30, feature="other"):
     """One non-streaming call; returns the reply text. Raises RuntimeError."""
     if not _anthropic_key():
         raise RuntimeError("No Anthropic API key set.")
+    if ai_over_cap():
+        raise RuntimeError(_over_cap_message())
     try:
         with _anthropic_open(payload, timeout) as r:
             data = json.loads(r.read().decode())
@@ -665,12 +795,17 @@ def claude_text(payload, timeout=30):
         raise RuntimeError(_api_error_text(e))
     except Exception as e:
         raise RuntimeError(f"Anthropic request failed: {e}")
+    usage = data.get("usage") or {}
+    record_usage(payload.get("model"), feature,
+                 usage.get("input_tokens", 0), usage.get("output_tokens", 0),
+                 usage.get("cache_creation_input_tokens", 0),
+                 usage.get("cache_read_input_tokens", 0))
     if data.get("stop_reason") == "refusal":
         raise RuntimeError("The model declined this request.")
     return "".join(b.get("text", "") for b in data.get("content", [])
                    if b.get("type") == "text").strip()
 
-def claude_stream(payload, timeout=120):
+def claude_stream(payload, timeout=120, feature="other"):
     """
     Stream one call as our own SSE events: {"type":"chunk"} per text delta,
     {"type":"error"} on failure, and always a final {"type":"done"}.
@@ -683,7 +818,14 @@ def claude_stream(payload, timeout=120):
         yield _sse({"type": "error", "text": "AI features are turned off. Turn them on with AI on/off in the bottom bar."})
         yield _sse({"type": "done"})
         return
+    if ai_over_cap():
+        yield _sse({"type": "error", "text": _over_cap_message()})
+        yield _sse({"type": "done"})
+        return
     payload = dict(payload, stream=True)
+    # The tokens are reported in two places: the input count when the message
+    # starts, the output count as it ends.
+    used_in = used_out = used_cache_write = used_cache_read = 0
     try:
         with _anthropic_open(payload, timeout) as r:
             for raw in r:
@@ -693,6 +835,13 @@ def claude_stream(payload, timeout=120):
                 try: ev = json.loads(line[5:].strip())
                 except Exception: continue
                 kind = ev.get("type")
+                if kind == "message_start":
+                    u0 = ((ev.get("message") or {}).get("usage") or {})
+                    used_in = u0.get("input_tokens", 0)
+                    used_cache_write = u0.get("cache_creation_input_tokens", 0)
+                    used_cache_read = u0.get("cache_read_input_tokens", 0)
+                elif kind == "message_delta":
+                    used_out = (ev.get("usage") or {}).get("output_tokens", used_out)
                 if kind == "content_block_delta":
                     delta = ev.get("delta") or {}
                     if delta.get("type") == "text_delta" and delta.get("text"):
@@ -708,6 +857,9 @@ def claude_stream(payload, timeout=120):
         yield _sse({"type": "error", "text": _api_error_text(e)})
     except Exception as e:
         yield _sse({"type": "error", "text": f"Request failed: {e}"})
+    if used_in or used_out or used_cache_read or used_cache_write:
+        record_usage(payload.get("model"), feature, used_in, used_out,
+                     used_cache_write, used_cache_read)
     yield _sse({"type": "done"})
 
 def ai_oneliner(title, abstract):
@@ -717,7 +869,8 @@ def ai_oneliner(title, abstract):
               "In exactly one sentence (≤25 words), state the key finding. No preamble.")
     try:
         return claude_text({"model": MODEL_FAST, "max_tokens": 80,
-                            "messages": [{"role": "user", "content": prompt}]}) or None
+                            "messages": [{"role": "user", "content": prompt}]},
+                           feature="summaries") or None
     except Exception:
         # one-liners fail silently (don't spam errors per article); synthesis surfaces them
         return None
@@ -742,7 +895,8 @@ def ai_synthesis_stream(query, articles):
               "Reference articles by [number]. Do not rely on any article marked [RETRACTED]; "
               "if one is relevant, say that it was retracted.")
     yield from claude_stream({"model": MODEL_MAIN, "max_tokens": 2000, **_NO_THINKING,
-                              "messages": [{"role": "user", "content": prompt}]}, timeout=120)
+                              "messages": [{"role": "user", "content": prompt}]},
+                             timeout=120, feature="syntheses")
 
 def ai_explain_stream(article):
     note = ("\nNOTE: this paper has been RETRACTED. Say so first, and treat its findings accordingly.\n"
@@ -754,7 +908,8 @@ def ai_explain_stream(article):
               "1. Research question and why it matters\n2. Methodology\n"
               "3. Main findings\n4. Limitations and biases\n5. Clinical implications")
     yield from claude_stream({"model": MODEL_MAIN, "max_tokens": 1500, **_NO_THINKING,
-                              "messages": [{"role": "user", "content": prompt}]}, timeout=120)
+                              "messages": [{"role": "user", "content": prompt}]},
+                             timeout=120, feature="explanations")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  AI ASSISTANT  (content-aware clinical chat, grounded in current results)
@@ -818,7 +973,8 @@ def assistant_chat_stream(messages, query, articles):
          "cache_control": {"type": "ephemeral"}},
     ]
     yield from claude_stream({"model": MODEL_MAIN, "max_tokens": 1024, **_NO_THINKING,
-                              "system": system_blocks, "messages": messages}, timeout=120)
+                              "system": system_blocks, "messages": messages},
+                             timeout=120, feature="questions")
 
 def assistant_suggestions(query, articles):
     """Generate 3-4 short follow-up questions based on the current search."""
@@ -835,7 +991,8 @@ def assistant_suggestions(query, articles):
     )
     try:
         text = claude_text({"model": MODEL_FAST, "max_tokens": 250,
-                            "messages": [{"role": "user", "content": prompt}]})
+                            "messages": [{"role": "user", "content": prompt}]},
+                           feature="suggestions")
         text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
         arr = json.loads(text)
         if isinstance(arr, list):
@@ -1664,6 +1821,15 @@ def focus_window():
         except Exception:
             pass
     return jsonify({"ok": w is not None})
+
+@app.route("/usage")
+def usage_report():
+    """What the AI has cost this month, for the Settings panel."""
+    u = load_usage()
+    return jsonify({"month": u["month"], "cost": round(u["cost"], 4),
+                    "calls": u["calls"], "unpriced_calls": u.get("unpriced_calls", 0),
+                    "cap": ai_cap(), "over_cap": ai_over_cap()})
+
 
 @app.route("/ai/toggle", methods=["POST"])
 def ai_toggle():
@@ -2579,6 +2745,11 @@ def settings():
             CONFIG["institution_proxies"] = cleaned
             # keep the legacy single field in sync with the first entry
             CONFIG["institution_proxy"] = cleaned[0]["url"] if cleaned else ""
+        if "ai_monthly_cap" in data:
+            try:
+                CONFIG["ai_monthly_cap"] = max(0.0, float(data["ai_monthly_cap"] or 0))
+            except Exception:
+                CONFIG["ai_monthly_cap"] = 0.0
         if "active_proxy" in data:
             try:
                 # -1 is a valid value meaning "no library / don't proxy"
@@ -2613,6 +2784,7 @@ def settings():
     # Non-string settings the UI needs back in full
     safe["institution_proxies"] = CONFIG.get("institution_proxies", [])
     safe["active_proxy"] = CONFIG.get("active_proxy", 0)
+    safe["ai_monthly_cap"] = ai_cap()
     safe["can_open_at_login"] = _open_at_login_supported()
     safe["open_at_login"] = _LOGIN_AGENT.exists()
     return jsonify(safe)
