@@ -1941,6 +1941,24 @@ def pending_search():
 
 # ── Auto-update routes ─────────────────────────────────────────────────────
 
+CHANGELOG_FILE = "CHANGELOG.md"
+GITHUB_RAW_CHANGELOG = GITHUB_RAW_VERSION.rsplit("/", 1)[0] + "/" + CHANGELOG_FILE
+
+
+def changelog_entry(text, version):
+    """The lines under `## <version>` in a CHANGELOG, as a list. Empty when the
+    file has no entry for it — a version with nothing written about it must not
+    invent anything."""
+    out, inside = [], False
+    for line in (text or "").splitlines():
+        if line.startswith("## "):          # a heading ends the previous entry
+            inside = line[3:].strip() == str(version).strip()
+            continue
+        if inside and line.strip().startswith("- "):
+            out.append(line.strip()[2:].strip())
+    return out[:8]
+
+
 @app.route("/update/check")
 def update_check():
     """Compare local VERSION with the one on GitHub. No git needed for the check."""
@@ -1951,6 +1969,11 @@ def update_check():
                         "local": local})
     remote = body.strip()
     update_available = _version_tuple(remote) > _version_tuple(local)
+    # What the new version changes, read from the same place it is published.
+    changes = []
+    if update_available:
+        notes, _ = http_get(GITHUB_RAW_CHANGELOG, timeout=8)
+        changes = changelog_entry(notes, remote)
     # Is this a git checkout? (update can only be applied if so)
     is_git = (APP_DIR_PATH / ".git").exists()
     return jsonify({
@@ -1959,6 +1982,7 @@ def update_check():
         "remote": remote,
         "update_available": update_available,
         "can_apply": is_git,
+        "changes": changes,
     })
 
 def _requirements_digest():
@@ -2484,6 +2508,35 @@ def _scihub_urls_for(url):
             return list(a.get("scihub") or [])
     return []
 
+def _mirror_base(url):
+    """The scheme and host of a mirror URL, e.g. https://sci-hub.ru/10.x → https://sci-hub.ru"""
+    try:
+        p = urllib.parse.urlsplit(url)
+        return f"{p.scheme}://{p.netloc}" if p.scheme and p.netloc else ""
+    except Exception:
+        return ""
+
+
+def _promote_mirror(base):
+    """Put the mirror that just worked at the head of the list, and remember it.
+
+    Mirrors go down and stay down (sci-hub.se was blocked in January and the
+    order had to be corrected by hand). This reorders from what actually
+    happened — the fetch the user asked for — so nothing extra is requested,
+    and the next article starts with the mirror that answered last time."""
+    if not base:
+        return
+    mirrors = list(CONFIG.get("scihub_mirrors") or DEFAULTS["scihub_mirrors"])
+    if base not in mirrors or mirrors[0] == base:
+        return
+    mirrors.remove(base)
+    CONFIG["scihub_mirrors"] = [base] + mirrors
+    try:
+        save_config(CONFIG)
+    except Exception:
+        pass
+
+
 def _try_scihub_chain(mirrors):
     """
     Try each Sci-Hub mirror in turn: fetch the page, extract the embedded PDF,
@@ -2493,12 +2546,14 @@ def _try_scihub_chain(mirrors):
         try:
             data, ctype = _fetch_url_bytes(m)
             if ("pdf" in ctype) or data[:5] == b"%PDF-":
+                _promote_mirror(_mirror_base(m))
                 return data, ctype
             html_text = data.decode("utf-8", errors="replace")
             pdf_url = _extract_scihub_pdf_url(html_text, m)
             if pdf_url:
                 pdata, pctype = _fetch_url_bytes(pdf_url, referer=m)
                 if ("pdf" in pctype) or pdata[:5] == b"%PDF-":
+                    _promote_mirror(_mirror_base(m))
                     return pdata, pctype
         except Exception:
             continue   # try the next mirror

@@ -85,7 +85,8 @@ dependencies and restarts the app. Nothing else needs doing: the launcher and th
 item are part of what updates.
 
 A new version is offered only when `VERSION` goes up, so a change meant to reach other
-Macs is released by raising it.
+Macs is released by raising it — with its lines added to [`CHANGELOG.md`](CHANGELOG.md),
+which is what the update prompt shows before anyone accepts it.
 
 ## Other ways to run it
 
@@ -177,6 +178,7 @@ MedSearch-by-RN/
 ├── render_icon.py            draws the app icon's artwork (icon.icns is built from it)
 ├── render_menubar_icon.py    draws the menu bar glyph's variants (menubar_icon.png)
 ├── setup_main.py             optional self-contained bundle (py2app)
+├── CHANGELOG.md              what each version changed (shown in the update prompt)
 └── VERSION                   what the update check compares
 ```
 

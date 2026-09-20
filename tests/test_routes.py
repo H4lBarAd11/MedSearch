@@ -596,3 +596,88 @@ def test_the_limit_is_saved_from_settings(client, auth):
     assert client.get("/settings", headers=auth, base_url=BASE).json["ai_monthly_cap"] == 12.5
     client.post("/settings", json={"ai_monthly_cap": "rubbish"}, headers=auth, base_url=BASE)
     assert A.CONFIG["ai_monthly_cap"] == 0.0
+
+
+# ── What a new version changes, and mirrors that learn ─────────────────────
+
+CHANGELOG = """# What changed
+
+## 1.5
+
+- Keys in the Keychain.
+- A monthly limit for the AI.
+
+## 1.4
+
+- The menu bar item is part of MedSearch now.
+"""
+
+
+def test_the_entry_for_a_version_is_read_from_the_changelog():
+    assert A.changelog_entry(CHANGELOG, "1.5") == ["Keys in the Keychain.",
+                                                   "A monthly limit for the AI."]
+    assert A.changelog_entry(CHANGELOG, "1.4") == ["The menu bar item is part of MedSearch now."]
+
+
+def test_a_version_with_nothing_written_about_it_invents_nothing():
+    assert A.changelog_entry(CHANGELOG, "9.9") == []
+    assert A.changelog_entry("", "1.5") == []
+    assert A.changelog_entry(None, "1.5") == []
+
+
+def test_the_update_check_reports_what_changed(client, auth, monkeypatch):
+    calls = []
+
+    def fake_get(url, timeout=8):
+        calls.append(url)
+        return ("9.9\n" if url.endswith("VERSION") else CHANGELOG.replace("1.5", "9.9")), 200
+    monkeypatch.setattr(A, "http_get", fake_get)
+    r = client.get("/update/check", headers=auth, base_url=BASE).json
+    assert r["update_available"] is True
+    assert r["changes"] == ["Keys in the Keychain.", "A monthly limit for the AI."]
+    assert any(c.endswith("CHANGELOG.md") for c in calls)
+
+
+def test_no_changelog_is_fetched_when_there_is_nothing_to_update(client, auth, monkeypatch):
+    """The check runs at every launch: it must not fetch what it cannot use."""
+    calls = []
+
+    def fake_get(url, timeout=8):
+        calls.append(url)
+        return A.get_local_version(), 200
+    monkeypatch.setattr(A, "http_get", fake_get)
+    r = client.get("/update/check", headers=auth, base_url=BASE).json
+    assert r["update_available"] is False and r["changes"] == []
+    assert not any(c.endswith("CHANGELOG.md") for c in calls)
+
+
+def test_the_mirror_that_worked_moves_to_the_front(monkeypatch):
+    A.CONFIG["scihub_mirrors"] = ["https://dead.example", "https://alive.example"]
+    monkeypatch.setattr(A, "save_config", lambda cfg: None)
+
+    def fetch(url, referer=None):
+        if "dead" in url:
+            raise RuntimeError("no answer")
+        return b"%PDF-1.7 ...", "application/pdf"
+    monkeypatch.setattr(A, "_fetch_url_bytes", fetch)
+
+    got = A._try_scihub_chain(["https://dead.example/10.1/x", "https://alive.example/10.1/x"])
+    assert got is not None
+    assert A.CONFIG["scihub_mirrors"][0] == "https://alive.example"
+
+
+def test_a_mirror_that_is_not_ours_is_not_added(monkeypatch):
+    A.CONFIG["scihub_mirrors"] = ["https://one.example", "https://two.example"]
+    monkeypatch.setattr(A, "save_config", lambda cfg: None)
+    A._promote_mirror("https://somewhere.else")
+    A._promote_mirror("")
+    assert A.CONFIG["scihub_mirrors"] == ["https://one.example", "https://two.example"]
+
+
+def test_the_order_is_left_alone_when_the_first_mirror_works(monkeypatch):
+    A.CONFIG["scihub_mirrors"] = ["https://one.example", "https://two.example"]
+    saved = []
+    monkeypatch.setattr(A, "save_config", lambda cfg: saved.append(cfg))
+    A._promote_mirror("https://one.example")
+    assert A.CONFIG["scihub_mirrors"] == ["https://one.example", "https://two.example"]
+    assert saved == []          # nothing to write
