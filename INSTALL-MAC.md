@@ -27,13 +27,31 @@ That's the whole install.
 ## Daily use (what the doctors do)
 
 **Double-click the MedSearch icon on the Desktop.** The app opens in its own
-window — no Terminal, no black window, nothing else to see or close. Quit it like
-any app (⌘Q or close the window).
+window — no Terminal, no black window, nothing else to see or close.
+
+**Closing the window does not quit MedSearch:** it keeps running in the menu bar
+(the small book-and-magnifier icon at the top of the screen), so a search can be
+started from anywhere. That menu has the quick search, the recent searches, the
+default database, *Open MedSearch window*, and *Quit MedSearch*. To quit for
+real: that Quit, or ⌘Q.
+
+**Optional:** *Settings ▸ Open at login* makes MedSearch start with the Mac,
+window closed, waiting in the menu bar.
 
 ## Notes
 
 - The Desktop app is a thin launcher that runs MedSearch from this git clone, so
-  the in-app **Update now** prompt still works (it does a `git pull`).
+  the in-app **Update now** prompt still works (it does a `git pull`). One app,
+  one update: the menu bar item is part of MedSearch, not a second program.
+  (Up to 1.3 it was a separate "MedSearch Menu Bar.app". If that is still
+  installed on a machine, delete it from `/Applications` and remove it from
+  **System Settings ▸ General ▸ Login Items**.)
+- **Updating from 1.3 or earlier:** the first start after the update rewrites
+  the Desktop launcher, so that macOS shows the app as *MedSearch* rather than
+  *Python*, and gives it the current icon. macOS may ask once whether Python may
+  access the Desktop folder — that request is this rewrite; allowing it is the
+  simplest answer, and re-running `Create Desktop App.command` does the same
+  job if it was refused.
 - Keep the cloned folder in a fixed location. If you ever **move or rename** it,
   re-run `Create Desktop App.command` to rebuild the Desktop app against the new
   path.
