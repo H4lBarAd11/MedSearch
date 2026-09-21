@@ -4,6 +4,11 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.10
+
+- Scopus now says when an API key is wrong instead of sending you to the VPN. A mistyped key and an off-campus connection used to give the same message.
+- Web of Science's refusal message now mentions a subscription still awaiting approval.
+
 ## 1.9
 
 - The menu bar icon is back. macOS was refusing it to the process it starts MedSearch as; MedSearch now starts a step out of the way, which it does not refuse. Nothing else changes — it is still MedSearch in the Dock and the app switcher.
