@@ -34,6 +34,7 @@ class _Item:
     def __init__(self, on_bar=True, x=1113.0): self.button_ = _Button(_Window(on_bar, x))
     def button(self): return self.button_
     def isVisible(self): return True
+    def setVisible_(self, on): self.button_._window.visible = bool(on)   # what AppKit does
     def leave_the_bar(self): self.button_._window.visible = False
     def find_no_room(self): self.button_._window._frame.origin.x = 0
 
@@ -44,6 +45,7 @@ class _Host:
         self.item, self.log_path = _Item(on_bar, x), None
         self._last_state, self._misses, self._noroom, self.rebuilds = None, 0, 0, 0
         self.lines, self.made = [], 0
+        self._tucked, self.front = False, False
 
     # the real ones under test
     on_the_bar = SB.StatusBar.on_the_bar
@@ -51,6 +53,8 @@ class _Host:
     _x = SB.StatusBar._x
     _watch = SB.StatusBar._watch
     _try_again = SB.StatusBar._try_again
+    _sync_item = SB.StatusBar._sync_item
+    def _in_front(self): return self.front
 
     def _log(self, line): self.lines.append(line)
     def _make_item(self): self.made += 1; self.item = _Item(True)   # a new item gets a slot
@@ -145,3 +149,63 @@ def test_the_first_reading_of_all_is_never_believed():
     host.item.button_._window._frame.origin.x = 1113    # laid out, as it would be
     host._watch()
     assert host.made == 0
+
+
+# ── opening the app again while it runs ─────────────────────────────────────
+
+def test_a_reopen_event_shows_the_window():
+    shown = []
+    target = SB._Target.alloc().initWithHost_(type("Host", (), {"show": lambda self: shown.append(1)})())
+    target.reopen_withReplyEvent_(None, None)
+    assert shown == [1]
+
+
+def test_the_handler_is_registered_for_the_reopen_event(monkeypatch):
+    import Foundation
+    calls = []
+
+    class _Manager:
+        @classmethod
+        def sharedAppleEventManager(cls): return cls()
+        def setEventHandler_andSelector_forEventClass_andEventID_(self, target, sel, cls, eid):
+            calls.append((target, sel, cls, eid))
+
+    # The name, not the class: an Objective-C class method cannot be patched.
+    monkeypatch.setattr(Foundation, "NSAppleEventManager", _Manager)
+    target = SB._Target.alloc().initWithHost_(object())
+    SB._answer_reopen(target)
+    # kCoreEventClass 'aevt' and kAEReopenApplication 'rapp', as four-char codes.
+    assert calls == [(target, b"reopen:withReplyEvent:", 0x61657674, 0x72617070)]
+    assert target.respondsToSelector_(b"reopen:withReplyEvent:")
+
+
+# ── off the bar while MedSearch is the app in front ─────────────────────────
+
+def test_the_icon_leaves_when_medsearch_is_in_front_and_returns_after():
+    host = _Host()
+    host.front = True;  host._sync_item()
+    assert host._tucked and host.on_the_bar() is False
+    host.front = False; host._sync_item()
+    assert not host._tucked and host.on_the_bar() is True
+    assert host.made == 0                      # the same item throughout, never rebuilt
+
+
+def test_an_icon_away_on_purpose_is_not_rescued():
+    """Off the bar is exactly what the watcher exists to undo. Without standing
+    down it would rebuild the item three seconds after every switch to MedSearch."""
+    host = _Host()
+    host.front = True; host._sync_item()
+    for _ in range(5):
+        host._watch()
+    assert host.made == 0 and host.lines == []
+
+
+def test_a_refused_return_is_still_noticed():
+    """Coming back is a fresh request for a slot. If macOS refuses it (x=0) the
+    watcher must pick that up as it does at launch."""
+    host = _Host()
+    host.front = True;  host._sync_item()
+    host.front = False; host._sync_item()
+    host.item.find_no_room()
+    host._watch(); host._watch()
+    assert host.made == 1

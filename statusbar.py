@@ -101,6 +101,16 @@ class _Target(NSObject):
     def quit_(self, sender):
         NSApp.terminate_(None)
 
+    # The "reopen" Apple event, see `_answer_reopen`.
+    @objc.typedSelector(b"v@:@@")
+    def reopen_withReplyEvent_(self, event, reply):
+        self.host.show()
+
+    # MedSearch came to the front or left it, or its window was minimised or
+    # brought back: all four change whether the icon belongs on the bar.
+    def frontChanged_(self, note):
+        self.host._sync_item()
+
     # NSMenuDelegate: rebuilt each time it opens, so recents are never stale.
     def menuNeedsUpdate_(self, menu):
         self.host.fill(menu)
@@ -121,6 +131,7 @@ class StatusBar:
         self._misses = 0                        # consecutive checks that found it gone
         self._noroom = 0                        # consecutive checks that found no slot
         self.rebuilds = 0                       # how often it has had to be put back
+        self._tucked = False                    # off the bar on purpose, see `_sync_item`
         self._make_item()
         self._watch()
 
@@ -153,6 +164,8 @@ class StatusBar:
         self.menu.setAutoenablesItems_(False)
         self.fill(self.menu)
         self.item.setMenu_(self.menu)
+        if self._tucked:
+            self.item.setVisible_(False)
 
     def on_the_bar(self):
         """Is the item actually on the menu bar?
@@ -176,7 +189,7 @@ class StatusBar:
         """Build the item again. Only if it really went, unless forced — an item
         that was refused a slot is still "there", and asking again is the only
         way to get one."""
-        if not force and self.on_the_bar():
+        if not force and (self._tucked or self.on_the_bar()):
             return
         old, self.item = self.item, None
         if old is not None:
@@ -261,6 +274,10 @@ class StatusBar:
 
         Only changes are written down, so a quiet day leaves a line or two and
         the day it goes leaves the moment it went."""
+        if self._tucked:                         # away on purpose: nothing to put back
+            self._misses = self._noroom = 0
+            AppHelper.callLater(_CHECK_EVERY, self._watch)
+            return
         try:
             state = self._state()
             on_bar, x = state[0], state[1]
@@ -308,6 +325,40 @@ class StatusBar:
         self._reseat(force=True)
         self._last_state = self._state()
         self._log("   -> on bar=%s  x=%s  visible=%s  policy=%s" % self._last_state)
+
+    # ── off the bar while MedSearch is the app in front ─────────────────────
+    def _in_front(self):
+        """MedSearch is the active app AND its window is there to be used. Active
+        alone is not enough: the quick-search box makes MedSearch active with the
+        window still hidden, and that is exactly when the icon is the only way in."""
+        try:
+            w = self._ns_window()
+            return bool(NSApp.isActive() and w is not None
+                        and w.isVisible() and not w.isMiniaturized())
+        except Exception:
+            return False
+
+    def _sync_item(self):
+        """The icon leaves the bar while MedSearch is in front, and returns when it
+        is not (his choice, 21 Sep: in front, not merely open — with the window open
+        behind another app the icon is there).
+
+        `setVisible_`, not remove-and-rebuild: the same item, its menu and its
+        autosave name stay, so it comes back where he left it. It still gives the
+        slot up, and coming back is a fresh request that a full bar can refuse —
+        that case is not handled here; `_watch` picks it up as it does at launch
+        (x=0, asks again). While it is away on purpose the watcher and `_reseat`
+        stand down, or they would "rescue" it every three seconds."""
+        want = self._in_front()
+        if want == self._tucked or self.item is None:
+            return
+        self._tucked = want
+        self._misses = self._noroom = 0
+        try:
+            self.item.setVisible_(not want)
+        except Exception as e:
+            self._tucked = False
+            self._log(f"could not {'hide' if want else 'show'} the item: {e}")
 
     # ── the menu ────────────────────────────────────────────────────────────
     def _add(self, menu, title, action=None, obj=None, checked=False):
@@ -368,6 +419,7 @@ class StatusBar:
                 w.deminiaturize_(None)
             w.makeKeyAndOrderFront_(None)
         NSApp.activateIgnoringOtherApps_(True)
+        AppHelper.callAfter(self._sync_item)
         return w is not None
 
     def hide(self):
@@ -381,6 +433,7 @@ class StatusBar:
         # look like "something is still on screen".
         if not self._other_windows_visible():
             self._set_policy(_ACCESSORY)
+        self._sync_item()
 
     def _other_windows_visible(self):
         try:
@@ -439,12 +492,61 @@ class StatusBar:
         return False
 
 
+def _fourcc(code):
+    return int.from_bytes(code.encode("ascii"), "big")
+
+
+def _answer_reopen(target):
+    """Opening MedSearch while it is already running brings the window back.
+
+    A SECOND LAUNCH NEVER REACHES launcher.sh (seen 21 Sep). The running process
+    lives inside MedSearch.app, so LaunchServices knows it as that app — lsappinfo
+    lists it under the launcher's bundle id — and opening the app again from
+    Spotlight, Launchpad or Finder does not start anything: macOS sends the running
+    copy a "reopen" Apple event and considers the job done. The /focus handoff in
+    app.py is only reached by a start that bypasses LaunchServices (a terminal).
+    Nothing answered the event, because pywebview's app delegate has no
+    applicationShouldHandleReopen, so with the window hidden in the menu bar
+    nothing happened at all.
+
+    The event is answered directly rather than by adding a method to pywebview's
+    delegate class, which is theirs to change. Installed after launch, so it
+    replaces the handler AppKit registered for the same event; `show` does what
+    that one did (un-minimise, bring forward) and also undoes a hide."""
+    from Foundation import NSAppleEventManager
+    NSAppleEventManager.sharedAppleEventManager() \
+        .setEventHandler_andSelector_forEventClass_andEventID_(
+            target, b"reopen:withReplyEvent:", _fourcc("aevt"), _fourcc("rapp"))
+
+
+def _hear_front_changes(host):
+    """Tell `_sync_item` whenever the answer to "is MedSearch in front?" can change."""
+    from Foundation import NSNotificationCenter
+    center = NSNotificationCenter.defaultCenter()
+    for name in ("NSApplicationDidBecomeActiveNotification",
+                 "NSApplicationDidResignActiveNotification"):
+        center.addObserver_selector_name_object_(host.target, b"frontChanged:", name, None)
+    window = host._ns_window()
+    for name in ("NSWindowDidMiniaturizeNotification",
+                 "NSWindowDidDeminiaturizeNotification"):
+        center.addObserver_selector_name_object_(host.target, b"frontChanged:", name, window)
+
+
 def install(window, *, background=False, **kwargs):
     """Create the menu bar item. Call on the main thread, once the window exists.
     `background` starts with the window hidden (MedSearch opened at login)."""
     global _host
     _host = StatusBar(window, **kwargs)
     window.events.closing += _host.closing
+    try:
+        _answer_reopen(_host.target)
+    except Exception as e:                       # the item still works without it
+        _host._log(f"reopen handler not installed: {e}")
+    try:
+        _hear_front_changes(_host)
+    except Exception as e:                       # then the icon simply stays
+        _host._log(f"front/back notifications not installed: {e}")
     if background:
         _host.hide()
+    _host._sync_item()          # it may already be in front: that notification has gone
     return _host
