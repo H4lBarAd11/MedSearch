@@ -205,3 +205,38 @@ def test_enrichment_is_cached_per_doi(monkeypatch):
         A.enrich_access([a])
         assert a["access_kind"] == "open"
     assert calls == ["10.1/cached"]
+
+
+# ── Scopus: why a request was refused ───────────────────────────────────────
+
+def test_scopus_says_the_key_is_wrong_when_elsevier_says_so(monkeypatch):
+    import pytest
+    monkeypatch.setitem(A.CONFIG, "scopus_api_key", "not-a-real-key")
+    body = {"error-response": {"error-code": "APIKEY_INVALID",
+                               "error-message": "The provided apiKey is invalid."}}
+    monkeypatch.setattr(A, "fetch_json", lambda *a, **k: (body, 401))
+    with pytest.raises(RuntimeError) as e:
+        A.search_scopus("awake craniotomy", 5, None, None)
+    assert "does not recognise this API key" in str(e.value)
+    assert "campus" not in str(e.value)
+
+
+def test_scopus_points_to_the_network_for_any_other_401(monkeypatch):
+    import pytest
+    monkeypatch.setitem(A.CONFIG, "scopus_api_key", "0" * 32)
+    for body in ({"service-error": {"status": {"statusCode": "AUTHORIZATION_ERROR"}}}, None):
+        monkeypatch.setattr(A, "fetch_json", lambda *a, _b=body, **k: (_b, 401))
+        with pytest.raises(RuntimeError) as e:
+            A.search_scopus("awake craniotomy", 5, None, None)
+        assert "campus" in str(e.value)
+
+
+def test_an_error_body_is_only_returned_when_asked_for(monkeypatch):
+    import io, urllib.error
+    def refuse(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(b'{"why":"x"}'))
+    monkeypatch.setattr(A.urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(A, "_throttle", lambda url: None)
+    assert A.http_get("https://api.example/x") == (None, 401)
+    assert A.http_get("https://api.example/x", error_body=True) == ('{"why":"x"}', 401)
+    assert A.fetch_json("https://api.example/x", error_body=True) == ({"why": "x"}, 401)

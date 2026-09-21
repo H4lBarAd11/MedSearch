@@ -356,7 +356,10 @@ def _contact_email():
     """The user's own address for polite-pool APIs (NCBI, Crossref), or None."""
     return (CONFIG.get("unpaywall_email") or "").strip() or None
 
-def http_get(url, headers=None, timeout=TIMEOUT):
+def http_get(url, headers=None, timeout=TIMEOUT, error_body=False):
+    """error_body=True also returns what the server said alongside an HTTP error.
+    Opt-in, because most callers read a body as "it worked"; the ones that ask
+    for it check the status first and use the body to say WHY it was refused."""
     req = urllib.request.Request(url, headers=headers or {
         "User-Agent": "MedSearch/1.0 (academic literature search)"})
     for attempt in (1, 2):
@@ -368,13 +371,16 @@ def http_get(url, headers=None, timeout=TIMEOUT):
             if e.code == 429 and attempt == 1:
                 time.sleep(1.0)
                 continue
+            if error_body:
+                try: return e.read().decode("utf-8", errors="replace"), e.code
+                except Exception: pass
             return None, e.code
         except Exception:
             return None, 0
     return None, 0
 
-def fetch_json(url, headers=None, timeout=TIMEOUT):
-    body, status = http_get(url, headers, timeout=timeout)
+def fetch_json(url, headers=None, timeout=TIMEOUT, error_body=False):
+    body, status = http_get(url, headers, timeout=timeout, error_body=error_body)
     if body:
         try: return json.loads(body), status
         except Exception: pass
@@ -1429,13 +1435,22 @@ def search_scopus(query, max_r, y_from, y_to, sort="relevance", offset=0):
     sort_p = "&sort=-coverDate" if sort == "date" else "&sort=relevancy"
     url = (f"https://api.elsevier.com/content/search/scopus"
            f"?query={urllib.parse.quote(query+dr)}&start={offset}&count={max_r}{sort_p}")
-    data, status = fetch_json(url, headers=headers)
+    data, status = fetch_json(url, headers=headers, error_body=True)
     if status != 200:
         # Surface a clear, actionable error instead of failing silently
         if status == 401:
-            raise RuntimeError("Scopus rejected the request (401). The API key may be wrong, "
-                               "or you're off your institution's network — Scopus needs you on "
-                               "the campus IP range, or an institutional token (set in Settings).")
+            # A 401 has two unrelated causes and Elsevier says which: a key it does
+            # not know (APIKEY_INVALID), or a good key used from outside the
+            # subscriber's network. Sending someone to the VPN over a mistyped key
+            # costs them an afternoon.
+            err = (data or {}).get("error-response") or {}
+            if err.get("error-code") == "APIKEY_INVALID":
+                raise RuntimeError("Scopus does not recognise this API key (401). A Scopus key is "
+                                   "32 characters — copy it again from dev.elsevier.com and "
+                                   "re-enter it in Settings.")
+            raise RuntimeError("Scopus rejected the request (401). The key is valid but not "
+                               "authorised from here — Scopus needs you on the campus IP range, "
+                               "or an institutional token (set in Settings).")
         if status == 403:
             raise RuntimeError("Scopus access forbidden (403). Your key may lack entitlement "
                                "for the Search API, or your subscription doesn't cover it.")
@@ -1478,7 +1493,9 @@ def search_wos(query, max_r, y_from, y_to, sort="relevance", offset=0):
     if status != 200:
         if status in (401, 403):
             raise RuntimeError(f"Web of Science rejected the request ({status}). The API key may "
-                               "be wrong/expired, or not entitled to the WoS Starter API.")
+                               "be wrong/expired, not entitled to the WoS Starter API, or its "
+                               "subscription may still be awaiting approval on "
+                               "developer.clarivate.com.")
         if status == 429:
             raise RuntimeError("Web of Science quota exceeded (429). Try again later.")
         raise RuntimeError(f"Web of Science returned HTTP {status or 'no answer'}.")
