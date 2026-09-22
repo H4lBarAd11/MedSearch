@@ -25,9 +25,17 @@
 # interpreter, so it is still MedSearch in the Dock and the app switcher — and
 # it gets its icon in the menu bar.
 # __PYVENV_LAUNCHER__ tells it which virtual environment it belongs to, exactly
-# as Python's own launcher does. The copy is refreshed whenever it differs, since
-# a Homebrew update replaces the original. If anything is missing, it falls
-# back to the plain start: MedSearch still opens, just filed under "Python".
+# as Python's own launcher does. The copy is refreshed whenever its original
+# changes, since a Homebrew update replaces it.
+#
+# APPLE'S PYTHON NEEDS ONE MORE STEP. The python3 of Apple's Command Line Tools
+# (what a Mac without Homebrew or python.org has, like the Monterey iMac) finds
+# its library by a path relative to itself (@executable_path/../../../../Python3),
+# so a copy moved into MedSearch.app cannot load and dies on the spot. Such
+# paths are rewritten to where the original found them, and the copy re-signed
+# (ad hoc) since the rewrite breaks Apple's signature. The copy is tried once
+# before it is used; if it cannot run, or anything is missing, MedSearch starts
+# the plain way: it still opens, just filed under "Python" or "python3".
 
 BUNDLE="$1"; shift
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,14 +55,32 @@ GUI_PY="$("$VENV_PY" -c 'import os, sys
 p = os.path.join(sys.base_prefix, "Resources", "Python.app", "Contents", "MacOS", "Python")
 print(p if os.path.isfile(p) else "")' 2>/dev/null)"
 OWN="$BUNDLE/Contents/MacOS/MedSearch-python"
+FROM="$BUNDLE/Contents/Resources/MedSearch-python.from"   # which original the copy is of
+
+# Runs, and inside the virtual environment (a copy that cannot load dies here).
+own_runs() { ( "$OWN" -c 'import sys; sys.exit(sys.prefix == sys.base_prefix)' ) >/dev/null 2>&1; }
+
+own_python() {
+  local lib
+  cp -f "$GUI_PY" "$OWN" 2>/dev/null || return 1
+  if ! own_runs; then
+    for lib in $(otool -L "$OWN" 2>/dev/null | awk 'NR > 1 && $1 ~ /^@(executable|loader)_path\// { print $1 }' | sort -u); do
+      install_name_tool -change "$lib" "$(dirname "$GUI_PY")/${lib#@*_path/}" "$OWN" 2>/dev/null || return 1
+    done
+    codesign -f -s - "$OWN" >/dev/null 2>&1 && own_runs || return 1
+  fi
+  echo "$STAMP" > "$FROM"
+}
 
 if [ -n "$GUI_PY" ] && [ -d "$BUNDLE/Contents/MacOS" ]; then
-  cmp -s "$GUI_PY" "$OWN" || cp -f "$GUI_PY" "$OWN" 2>/dev/null
-  if [ -x "$OWN" ]; then
-    export __PYVENV_LAUNCHER__="$VENV_PY"
+  export __PYVENV_LAUNCHER__="$VENV_PY"
+  STAMP="$GUI_PY $(stat -f '%m %z' "$GUI_PY")"
+  if { [ -x "$OWN" ] && [ "$(cat "$FROM" 2>/dev/null)" = "$STAMP" ]; } || own_python; then
     nohup "$OWN" "$DIR/app.py" "$@" >/dev/null 2>&1 &
     exit 0
   fi
+  rm -f "$OWN" "$FROM"
+  unset __PYVENV_LAUNCHER__
 fi
 nohup "$VENV_PY" "$DIR/app.py" "$@" >/dev/null 2>&1 &
 exit 0
