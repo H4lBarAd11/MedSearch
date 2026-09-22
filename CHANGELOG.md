@@ -4,6 +4,10 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.14
+
+- On Macs that use Apple's own Python, MedSearch now shows in the Dock under its name and icon instead of "python3" with a blank icon.
+
 ## 1.13
 
 - Web of Science now answers ordinary searches. It only accepted queries written in its own field syntax, so a plain search like "glioblastoma" was refused; MedSearch now searches titles, abstracts and keywords for you. Queries already written in Web of Science syntax (TI=, AU=, …) are sent as they are.
