@@ -1481,8 +1481,9 @@ def search_wos(query, max_r, y_from, y_to, sort="relevance", offset=0):
     key = (CONFIG.get("wos_api_key","") or "").strip()
     if not key:
         raise RuntimeError("No Web of Science API key set.")
-    # WoS Starter sortField: RS = Relevance, PY+D = Publication Year descending
-    sort_p = "&sortField=PY%2BD" if sort == "date" else "&sortField=RS"
+    # WoS Starter sortField must be "TAG DIRECTION": RS+D = relevance, PY+D =
+    # publication year descending. A bare "RS" is refused with HTTP 400.
+    sort_p = "&sortField=PY%2BD" if sort == "date" else "&sortField=RS%2BD"
     # WoS paginates by 1-indexed page of size `limit`. Offsets are always a
     # multiple of max_r, so this lands exactly on the next page.
     wos_page = (offset // max_r) + 1 if max_r else 1
@@ -1507,11 +1508,19 @@ def search_wos(query, max_r, y_from, y_to, sort="relevance", offset=0):
             continue
         names = [a.get("displayName", "") for a in h.get("names", {}).get("authors", [])
                  if a.get("displayName")]
-        doi = next((i.get("value") for i in h.get("identifiers", []) if i.get("type") == "doi"), None)
+        # WoS Starter returns identifiers as one dict ({"doi": …, "pmid": …}).
+        # Older responses gave a list of {"type", "value"}; accept both.
+        ids = h.get("identifiers") or {}
+        if isinstance(ids, list):
+            ids = {i.get("type"): i.get("value") for i in ids if isinstance(i, dict)}
+        cites = h.get("citations") or []
+        cited = next((c.get("count") for c in cites
+                      if isinstance(c, dict) and c.get("db") == "WOS"), None)
         results.append(_article(
             title=h.get("title", "No title"), authors=_short_authors(names),
-            author_list=names, year=year, journal=src.get("sourceTitle", ""), doi=doi,
-            abstract=h.get("abstract", ""), source="Web of Science"))
+            author_list=names, year=year, journal=src.get("sourceTitle", ""),
+            doi=ids.get("doi"), pmid=ids.get("pmid"), cited_by=cited,
+            abstract=h.get("abstract") or "", source="Web of Science"))
     return enrich_access(results), 0
 
 # Every source, in dedup-priority order: when two sources return the same
