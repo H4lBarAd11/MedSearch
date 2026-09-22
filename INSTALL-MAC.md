@@ -11,8 +11,8 @@ Terminal window, ever** — while still updating itself when the app offers
 
 1. **Clone the repo** somewhere permanent (e.g. the home folder):
    ```bash
-   git clone https://github.com/H4lBarAd11/MedSearch-by-RN.git
-   cd MedSearch-by-RN
+   git clone https://github.com/H4lBarAd11/MedSearch.git
+   cd MedSearch
    ```
 
 2. **Double-click `Create Desktop App.command`.** A Terminal window appears *just

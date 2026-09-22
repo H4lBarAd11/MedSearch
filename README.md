@@ -64,7 +64,7 @@ You need **Python 3.8+** and **Git**, both preinstalled on most Macs (or
 `xcode-select --install`).
 
 ```bash
-git clone https://github.com/H4lBarAd11/MedSearch-by-RN.git
+git clone https://github.com/H4lBarAd11/MedSearch.git
 ```
 
 Then double-click **`Create Desktop App.command`** in the new folder, once. It sets up the
@@ -91,7 +91,7 @@ which is what the update prompt shows before anyone accepts it.
 ## Other ways to run it
 
 ```bash
-cd MedSearch-by-RN
+cd MedSearch
 pip install -r requirements.txt
 python3 app.py
 ```
@@ -170,7 +170,7 @@ AI on, to the Anthropic API.
 ## Project layout
 
 ```
-MedSearch-by-RN/
+MedSearch/
 ├── app.py                    the backend (Flask) and the native window
 ├── statusbar.py              the macOS menu bar item
 ├── launcher.sh               how the Desktop app starts MedSearch (updates with it)

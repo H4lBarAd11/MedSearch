@@ -269,7 +269,7 @@ NATIONAL_GUIDELINE_BODIES = {
 # so read it from RESOURCE_DIR; fall back to the app dir for source checkouts.
 VERSION_FILE    = RESOURCE_DIR / "VERSION"
 # Raw GitHub URL for the VERSION file on the main branch
-GITHUB_RAW_VERSION = "https://raw.githubusercontent.com/H4lBarAd11/MedSearch-by-RN/main/VERSION"
+GITHUB_RAW_VERSION = "https://raw.githubusercontent.com/H4lBarAd11/MedSearch/main/VERSION"
 
 def get_local_version():
     try:
