@@ -1487,9 +1487,13 @@ def search_wos(query, max_r, y_from, y_to, sort="relevance", offset=0):
     # WoS paginates by 1-indexed page of size `limit`. Offsets are always a
     # multiple of max_r, so this lands exactly on the next page.
     wos_page = (offset // max_r) + 1 if max_r else 1
+    # Every WoS query needs a field tag ("TS=…"); plain words are refused with
+    # HTTP 400 (MISS_TAGEQ). Search topic (title, abstract, keywords) unless
+    # the user already wrote WoS syntax.
+    q = query if re.search(r"\b[A-Z]{2,3}\s*=", query) else f"TS=({query})"
     data, status = fetch_json(
         f"https://api.clarivate.com/apis/wos-starter/v1/documents"
-        f"?db=WOS&q={urllib.parse.quote(query)}&limit={max_r}&page={wos_page}{sort_p}",
+        f"?db=WOS&q={urllib.parse.quote(q)}&limit={max_r}&page={wos_page}{sort_p}",
         headers={"X-ApiKey": key})
     if status != 200:
         if status in (401, 403):
