@@ -509,6 +509,32 @@ def _pmc_pdf_url(pmcid):
         p = "PMC" + p
     return f"https://pmc.ncbi.nlm.nih.gov/articles/{p}/pdf/"
 
+# PMC answers programs with a proof-of-work JavaScript page, never the PDF, so a
+# server-side fetch of a PMC link cannot succeed. NCBI publishes the open-access
+# subset on AWS for exactly this; each article sits under PMCnnn.<version>/.
+PMC_OPENDATA = "https://pmc-oa-opendata.s3.amazonaws.com"
+_PMC_ARTICLE = re.compile(r"^/(?:pmc/)?articles/(?:PMC)?(\d+)(?:/|$)", re.I)
+
+def _pmc_id_of(url):
+    """The PMC id a PMC article or PDF link points at, or None for any other URL."""
+    u = urllib.parse.urlparse(url)
+    if (u.hostname or "").lower() not in ("pmc.ncbi.nlm.nih.gov", "www.ncbi.nlm.nih.gov",
+                                           "ncbi.nlm.nih.gov"):
+        return None
+    m = _PMC_ARTICLE.match(u.path)
+    return f"PMC{m.group(1)}" if m else None
+
+def _pmc_opendata_pdf(pmcid):
+    """The dataset's PDF of the latest version of `pmcid`, or None if it is not there."""
+    listing, _ = _fetch_url_bytes(f"{PMC_OPENDATA}/?list-type=2&prefix={pmcid}.&delimiter=/",
+                                  timeout=15)
+    versions = [int(v) for v in re.findall(rf"<Prefix>{pmcid}\.(\d+)/</Prefix>",
+                                           listing.decode("utf-8", "replace"))]
+    if not versions:
+        return None
+    v = max(versions)
+    return f"{PMC_OPENDATA}/{pmcid}.{v}/{pmcid}.{v}.pdf"
+
 def pmcids_for_dois(dois):
     """
     Resolve DOIs to PubMed Central ids with ONE call to NCBI's ID Converter
@@ -2640,17 +2666,32 @@ def pdf_proxy():
         return jsonify({"error":"URL not recognized from current results"}), 403
 
     try:
-        # ── Attempt 1: the requested URL directly ──────────────────────────
         primary_error = None
         data = ctype = None
         is_pdf = False
-        try:
-            data, ctype = _fetch_url_bytes(url)
-            is_pdf = ("pdf" in ctype) or data[:5] == b"%PDF-"
-        except urllib.error.HTTPError as e:
-            primary_error = e.code            # e.g. 403 from a publisher
-        except Exception:
-            primary_error = "fetch"
+
+        # ── Attempt 0: a PMC link, from NCBI's open-access dataset ─────────
+        #    PMC itself only ever returns its proof-of-work page to a program.
+        pmcid = _pmc_id_of(url)
+        if pmcid:
+            try:
+                src = _pmc_opendata_pdf(pmcid)
+                if src:
+                    got, _ = _fetch_url_bytes(src)
+                    if got[:5] == b"%PDF-":
+                        data, ctype, is_pdf = got, "application/pdf", True
+            except Exception:
+                pass                          # not in the dataset: the old path below
+
+        # ── Attempt 1: the requested URL directly ──────────────────────────
+        if not is_pdf:
+            try:
+                data, ctype = _fetch_url_bytes(url)
+                is_pdf = ("pdf" in ctype) or data[:5] == b"%PDF-"
+            except urllib.error.HTTPError as e:
+                primary_error = e.code            # e.g. 403 from a publisher
+            except Exception:
+                primary_error = "fetch"
 
         # ── If it's a Sci-Hub URL serving HTML, extract the embedded PDF ────
         if data is not None and not is_pdf and _is_scihub_url(url):
