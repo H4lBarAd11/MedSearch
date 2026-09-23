@@ -2,6 +2,8 @@
 the assistant, and the PDF proxy's allowlist."""
 import json
 
+import pytest
+
 import app as A
 from conftest import BASE, article, sse_events
 
@@ -257,6 +259,86 @@ def test_local_addresses_are_private():
     for host in ("localhost", "127.0.0.1", "10.0.0.5", "192.168.1.20", "printer.local", None):
         assert A._is_private_host(host), host
     assert not A._is_private_host("93.184.216.34")
+
+
+# ── PubMed Central PDFs ─────────────────────────────────────────────────────
+# PMC answers every program with a proof-of-work JavaScript page instead of the
+# PDF, so the viewer's server-side fetch never got one: it fell through to the
+# Sci-Hub mirrors for articles that are free, or dropped to the browser. NCBI's
+# open-access dataset on AWS is the route it documents for programs.
+
+POW_PAGE = b"<html><head><title>Preparing to download ...</title></head><body>POW CHALLENGE</body></html>"
+
+
+def _listing(pmcid, versions):
+    prefixes = "".join(f"<CommonPrefixes><Prefix>{pmcid}.{v}/</Prefix></CommonPrefixes>"
+                       for v in versions)
+    return (f"<ListBucketResult><Prefix>{pmcid}.</Prefix>{prefixes}</ListBucketResult>").encode()
+
+
+def _fake_pmc(monkeypatch, pmcid, versions, seen, scihub_allowed=False, pdf=b"%PDF-1.7 "):
+    def fetch(url, **k):
+        seen.append(url)
+        if url.startswith(A.PMC_OPENDATA + "/?"):
+            return _listing(pmcid, versions), "application/xml"
+        if url.startswith(A.PMC_OPENDATA + "/"):
+            return pdf + url.encode(), "binary/octet-stream"
+        return POW_PAGE, "text/html; charset=utf-8"
+    monkeypatch.setattr(A, "_fetch_url_bytes", fetch)
+    if scihub_allowed:
+        monkeypatch.setattr(A, "_try_scihub_chain", lambda mirrors: seen.append("sci-hub") or None)
+    else:
+        monkeypatch.setattr(A, "_try_scihub_chain", lambda mirrors: (_ for _ in ()).throw(
+            AssertionError("an open-access PMC article must not be fetched from Sci-Hub")))
+
+
+@pytest.mark.parametrize("link", [
+    "https://pmc.ncbi.nlm.nih.gov/articles/PMC7188715/pdf/",     # MedSearch's own PMC link
+    "https://www.ncbi.nlm.nih.gov/pmc/articles/7188715",         # the form Unpaywall returns
+])
+def test_an_open_access_pmc_article_opens_from_the_open_dataset(client, auth, monkeypatch, link):
+    A.SESSION["articles"] = [article(doi="10.1/oa", access_kind="open", access_link=link,
+                                     scihub=["https://sci-hub.ru/10.1/oa"])]
+    seen = []
+    _fake_pmc(monkeypatch, "PMC7188715", [1, 2], seen)
+    r = client.get("/pdf_proxy", query_string={"url": link}, headers=auth, base_url=BASE)
+    assert r.status_code == 200 and r.mimetype == "application/pdf"
+    assert r.data.endswith(b"/PMC7188715.2/PMC7188715.2.pdf"), "the latest version, not the first"
+    assert link not in seen, "the challenge page is not fetched when the dataset answers"
+
+
+def test_an_article_missing_from_the_dataset_takes_the_old_path(client, auth, monkeypatch):
+    """Only PMC's open-access subset is in the dataset. For the rest nothing changes,
+    including the Sci-Hub fallback, which stays by his decision of 23 September."""
+    link = "https://pmc.ncbi.nlm.nih.gov/articles/PMC7188715/pdf/"
+    A.SESSION["articles"] = [article(doi="10.1/oa", access_kind="open", access_link=link)]
+    seen = []
+    _fake_pmc(monkeypatch, "PMC7188715", [], seen, scihub_allowed=True)
+    r = client.get("/pdf_proxy", query_string={"url": link}, headers=auth, base_url=BASE)
+    assert link in seen and "sci-hub" in seen and r.status_code == 415
+
+
+def test_a_dataset_answer_that_is_not_a_pdf_is_never_served_as_one(client, auth, monkeypatch):
+    """An article listed without a PDF answers with S3's XML error. That must take the
+    old path, not reach the viewer labelled application/pdf."""
+    link = "https://pmc.ncbi.nlm.nih.gov/articles/PMC7188715/pdf/"
+    A.SESSION["articles"] = [article(doi="10.1/oa", access_kind="open", access_link=link)]
+    seen = []
+    _fake_pmc(monkeypatch, "PMC7188715", [1], seen, scihub_allowed=True,
+              pdf=b"<?xml version='1.0'?><Error><Code>NoSuchKey</Code></Error>")
+    r = client.get("/pdf_proxy", query_string={"url": link}, headers=auth, base_url=BASE)
+    assert r.status_code == 415 and link in seen
+
+
+def test_a_non_pmc_link_never_asks_the_dataset(client, auth, monkeypatch):
+    A.SESSION["articles"] = [article(doi="10.1/p", access_kind="open",
+                                     access_link="https://publisher.example/p.pdf")]
+    seen = []
+    monkeypatch.setattr(A, "_fetch_url_bytes",
+                        lambda url, **k: seen.append(url) or (b"%PDF-1.4 x", "application/pdf"))
+    r = client.get("/pdf_proxy", query_string={"url": "https://publisher.example/p.pdf"},
+                   headers=auth, base_url=BASE)
+    assert r.status_code == 200 and seen == ["https://publisher.example/p.pdf"]
 
 
 # ── One app: the window, the hand-off, and the installed launcher ───────────
