@@ -4,6 +4,13 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.16
+
+- The citation window's "Cited by" list now also asks PubMed and Scopus (with your Scopus key) who cites the paper, so it finds more of the papers that cite it, and says which source found each one. If a source failed or has no key, the window says so, so a short list is never passed off as the whole story.
+- Scopus results now come with their abstracts, taken from PubMed where PubMed has the paper. A Scopus result without one says why: not in PubMed, or PubMed could not be reached.
+- Scopus searches for more than 25 results work: Scopus refused them, and MedSearch now asks for them 25 at a time.
+- When Scopus cannot be reached at all, MedSearch says so plainly instead of "HTTP no answer".
+
 ## 1.15
 
 - Free articles from PubMed Central now open in MedSearch's own PDF viewer. PubMed Central refuses to hand its PDFs to programs, so the viewer either sent you to the browser or fetched a copy from Sci-Hub; it now takes them from the open-access copy NCBI publishes for programs to use.
