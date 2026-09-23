@@ -1128,11 +1128,12 @@ def _doi_from_ids(field):
             return tok[4:]
     return ""
 
-def get_citation_graph(doi, cap=12):
+def get_citation_graph(doi, cap=12, cit_cap=None):
     """
     Returns {references:[...], citations:[...], counts:{...}} for a DOI.
     references = works this paper cites; citations = works citing this paper.
-    Titles resolved via Crossref (capped for speed).
+    Titles resolved via Crossref (capped for speed; cit_cap caps the citing
+    side separately, 0 when the caller resolves them itself).
     """
     # The v1 COCI API now only redirects; v2 is the live index.
     base = "https://api.opencitations.net/index/v2"
@@ -1145,7 +1146,7 @@ def get_citation_graph(doi, cap=12):
         ref_f = ex.submit(fetch_json, f"{base}/references/doi:{urllib.parse.quote(doi)}", headers, 20)
         cit_f = ex.submit(fetch_json, f"{base}/citations/doi:{urllib.parse.quote(doi)}", headers, 20)
         ref_data, _ = ref_f.result()
-        cit_data, _ = cit_f.result()
+        cit_data, cit_status = cit_f.result()
 
     ref_dois, cit_dois = [], []
     if isinstance(ref_data, list):
@@ -1154,9 +1155,15 @@ def get_citation_graph(doi, cap=12):
     if isinstance(cit_data, list):
         result["cit_total"] = len(cit_data)
         cit_dois = [d for d in (_doi_from_ids(r.get("citing")) for r in cit_data) if d]
+    else:
+        # Said, so the window can tell "OpenCitations is down" from "nobody cites it".
+        result["cit_error"] = f"OpenCitations did not answer (HTTP {cit_status or 'no answer'})."
+    # Every citing DOI, not only the resolved ones: the window merges them with
+    # the PubMed and Scopus lists and counts the union.
+    result["cit_dois"] = cit_dois
 
     result["references"] = _resolve_dois(ref_dois, limit=cap)
-    result["citations"]  = _resolve_dois(cit_dois, limit=cap)
+    result["citations"]  = _resolve_dois(cit_dois, limit=cap if cit_cap is None else cit_cap)
     return result
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1264,10 +1271,15 @@ def _article(**fields):
 def _short_authors(names, n=3):
     return "; ".join(names[:n]) + (" et al." if len(names) > n else "")
 
+EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+
+def _ncbi_key_param():
+    return f"&api_key={CONFIG['pubmed_api_key']}" if CONFIG.get("pubmed_api_key") else ""
+
 def search_pubmed(query, max_r, y_from, y_to, strict=True, extra_filter=None,
                   source_label="PubMed", sort="relevance", offset=0):
-    base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
-    kp   = f"&api_key={CONFIG['pubmed_api_key']}" if CONFIG.get("pubmed_api_key") else ""
+    base = EUTILS
+    kp   = _ncbi_key_param()
     dp   = (f"&mindate={y_from or 1900}/01/01&maxdate={y_to or 2099}/12/31&datetype=pdat"
             if y_from or y_to else "")
     term = build_pubmed_term(query, strict=strict)
@@ -1284,20 +1296,33 @@ def search_pubmed(query, max_r, y_from, y_to, strict=True, extra_filter=None,
     if not ids:
         return [], total
 
-    body, _ = http_get(f"{base}/efetch.fcgi?db=pubmed&id={','.join(ids)}&retmode=xml{kp}")
-    if not body:
-        raise RuntimeError(f"{source_label} returned no records. Try again in a moment.")
-    try:
-        root = ET.fromstring(body)
-    except Exception:
-        raise RuntimeError(f"{source_label} sent a response that couldn't be read.")
+    return enrich_access(pubmed_records(ids, source_label, y_from, y_to)), total
 
-    # Preserve the relevance order returned by esearch
+def pubmed_records(ids, source_label="PubMed", y_from=None, y_to=None):
+    """
+    Fetch PubMed records by PMID and read them into articles, in the order of
+    `ids`. Shared by the search, "cited by" and the Scopus abstract fill, so a
+    PubMed record looks the same whichever way it was reached. Raises, saying
+    why, when PubMed does not answer; no access enrichment here.
+    """
+    base, kp = EUTILS, _ncbi_key_param()
     by_pmid = {}
-    for art in root.findall(".//PubmedArticle"):
-        pmid_el = art.find(".//MedlineCitation/PMID")
-        if pmid_el is not None and pmid_el.text:
-            by_pmid[pmid_el.text] = art
+    # efetch by GET takes a couple of hundred ids before the URL gets too long.
+    for i in range(0, len(ids), 200):
+        body, _ = http_get(f"{base}/efetch.fcgi?db=pubmed&id={','.join(ids[i:i + 200])}"
+                           f"&retmode=xml{kp}")
+        if not body:
+            raise RuntimeError(f"{source_label} returned no records. Try again in a moment.")
+        try:
+            root = ET.fromstring(body)
+        except Exception:
+            raise RuntimeError(f"{source_label} sent a response that couldn't be read.")
+        for art in root.findall(".//PubmedArticle"):
+            pmid_el = art.find(".//MedlineCitation/PMID")
+            if pmid_el is not None and pmid_el.text:
+                by_pmid[pmid_el.text] = art
+
+    # Keep the order of `ids` (the relevance order esearch returned)
 
     results = []
     for pmid in ids:
@@ -1328,8 +1353,12 @@ def search_pubmed(query, max_r, y_from, y_to, strict=True, extra_filter=None,
                 short.append(f"{last}, {fore[0]}." if fore else last)
         authors = "; ".join(short) + (" et al." if len(names) > 3 else "")
 
+        # Some records carry their DOI only as the article's electronic
+        # location, and the DOI is what the other sources are matched on.
         doi   = next((a.text for a in art.findall(".//PubmedData/ArticleIdList/ArticleId")
-                      if a.get("IdType") == "doi"), None)
+                      if a.get("IdType") == "doi"), None) or \
+                next((e.text for e in art_el.findall("ELocationID")
+                      if e.get("EIdType") == "doi" and e.text), None)
         pmcid = next((a.text for a in art.findall(".//PubmedData/ArticleIdList/ArticleId")
                       if a.get("IdType") == "pmc"), None)
 
@@ -1354,7 +1383,81 @@ def search_pubmed(query, max_r, y_from, y_to, strict=True, extra_filter=None,
         if pmcid:
             a["access_kind"], a["access_link"] = "open", _pmc_pdf_url(pmcid)
         results.append(a)
-    return enrich_access(results), total
+    return results
+
+# DOIs per PubMed lookup. Each adds about 40 characters to the URL, and 50
+# keeps a lookup comfortably inside what NCBI accepts by GET.
+_DOI_BATCH = 50
+
+def pubmed_by_dois(dois):
+    """
+    The PubMed records for a list of DOIs, as {doi_lowercased: article}, with
+    one esearch and one efetch per 50 DOIs rather than a call per DOI. A DOI
+    PubMed does not have is simply absent. Records are matched back by the DOI
+    in the record itself, never by position, so a stray hit cannot land on the
+    wrong paper. Raises, saying why, when PubMed does not answer.
+    """
+    dois = list(dict.fromkeys(d.strip() for d in dois if d and d.strip()))
+    out = {}
+    for i in range(0, len(dois), _DOI_BATCH):
+        chunk = dois[i:i + _DOI_BATCH]
+        term = " OR ".join(f'"{d}"[AID]' for d in chunk)
+        data, status = fetch_json(f"{EUTILS}/esearch.fcgi?db=pubmed&term={urllib.parse.quote(term)}"
+                                  f"&retmax={2 * len(chunk)}&retmode=json{_ncbi_key_param()}")
+        if not data:
+            raise RuntimeError(f"PubMed did not answer the DOI lookup (HTTP {status or 'no answer'}).")
+        ids = data.get("esearchresult", {}).get("idlist", [])
+        if not ids:
+            continue
+        for a in pubmed_records(ids):
+            if a.get("doi"):
+                out.setdefault(a["doi"].strip().lower(), a)
+    return out
+
+def fill_abstracts_from_pubmed(articles):
+    """
+    Give each record that came without an abstract (Scopus sends none) the one
+    PubMed holds for the same DOI, in batches (see pubmed_by_dois), through the
+    NCBI rate limit every other PubMed call shares. Also takes PubMed's PMID,
+    retraction flag and publication types, which a Scopus record lacks.
+
+    A record left without an abstract says why in `abstract_note`: no DOI, not
+    in PubMed, in PubMed without an abstract, or PubMed could not be asked. It
+    is never an error, so a PubMed outage cannot cost the Scopus results; and
+    "not in PubMed" is never written when the truth is "PubMed did not answer".
+    """
+    by_doi = {}
+    for a in articles:
+        if (a.get("abstract") or "").strip():
+            continue
+        if not a.get("doi"):
+            a["abstract_note"] = "No abstract: the record has no DOI to find it in PubMed by."
+            continue
+        by_doi.setdefault(a["doi"].strip().lower(), []).append(a)
+    if not by_doi:
+        return articles
+    try:
+        found = pubmed_by_dois(list(by_doi))
+    except Exception as e:
+        for group in by_doi.values():
+            for a in group:
+                a["abstract_note"] = f"No abstract: PubMed could not be asked for it. {e}"
+        return articles
+    for doi, group in by_doi.items():
+        pm = found.get(doi)
+        for a in group:
+            if pm is None:
+                a["abstract_note"] = "No abstract: this paper is not in PubMed."
+                continue
+            a["pmid"] = a.get("pmid") or pm["pmid"]
+            a["retraction"] = a.get("retraction") or pm.get("retraction")
+            a["pub_types"] = a.get("pub_types") or pm.get("pub_types") or []
+            if pm.get("abstract"):
+                a["abstract"], a["abstract_from"] = pm["abstract"], "PubMed"
+                a.pop("abstract_note", None)
+            else:
+                a["abstract_note"] = "No abstract: PubMed has this paper, but without an abstract."
+    return articles
 
 def search_cochrane(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0):
     """
@@ -1445,12 +1548,15 @@ def search_clinicaltrials(query, max_r, y_from, y_to, sort="relevance", offset=0
 # endpoint (only date-range or DOI fetch), and the PMC-based workaround simply
 # duplicated PubMed results via dedup. arXiv stays (it has a real search API).
 
-def search_scopus(query, max_r, y_from, y_to, sort="relevance", offset=0):
+# The Scopus Search API refuses a `count` above 25 for this kind of key, so a
+# larger request is asked for in pages of 25.
+_SCOPUS_PAGE = 25
+
+def _scopus_get(query, start, count, sort="relevance"):
+    """One page of a Scopus search: the raw JSON. Raises, saying why, when refused."""
     key = (CONFIG.get("scopus_api_key","") or "").strip()
     if not key:
         raise RuntimeError("No Scopus API key set.")
-    dr = (f" AND PUBYEAR > {(y_from or 1900)-1} AND PUBYEAR < {(y_to or 2099)+1}"
-          if y_from or y_to else "")
     # Scopus authenticates by API key PLUS institutional IP range. From off-campus
     # an institutional token (X-ELS-Insttoken) is also required — send it if set.
     headers = {"X-ELS-APIKey": key, "Accept": "application/json"}
@@ -1460,7 +1566,7 @@ def search_scopus(query, max_r, y_from, y_to, sort="relevance", offset=0):
     # sort=relevancy ↔ -coverDate (minus prefix = descending → newest first)
     sort_p = "&sort=-coverDate" if sort == "date" else "&sort=relevancy"
     url = (f"https://api.elsevier.com/content/search/scopus"
-           f"?query={urllib.parse.quote(query+dr)}&start={offset}&count={max_r}{sort_p}")
+           f"?query={urllib.parse.quote(query)}&start={start}&count={count}{sort_p}")
     data, status = fetch_json(url, headers=headers, error_body=True)
     if status != 200:
         # Surface a clear, actionable error instead of failing silently
@@ -1484,24 +1590,66 @@ def search_scopus(query, max_r, y_from, y_to, sort="relevance", offset=0):
             raise RuntimeError("Scopus quota exceeded (429). The weekly request limit for this "
                                "key is depleted; it resets ~1 week after first use.")
         if status == 400:
-            raise RuntimeError("Scopus rejected the query (400) — likely a query-syntax issue.")
-        raise RuntimeError(f"Scopus returned HTTP {status or 'no answer'}.")
-    results = []
-    for e in (data or {}).get("search-results", {}).get("entry", []):
-        # An error can also come back inside a 200 body ("Result set was empty")
-        if "error" in e:
-            if "empty" in str(e.get("error")).lower():
-                break
-            raise RuntimeError(f"Scopus: {e.get('error')}")
-        creator = e.get("dc:creator", "")
-        results.append(_article(
-            title=e.get("dc:title", "No title"), authors=creator,
-            author_list=[creator] if creator else [],
-            year=e.get("prism:coverDate", "")[:4] or "n.d.",
-            journal=e.get("prism:publicationName", ""), doi=e.get("prism:doi"),
-            cited_by=e.get("citedby-count"), abstract=e.get("dc:description", ""),
-            source="Scopus"))
-    return enrich_access(results), 0
+            # SCOPUS SAYS WHY; PASS IT ON. A 400 is not always syntax: a key without the
+            # entitlement for a field (REFEID, who cites a paper) gets "Use of certain field
+            # restrictions in the search query is not allowed for this requestor" -- found
+            # 23 Sep 2026, when "likely a query-syntax issue" sent the search after a bug
+            # that was not there.
+            said = (((data or {}).get("service-error") or {}).get("status") or {}).get("statusText")
+            if said and "not allowed for this requestor" in said:
+                raise RuntimeError("Scopus does not allow this API key to use that kind of search "
+                                   f"({said}). It is an entitlement of the key, not an error in "
+                                   "the query; asking who cites a paper (REFEID) needs it.")
+            raise RuntimeError("Scopus rejected the query (400)"
+                               + (f": {said}" if said else " — likely a query-syntax issue."))
+        if not status:
+            raise RuntimeError("Scopus did not answer: no connection to api.elsevier.com, or it "
+                               "timed out. Check the internet connection and try again.")
+        raise RuntimeError(f"Scopus returned HTTP {status}.")
+    return data or {}
+
+def scopus_entries(query, max_r, offset=0, sort="relevance"):
+    """
+    Up to `max_r` raw Scopus entries for a query in Scopus syntax, fetched in
+    pages of 25, and the number Scopus says match. An empty result is [], not
+    an error; every refusal raises with its reason.
+    """
+    entries, total, start = [], 0, offset
+    while len(entries) < max_r:
+        count = min(_SCOPUS_PAGE, max_r - len(entries))
+        res = _scopus_get(query, start, count, sort).get("search-results", {})
+        try: total = int(res.get("opensearch:totalResults") or 0)
+        except (TypeError, ValueError): total = 0
+        page = res.get("entry", [])
+        for e in page:
+            # An error can also come back inside a 200 body ("Result set was empty")
+            if "error" in e:
+                if "empty" in str(e.get("error")).lower():
+                    return entries, total
+                raise RuntimeError(f"Scopus: {e.get('error')}")
+            entries.append(e)
+        start += len(page)
+        if len(page) < count or start >= total:
+            break
+    return entries, total
+
+def _scopus_article(e):
+    creator = e.get("dc:creator", "")
+    return _article(
+        title=e.get("dc:title", "No title"), authors=creator,
+        author_list=[creator] if creator else [],
+        year=e.get("prism:coverDate", "")[:4] or "n.d.",
+        journal=e.get("prism:publicationName", ""), doi=e.get("prism:doi"),
+        cited_by=e.get("citedby-count"), abstract=e.get("dc:description", ""),
+        source="Scopus")
+
+def search_scopus(query, max_r, y_from, y_to, sort="relevance", offset=0):
+    dr = (f" AND PUBYEAR > {(y_from or 1900)-1} AND PUBYEAR < {(y_to or 2099)+1}"
+          if y_from or y_to else "")
+    entries, total = scopus_entries(query + dr, max_r, offset, sort)
+    # Scopus's search results carry no abstract; PubMed has most of them.
+    results = fill_abstracts_from_pubmed([_scopus_article(e) for e in entries])
+    return enrich_access(results), total
 
 def search_wos(query, max_r, y_from, y_to, sort="relevance", offset=0):
     key = (CONFIG.get("wos_api_key","") or "").strip()
@@ -1568,6 +1716,260 @@ SOURCES = [
 ]
 _KEY_REQUIRED = {"scopus": ("scopus_api_key", "Scopus"),
                  "wos":    ("wos_api_key", "Web of Science")}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CITED BY, AND ONE MERGED LIST ACROSS SOURCES  (for use as a library too)
+# ══════════════════════════════════════════════════════════════════════════════
+# Both answer with the same shape: {"articles": [...], "sources": {key: report}}.
+# A report says what a source did — "ok" (with its count, which may be 0),
+# "no key", "not indexed" (it does not have the paper asked about) or "failed"
+# (with the reason) — so a source that broke never reads as one that found
+# nothing. Every article carries `found_in`, the sources that returned it.
+
+class SourceCannotAnswer(RuntimeError):
+    """The source works but cannot answer this question (e.g. it does not have
+    the paper whose citations were asked for). Not a failure, not zero."""
+
+def _clean_doi(doi):
+    """Accept a DOI as written anywhere: bare, "doi:…", or a doi.org link."""
+    d = (doi or "").strip()
+    d = re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", "", d, flags=re.I)
+    return d.strip()
+
+def _no_key_message(key):
+    setting, name = _KEY_REQUIRED[key]
+    return (f"No {name} API key is set, so {name} was not searched. "
+            f"Add one in MedSearch's Settings ({setting}).")
+
+def _gather(jobs):
+    """
+    Run [(key, label, callable, query_used)] in parallel; each callable returns
+    (articles, total). Returns ([(label, articles)] in the order given, and the
+    report per key). An exception becomes that source's "failed" report, with
+    the reason, and the others carry on.
+    """
+    reports, groups = {}, []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(jobs))) as ex:
+        futures = [(key, label, q, ex.submit(fn)) for key, label, fn, q in jobs]
+        for key, label, q, fut in futures:
+            rep = {"label": label, "status": "ok", "count": None, "total": None,
+                   "error": None, "query": q}
+            try:
+                arts, total = fut.result()
+                rep["count"], rep["total"] = len(arts), (total or None)
+                groups.append((label, arts))
+            except SourceCannotAnswer as e:
+                rep["status"], rep["error"] = "not indexed", str(e)
+            except Exception as e:
+                rep["status"] = "failed"
+                rep["error"] = str(e) or f"{label} failed without saying why ({type(e).__name__})."
+            reports[key] = rep
+    return groups, reports
+
+def _norm_title(title):
+    n = re.sub(r"[^a-z0-9]", "", (title or "").lower())
+    return "" if n == "notitle" else n     # _article's placeholder is not a title
+
+def merge_articles(groups):
+    """
+    One list from [(source_label, articles)], given in priority order: the
+    first source to return a paper keeps its record; later ones only fill what
+    it lacks (DOI, PMID, abstract, citation count) and add their name to
+    `found_in`. Two records are the same paper by DOI; failing that by PMID;
+    failing that by normalised title — but a title match between two records
+    whose DOIs (or PMIDs) differ is two papers, not one.
+    """
+    merged, by_doi, by_pmid, by_title = [], {}, {}, {}
+    for label, arts in groups:
+        for a in arts:
+            doi = (a.get("doi") or "").strip().lower() or None
+            pmid = str(a.get("pmid") or "").strip() or None
+            title = _norm_title(a.get("title"))
+            hit = by_doi.get(doi) if doi else None
+            if hit is None and pmid:
+                h = by_pmid.get(pmid)
+                if h is not None and not (doi and h.get("doi")):
+                    hit = h
+            if hit is None and title:
+                hit = next((h for h in by_title.get(title, [])
+                            if not (doi and h.get("doi")) and not (pmid and h.get("pmid"))), None)
+            if hit is None:
+                hit = dict(a, found_in=[])
+                merged.append(hit)
+            else:
+                for k in ("doi", "pmid", "abstract", "cited_by"):
+                    if not hit.get(k) and a.get(k):
+                        hit[k] = a[k]
+                if hit.get("abstract"):
+                    hit.pop("abstract_note", None)
+            if label not in hit["found_in"]:
+                hit["found_in"].append(label)
+            if hit.get("doi"):
+                by_doi.setdefault(hit["doi"].strip().lower(), hit)
+            if hit.get("pmid"):
+                by_pmid.setdefault(str(hit["pmid"]), hit)
+            t = _norm_title(hit.get("title"))
+            if t and hit not in by_title.setdefault(t, []):
+                by_title[t].append(hit)
+    return merged
+
+# Scopus reads a sentence as a search. PubMed ANDs every word (tagged [tiab]
+# in strict mode) and Web of Science and arXiv do much the same, so a long
+# question finds nothing there: those get the short keyword form when given.
+_LONG_QUERY_SOURCES = {"scopus"}
+
+def merged_search(query, sources=("pubmed", "scopus", "wos"), max_results=10,
+                  keywords=None, year_from=None, year_to=None, strict=True,
+                  sort="relevance"):
+    """
+    Run one search across `sources` (keys of SOURCES) at once and return
+    {"query", "keywords", "articles": one deduplicated list, "sources": a
+    report per source}. `query` may be a long natural-language question; if
+    `keywords` is given, every source except Scopus is sent that instead, and
+    each report's "query" says what that source was actually sent. Any
+    `max_results` works: Scopus is asked in pages of 25.
+    """
+    by_key = {row[0]: row for row in SOURCES}
+    unknown = [k for k in sources if k not in by_key]
+    if unknown:
+        raise ValueError(f"Unknown source(s) {', '.join(map(repr, unknown))}; "
+                         f"the sources are {', '.join(by_key)}.")
+    jobs, reports = [], {}
+    for key in [k for k in by_key if k in sources]:          # dedup priority order
+        _k, label, fn, takes_strict = by_key[key]
+        if key in _KEY_REQUIRED and not (CONFIG.get(_KEY_REQUIRED[key][0]) or "").strip():
+            reports[key] = {"label": label, "status": "no key", "count": None, "total": None,
+                            "error": _no_key_message(key), "query": None}
+            continue
+        q = query if key in _LONG_QUERY_SOURCES or not keywords else keywords
+        # Only the PubMed-based sources take `strict`; search_wos and the
+        # others have no such argument and would refuse it.
+        kwargs = {"sort": sort, "strict": strict} if takes_strict else {"sort": sort}
+        run = (lambda fn=fn, q=q, kwargs=kwargs:
+               fn(q, max_results, year_from, year_to, **kwargs))
+        jobs.append((key, label, run, q))
+    groups, ran = _gather(jobs)
+    reports.update(ran)
+    save_doi_cache()
+    return {"query": query, "keywords": keywords, "articles": merge_articles(groups),
+            "sources": {k: reports[k] for k in by_key if k in reports}}
+
+def _pubmed_citing(doi, max_r):
+    """PubMed's "cited in" list for a DOI: the PubMed papers whose reference
+    lists (as deposited in PubMed Central) cite it. Needs no key."""
+    kp = _ncbi_key_param()
+    term = urllib.parse.quote(f'"{doi}"[AID]')
+    data, status = fetch_json(f"{EUTILS}/esearch.fcgi?db=pubmed&term={term}&retmode=json{kp}")
+    if not data:
+        raise RuntimeError(f"PubMed did not answer the DOI lookup (HTTP {status or 'no answer'}).")
+    ids = data.get("esearchresult", {}).get("idlist", [])
+    if not ids:
+        raise SourceCannotAnswer("PubMed has no record with this DOI, so it cannot say who cites it.")
+    data, status = fetch_json(f"{EUTILS}/elink.fcgi?dbfrom=pubmed&db=pubmed"
+                              f"&linkname=pubmed_pubmed_citedin&id={ids[0]}&retmode=json{kp}")
+    if not data:
+        raise RuntimeError(f"PubMed did not answer the cited-in lookup (HTTP {status or 'no answer'}).")
+    if data.get("ERROR"):
+        raise RuntimeError(f"PubMed refused the cited-in lookup: {data['ERROR']}")
+    citing = []
+    for ls in data.get("linksets") or []:
+        for db in ls.get("linksetdbs") or []:
+            if db.get("linkname") == "pubmed_pubmed_citedin":
+                citing += [str(x) for x in db.get("links") or []]
+    # PubMed can list a paper among its own citers; it is not one.
+    citing = [c for c in dict.fromkeys(citing) if c not in ids]
+    if not citing:
+        return [], 0
+    return pubmed_records(citing[:max_r]), len(citing)
+
+def _scopus_citing(doi, max_r):
+    """Scopus's citing documents for a DOI: find the paper's EID, then every
+    record whose references include it (REFEID)."""
+    found, _ = scopus_entries(f"DOI({doi})", 1)
+    if not found:
+        raise SourceCannotAnswer("Scopus has no record with this DOI, so it cannot say who cites it.")
+    eid = found[0].get("eid")
+    if not eid:
+        raise RuntimeError("Scopus found the paper but sent no EID for it, and the citing "
+                           "papers can only be asked for by EID.")
+    entries, total = scopus_entries(f"REFEID({eid})", max_r)
+    return fill_abstracts_from_pubmed([_scopus_article(e) for e in entries]), total
+
+def _year_key(a):
+    y = str(a.get("year") or "")[:4]
+    return y if y.isdigit() else ""
+
+_CITING_SOURCES = {"pubmed": ("PubMed", _pubmed_citing),
+                   "scopus": ("Scopus", _scopus_citing)}
+
+def cited_by(doi, sources=("pubmed", "scopus"), max_results=200, enrich=True):
+    """
+    The works citing `doi`, as ordinary article records merged across sources
+    (by DOI, then PMID, then title), newest first: {"doi", "articles",
+    "sources": a report per source}. PubMed's list covers citations deposited
+    in PubMed Central; Scopus's covers its own index and needs the Scopus key.
+    `max_results` caps each source. enrich=False skips the per-paper
+    open-access and retraction lookups (much faster for long lists).
+    """
+    doi = _clean_doi(doi)
+    if not doi:
+        raise ValueError("cited_by needs a DOI, e.g. 10.1007/s10618-015-0408-z.")
+    unknown = [k for k in sources if k not in _CITING_SOURCES]
+    if unknown:
+        raise ValueError(f"Unknown source(s) {', '.join(map(repr, unknown))}; "
+                         f"cited_by can ask {', '.join(_CITING_SOURCES)}.")
+    jobs, reports = [], {}
+    for key in [k for k in _CITING_SOURCES if k in sources]:
+        label, fn = _CITING_SOURCES[key]
+        if key in _KEY_REQUIRED and not (CONFIG.get(_KEY_REQUIRED[key][0]) or "").strip():
+            reports[key] = {"label": label, "status": "no key", "count": None, "total": None,
+                            "error": _no_key_message(key), "query": None}
+            continue
+        jobs.append((key, label, lambda fn=fn: fn(doi, max_results), f"cited by {doi}"))
+    groups, ran = _gather(jobs)
+    reports.update(ran)
+    articles = merge_articles(groups)
+    # Newest first; a paper without a year goes last, not first ("n.d." > "2").
+    articles.sort(key=_year_key, reverse=True)
+    if enrich:
+        enrich_access(articles)
+        save_doi_cache()
+    return {"doi": doi, "articles": articles,
+            "sources": {k: reports[k] for k in _CITING_SOURCES if k in reports}}
+
+def _first_author(a):
+    names = a.get("author_list") or [n for n in (a.get("authors") or "").split(";") if n.strip()]
+    if not names:
+        return ""
+    first = names[0].replace(" et al.", "").strip()
+    # "Surname, Given" (PubMed) and "Surname G." (Scopus) both become "Surname".
+    return re.sub(r"(?:\s+[A-Z]\.(?:-?[A-Z]\.)*)+$", "", first.split(",")[0]).strip()
+
+def compact_line(a):
+    """One line per paper: year · first author · journal · title · DOI · sources."""
+    ident = f"doi:{a['doi']}" if a.get("doi") else (f"PMID {a['pmid']}" if a.get("pmid") else "no DOI")
+    found = "+".join(a.get("found_in") or [a.get("source") or "?"])
+    parts = [str(a.get("year") or "n.d."), _first_author(a) or "(no author)",
+             a.get("journal") or "", a.get("title") or "No title", ident, found]
+    return " · ".join(p for p in parts if p)
+
+def compact_report(result):
+    """
+    Printable text for what merged_search or cited_by returned: one line per
+    source (its count, or FAILED / NO KEY / NOT INDEXED with the reason), then
+    one line per paper.
+    """
+    lines = []
+    for rep in result.get("sources", {}).values():
+        if rep["status"] == "ok":
+            of = f" of {rep['total']}" if rep.get("total") and rep["total"] != rep["count"] else ""
+            sent = f"  [sent: {rep['query']}]" if rep.get("query") else ""
+            lines.append(f"{rep['label']}: {rep['count']}{of}{sent}")
+        else:
+            lines.append(f"{rep['label']}: {rep['status'].upper()} — {rep['error']}")
+    lines.append(f"{len(result.get('articles', []))} papers after merging")
+    lines += [compact_line(a) for a in result.get("articles", [])]
+    return "\n".join(lines)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  EXPORT
@@ -2356,7 +2758,29 @@ def citations(idx):
         return jsonify({"error":"no_doi",
                         "message":"This article has no DOI, so its citation graph can't be retrieved.",
                         "title": art.get("title","")}), 200
-    graph = get_citation_graph(doi)
+    # The citing side is PubMed's and Scopus's lists (full records) merged with
+    # OpenCitations; OpenCitations DOIs neither of them had are resolved through
+    # Crossref, capped as before, and all count toward the total.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
+        graph_f = ex.submit(get_citation_graph, doi, 12, 0)
+        cb_f = ex.submit(cited_by, doi, enrich=False)
+        graph, cb = graph_f.result(), cb_f.result()
+    citing = [{"doi": a.get("doi"), "title": a.get("title"), "year": a.get("year"),
+               "authors": a.get("authors"), "journal": a.get("journal"),
+               "found_in": a.get("found_in", [])} for a in cb["articles"]]
+    known = {(c["doi"] or "").lower() for c in citing if c["doi"]}
+    extra = [d for d in dict.fromkeys(graph.pop("cit_dois", [])) if d.lower() not in known]
+    for meta in _resolve_dois(extra, limit=12):
+        citing.append(dict(meta, found_in=["OpenCitations"]))
+    graph["citations"] = citing
+    graph["cit_total"] = len(cb["articles"]) + len(extra)
+    reports = list(cb["sources"].values())
+    reports.append({"label": "OpenCitations",
+                    "status": "failed" if graph.get("cit_error") else "ok",
+                    "count": None if graph.get("cit_error") else len(extra),
+                    "error": graph.pop("cit_error", None)})
+    graph["cit_sources"] = [{k: r[k] for k in ("label", "status", "count", "error")}
+                            for r in reports]
     graph["source_title"] = art.get("title","")
     graph["source_year"]  = art.get("year","")
     return jsonify(graph)

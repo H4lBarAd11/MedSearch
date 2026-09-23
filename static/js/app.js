@@ -1207,7 +1207,8 @@ function makeCard(a) {
     ${abstract ? `
       <div class="article-abstract" id="abs_${a._idx}">${escHtml(abstract)}</div>
       <button class="expand-btn" id="expbtn_${a._idx}"
-        onclick="toggleAbstract(${a._idx})">Show more ▾</button>` : ''}
+        onclick="toggleAbstract(${a._idx})">Show more ▾</button>`
+      : (a.abstract_note ? `<div class="abstract-note">${escHtml(a.abstract_note)}</div>` : '')}
     <div class="article-links">${links} ${citeBtn} ${explainBtn} ${zoteroBtn}</div>`;
   return card;
 }
@@ -1541,7 +1542,7 @@ function openCitations(idx) {
   document.getElementById('citeTitle').textContent =
     'Citation graph · ' + (a.title.length > 70 ? a.title.slice(0,70)+'…' : a.title);
   document.getElementById('citeBody').innerHTML =
-    '<div class="cite-loading">Fetching references & citations…</div>';
+    '<div class="cite-loading">Fetching references & citing papers (PubMed, Scopus, OpenCitations)…</div>';
   openOverlay('citeOverlay');
 
   fetch('/citations/' + idx)
@@ -1734,11 +1735,13 @@ function renderCitations(data, article) {
   const cits = data.citations || [];
 
   if (!refs.length && !cits.length) {
+    // The source note stays: "nothing found" means little if a source failed.
     body.innerHTML = `<div class="cite-error">
-      No citation data found for this article in OpenCitations.<br>
+      No references or citing papers found for this article.<br>
       <span style="font-size:0.75rem;color:var(--text3)">
       Coverage is best for articles with a Crossref DOI; very recent or niche papers may not be indexed yet.</span>
-    </div>`;
+    </div>
+    <div class="cite-note">${citeSourcesNote(data.cit_sources)}</div>`;
     return;
   }
 
@@ -1768,7 +1771,21 @@ function renderCitations(data, article) {
         ${citList}
       </div>
     </div>
-    <div class="cite-note">Citation data from OpenCitations · titles resolved via Crossref</div>`;
+    <div class="cite-note">${citeSourcesNote(data.cit_sources)}References from OpenCitations · titles resolved via Crossref</div>`;
+}
+
+// Where the "Cited by" list came from, source by source. A source that failed
+// or had no key says so, so a short list is never mistaken for a complete one.
+function citeSourcesNote(reports) {
+  if (!reports || !reports.length) return '';
+  const parts = reports.map(r => {
+    if (r.status === 'ok')
+      return escHtml(r.label) + ' ' + (r.label === 'OpenCitations' ? r.count + ' more' : r.count);
+    if (r.status === 'no key')      return escHtml(r.label) + ': no API key set';
+    if (r.status === 'not indexed') return escHtml(r.label) + ': does not have this paper';
+    return `<span class="cite-note-failed">${escHtml(r.label)} failed: ${escHtml(r.error || '')}</span>`;
+  });
+  return 'Cited by, from ' + parts.join(' · ') + '<br>';
 }
 
 function citeItemHtml(item) {
@@ -1780,7 +1797,8 @@ function citeItemHtml(item) {
     ? `<a href="https://doi.org/${encodeURIComponent(item.doi)}" target="_blank">DOI ${ico('external')}</a>` : '';
   return `<div class="cite-item">
     <div class="cite-item-title">${escHtml(item.title || '(untitled)')}</div>
-    <div class="cite-item-meta">${meta.join(' · ')} ${doiLink}</div>
+    <div class="cite-item-meta">${meta.join(' · ')} ${doiLink}${item.found_in && item.found_in.length
+      ? ` <span class="cite-found-in">${escHtml(item.found_in.join(', '))}</span>` : ''}</div>
   </div>`;
 }
 

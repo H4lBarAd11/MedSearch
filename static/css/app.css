@@ -791,6 +791,14 @@ body {
   margin-bottom: 8px;
 }
 
+/* A card without an abstract says why (not in PubMed, PubMed unreachable…). */
+.abstract-note {
+  font-size: 0.72rem;
+  color: var(--text3);
+  font-style: italic;
+  margin-bottom: 8px;
+}
+
 .article-abstract {
   font-size: 0.8rem;
   color: var(--text2);
@@ -1350,6 +1358,11 @@ body {
   padding-top: 12px;
   border-top: 1px solid var(--border);
   text-align: center;
+}
+.cite-note-failed { color: var(--red); }
+.cite-found-in {
+  font-size: 0.68rem;
+  color: var(--text3);
 }
 .cite-error {
   text-align: center;
