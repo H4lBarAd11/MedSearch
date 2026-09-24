@@ -4,6 +4,10 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.18
+
+- Closing the PDF viewer with the window's red button or ⌘W now closes only the viewer. It used to hide the whole MedSearch window in the menu bar. The same goes for any other MedSearch dialog that is open; with nothing open, closing the window hides it in the menu bar as before.
+
 ## 1.17
 
 - The MedSearch window no longer stays blank when it is opened again right after quitting. macOS could end the part of the window that draws the page just as it started; MedSearch now loads the page again whenever that happens.

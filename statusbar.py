@@ -14,7 +14,8 @@ older macOS). The app's own look stays in its window.
 CLOSING THE WINDOW HIDES IT (his choice, 19 Sep). MedSearch keeps running in the
 menu bar, ready for a quick search. While the window is hidden, the Dock icon goes
 away too, as it does for any menu bar app. Quitting (the menu's Quit, ⌘Q, the Dock,
-logging out) still quits, see `closing` below.
+logging out) still quits, see `closing` below. With the PDF viewer or a dialog open
+in the page, closing closes that instead and the window stays (his choice, 24 Sep).
 
 WHEN THE ICON DISAPPEARS IT IS USUALLY STILL THERE (measured 20 Sep, on a MacBook Air
 with a notch). An item macOS has no room for is simply never placed: it keeps its
@@ -72,6 +73,7 @@ _LABELS = dict(SOURCES)
 _RECENTS_SHOWN = 6
 _CHECK_EVERY = 3.0     # seconds between "is the item still on the bar?"
 _REBUILD_LIMIT = 10    # after this many, stop fighting whatever is removing it
+_PAGE_ANSWER_WAIT = 1.0  # seconds a close waits for the page to say it closed a dialog
 
 _host = None   # the one StatusBar; module-level so nothing collects it
 
@@ -485,11 +487,41 @@ class StatusBar:
         shutting down all reach applicationShouldTerminate_, which asks every window
         whether it may close. Refusing there would stop the Mac from shutting down.
         The handler runs synchronously inside that call, so the call stack says
-        which case this is."""
+        which case this is.
+
+        Any other close is refused here and decided by `_close_dialog_or_hide`: the
+        page has to be asked, and evaluate_js needs this (main) thread to be free."""
         if any(f.function == "applicationShouldTerminate_" for f in inspect.stack()):
             return True
-        AppHelper.callAfter(self.hide)
+        threading.Thread(target=self._close_dialog_or_hide, daemon=True).start()
         return False
+
+    def _close_dialog_or_hide(self):
+        """Close the page's top dialog if one is open, otherwise hide the window.
+
+        THE PDF VIEWER IS NOT A WINDOW (seen 24 Sep). It is a panel inside the
+        MedSearch window, so its natural close, the window's red button or ⌘W, hid
+        the whole app in the menu bar. With a dialog or the viewer open, closing now
+        closes only that, as Escape does (`closeTopDialog` in app.js).
+
+        The page is asked rather than tracked from here: only the page knows what is
+        open. An answer that is not a plain yes (no answer within
+        `_PAGE_ANSWER_WAIT`, a blank or reloading page, an error) counts as nothing
+        open, so the window can always be closed."""
+        answer = []
+
+        def ask():
+            try:
+                answer.append(self.window.evaluate_js(
+                    "typeof closeTopDialog === 'function' && closeTopDialog() === true"))
+            except Exception:
+                pass
+
+        t = threading.Thread(target=ask, daemon=True)
+        t.start()
+        t.join(_PAGE_ANSWER_WAIT)
+        if not (answer and answer[0] is True):
+            AppHelper.callAfter(self.hide)
 
 
 def _fourcc(code):
