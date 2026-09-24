@@ -111,3 +111,59 @@ test("ordinary words are not an advanced query", () => {
     assert.equal(detectPowerQuery(q), false, q);
   }
 });
+
+// ── Closing: the top dialog first, then the window ─────────────────────────
+// statusbar.py asks closeTopDialog() before hiding the window, so the PDF
+// viewer's natural close (red button, ⌘W) closes the viewer, not the app.
+
+const { closeTopDialog } = load(["closeTopDialog"]);
+
+function withOpenDialogs(ids, run) {
+  const closed = [];
+  const saved = {};
+  const closers = ["closeFail", "closeAsk", "closeExplain", "closeCitations", "closeSettings",
+                   "closeExport", "closeApiKeyPrompt", "closeProxyEditor", "closePdf", "closeUpdate"];
+  for (const n of ["document", ...closers]) saved[n] = globalThis[n];
+  globalThis.document = { querySelectorAll: () => ids.map((id) => ({ id })) };
+  for (const n of closers) globalThis[n] = (...a) => closed.push([n, ...a]);
+  try { return run(closed); } finally {
+    for (const n of Object.keys(saved)) {
+      if (saved[n] === undefined) delete globalThis[n]; else globalThis[n] = saved[n];
+    }
+  }
+}
+
+test("with the PDF viewer open, closing closes the viewer and says so", () => {
+  withOpenDialogs(["pdfOverlay"], (closed) => {
+    assert.equal(closeTopDialog(), true);
+    assert.deepEqual(closed, [["closePdf"]]);
+  });
+});
+
+test("only the top dialog closes: an error over Settings goes, Settings stays", () => {
+  withOpenDialogs(["settingsOverlay", "failOverlay"], (closed) => {
+    assert.equal(closeTopDialog(), true);
+    assert.deepEqual(closed, [["closeFail"]]);
+  });
+});
+
+test("a question closed this way is answered 'no answer', as Escape does", () => {
+  withOpenDialogs(["askOverlay"], (closed) => {
+    assert.equal(closeTopDialog(), true);
+    assert.deepEqual(closed, [["closeAsk", null]]);
+  });
+});
+
+test("with nothing open it says no, so the window is hidden as before", () => {
+  withOpenDialogs([], (closed) => {
+    assert.equal(closeTopDialog(), false);
+    assert.deepEqual(closed, []);
+  });
+});
+
+test("a dialog it has no closer for is left alone and it says no", () => {
+  withOpenDialogs(["onboardOverlay"], (closed) => {
+    assert.equal(closeTopDialog(), false);
+    assert.deepEqual(closed, []);
+  });
+});
