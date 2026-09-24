@@ -3626,6 +3626,63 @@ if __name__ == "__main__":
                     return {"ok": False, "error": str(e)}
 
         api = Api()
+
+        def _reload_when_the_page_dies():
+            """A window whose page process was ended loads its page again.
+
+            A BLANK WINDOW, SEEN 24 SEP (macOS 27.2). About a second after the
+            launcher stub exits, loginwindow ends the XPC helpers that app still
+            has running ("still has subordinate processes … scheduling its
+            subordinates' termination"), and WebKit's helpers count as that
+            app's. If they already exist by then (a quick relaunch), the page's
+            process is gone before the first load finishes. pywebview only puts
+            the web view in the window once a load finishes, so it never gets a
+            window, and WebKit waits for it to be visible before reloading. The
+            window stays blank while the server and the menu bar item run on.
+
+            Answering the navigation delegate's "the content process ended" is
+            how WebKit expects a client to recover. A subclass of pywebview's
+            delegate, used for every window it builds, rather than a change to
+            its class; if pywebview ever answers this itself, its own stays.
+            At most three reloads a minute per window: a page that crashes on
+            load would otherwise reload forever."""
+            if sys.platform != "darwin":
+                return
+            import objc
+            from Foundation import NSURL, NSURLRequest
+            from PyObjCTools import AppHelper
+            from webview.platforms.cocoa import BrowserView
+
+            base = BrowserView.BrowserDelegate
+            if base.instancesRespondToSelector_(b"webViewWebContentProcessDidTerminate:"):
+                return
+            reloads = {}                            # window uid -> recent reload times
+
+            class MedSearchBrowserDelegate(base):
+                @objc.typedSelector(b"v@:@")
+                def webViewWebContentProcessDidTerminate_(self, web):
+                    inst = BrowserView.get_instance("webview", web)
+                    if inst is None:
+                        return
+                    now = time.time()
+                    recent = [t for t in reloads.get(inst.uid, []) if now - t < 60]
+                    url = web.URL()                 # nil if the first load never got going
+                    if url is None and getattr(inst, "url", None):
+                        url = NSURL.URLWithString_(BrowserView.quote(inst.url))
+                    if url is None or len(recent) >= 3:
+                        print("  (a window's page process ended; not reloading it)")
+                        return
+                    reloads[inst.uid] = recent + [now]
+                    print(f"  (a window's page process ended; loading {url.absoluteString()} again)")
+                    AppHelper.callAfter(web.loadRequest_, NSURLRequest.requestWithURL_(url))
+
+            BrowserView.BrowserDelegate = MedSearchBrowserDelegate
+
+        try:
+            _reload_when_the_page_dies()
+        except Exception as e:                      # the window still opens without it
+            print(f"  (page reload on a crash unavailable: {e})")
+
         # Start Flask in a background thread
         t = threading.Thread(target=run_server, daemon=True)
         t.start()
