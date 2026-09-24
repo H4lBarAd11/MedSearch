@@ -2546,22 +2546,33 @@ document.addEventListener('mousedown', e => {
   closePanels();
 });
 
-// Escape closes the top-most open dialog (the last one in the page order),
-// and only that one: an error raised over Settings closes, Settings stays.
-// With nothing else open, it closes the synthesis sheet.
-document.addEventListener('keydown', e => {
-  if (e.key !== 'Escape') return;
-  if (_openPanel() && !document.querySelector('.modal-overlay.open, .pdf-overlay.open')) {
-    e.preventDefault(); closePanels(); return;
-  }
+// Closes the top-most open dialog or the PDF viewer (the last one in the page
+// order), and only that one: an error raised over Settings closes, Settings
+// stays. Says whether it closed anything. Escape uses it, and so does closing
+// the window: the PDF viewer is a panel inside the MedSearch window, so the
+// window's red button and ⌘W were hiding the whole app when the user meant to
+// close the PDF (24 Sep). statusbar.py now asks this first.
+function closeTopDialog() {
   const open = [...document.querySelectorAll('.modal-overlay.open, .pdf-overlay.open')];
   const top = open[open.length - 1];
-  if (!top) { if (synthesisOpen) { e.preventDefault(); closeSynthesis(); } return; }
+  if (!top) return false;
   const closers = {failOverlay: closeFail, askOverlay: () => closeAsk(null), explainOverlay: closeExplain, citeOverlay: closeCitations,
                    settingsOverlay: closeSettings, exportOverlay: closeExport,
                    apiKeyPromptOverlay: closeApiKeyPrompt, proxyEditorOverlay: closeProxyEditor,
                    pdfOverlay: closePdf, updateOverlay: closeUpdate};
-  if (closers[top.id]) { e.preventDefault(); closers[top.id](); }
+  if (!closers[top.id]) return false;
+  closers[top.id]();
+  return true;
+}
+
+// Escape closes the top-most open dialog (see closeTopDialog). With no dialog
+// open, it closes the open panel, or else the synthesis sheet.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const dialogOpen = !!document.querySelector('.modal-overlay.open, .pdf-overlay.open');
+  if (_openPanel() && !dialogOpen) { e.preventDefault(); closePanels(); return; }
+  if (closeTopDialog()) { e.preventDefault(); return; }
+  if (!dialogOpen && synthesisOpen) { e.preventDefault(); closeSynthesis(); }
 });
 
 // ask({title, text, input, okLabel, danger}) → Promise. With `input` (the

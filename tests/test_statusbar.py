@@ -209,3 +209,89 @@ def test_a_refused_return_is_still_noticed():
     host.item.find_no_room()
     host._watch(); host._watch()
     assert host.made == 1
+
+
+# ── closing the window with the PDF viewer or a dialog open ─────────────────
+
+class _Page:
+    """The pywebview window: evaluate_js answers as the page would."""
+    def __init__(self, answer=None, raises=False, delay=0.0):
+        self.answer, self.raises, self.delay, self.asked = answer, raises, delay, []
+    def evaluate_js(self, js):
+        import time
+        self.asked.append(js)
+        if self.delay:
+            time.sleep(self.delay)
+        if self.raises:
+            raise RuntimeError("the page is gone")
+        return self.answer
+
+
+class _Closer:
+    """A StatusBar with only the closing path real."""
+    closing = SB.StatusBar.closing
+    _close_dialog_or_hide = SB.StatusBar._close_dialog_or_hide
+    def __init__(self, page): self.window, self.hidden = page, 0
+    def hide(self): self.hidden += 1
+
+
+@pytest.fixture
+def run_now(monkeypatch):
+    """Hiding is scheduled on the main thread; here it runs at once."""
+    monkeypatch.setattr(SB.AppHelper, "callAfter", lambda f, *a, **k: f(*a, **k))
+
+
+def test_closing_with_a_dialog_open_closes_the_dialog_and_keeps_the_window(run_now):
+    """The fault of 24 Sep: the PDF viewer is a panel inside the window, and its
+    natural close (red button, ⌘W) hid the whole app in the menu bar."""
+    host = _Closer(_Page(answer=True))
+    host._close_dialog_or_hide()
+    assert host.hidden == 0
+    assert "closeTopDialog()" in host.window.asked[0]
+
+
+def test_closing_with_nothing_open_still_hides_the_window(run_now):
+    host = _Closer(_Page(answer=False))
+    host._close_dialog_or_hide()
+    assert host.hidden == 1
+
+
+@pytest.mark.parametrize("page", [
+    _Page(answer=None),                         # no closeTopDialog, or a blank page
+    _Page(answer="true"),                       # anything but a plain yes
+    _Page(raises=True),                         # the page process is gone
+    _Page(answer=True, delay=SB._PAGE_ANSWER_WAIT + 0.5),   # no answer in time
+])
+def test_a_page_that_does_not_say_yes_never_keeps_the_window_open(run_now, page):
+    host = _Closer(page)
+    host._close_dialog_or_hide()
+    assert host.hidden == 1
+
+
+def test_closing_refuses_the_close_and_asks_the_page_off_the_main_thread(run_now, monkeypatch):
+    """evaluate_js waits for the main thread, which is inside this handler: asking
+    from here would hang the app. The handler hands the question to a thread."""
+    started = []
+
+    class _Thread:
+        def __init__(self, target, daemon=None): self.target = target
+        def start(self): started.append(self.target)
+
+    monkeypatch.setattr(SB.threading, "Thread", _Thread)
+    host = _Closer(_Page(answer=True))
+    assert host.closing() is False
+    assert host.window.asked == []                    # not asked on this thread
+    assert [t.__name__ for t in started] == ["_close_dialog_or_hide"]
+    assert host.hidden == 0
+
+
+def test_a_real_quit_is_never_held_up_by_the_page(run_now):
+    """⌘Q, logging out and shutting down ask every window through
+    applicationShouldTerminate_; that answer must stay an immediate yes."""
+    host = _Closer(_Page(answer=True))
+
+    def applicationShouldTerminate_():
+        return host.closing()
+
+    assert applicationShouldTerminate_() is True
+    assert host.window.asked == [] and host.hidden == 0
