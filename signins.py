@@ -254,10 +254,11 @@ def forget_later(domains, store=None) -> None:
 
 
 # ── the windows ──────────────────────────────────────────────────────────────
-def install(institutions) -> None:
+def install(institutions):
     """Teach every window pywebview builds from now on to keep and fill library
     sign-ins. `institutions` returns the saved library list, read afresh on
     every page, so a box ticked in Settings applies to the next page loaded.
+    Returns what runs on a loaded page, for windows pywebview does not build.
 
     A subclass of whatever delegate pywebview will use (MedSearch's own, when
     the reload-on-crash one is installed), like that one: the sign-in rides on
@@ -326,3 +327,4 @@ def install(institutions) -> None:
                 controller, message)
 
     BrowserView.BrowserDelegate = MedSearchSignInDelegate
+    return page_loaded

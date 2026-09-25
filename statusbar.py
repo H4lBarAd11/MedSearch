@@ -447,6 +447,11 @@ class StatusBar:
                 inst = BrowserView.instances.get(win.uid)
                 if inst is not None and inst.window.isVisible():
                     return True
+            # And the windows MedSearch builds itself for a page (article_windows.py).
+            from AppKit import NSApp
+            for w in NSApp.windows():
+                if str(w.identifier() or "") == "medsearch.article" and w.isVisible():
+                    return True
         except Exception:
             pass
         return False

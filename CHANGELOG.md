@@ -4,6 +4,10 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.21
+
+- Ovid's PDF button, and any other site's button that sends a form to a new window, now opens the PDF in a new MedSearch window, still signed in to your library. It did nothing at all.
+
 ## 1.20
 
 - A site's PDF button in an article window now opens the PDF in a new MedSearch window, still signed in to your library. It used to send you to Safari to sign in again, or do nothing at all.

@@ -98,4 +98,5 @@ def test_a_real_page_keeps_its_tabs_and_files_in_medsearch():
 
 def test_medsearch_installs_it_for_article_windows_only():
     app = (ROOT / "app.py").read_text()
-    assert "article_windows.install(lambda w: w is not _MAIN_WINDOW, _open_article_window)" in app
+    assert "article_windows.install(lambda w: w is not _MAIN_WINDOW, _open_article_window," in app
+    assert "on_page=_signin_page)" in app

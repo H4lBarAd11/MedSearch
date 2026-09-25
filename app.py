@@ -3724,9 +3724,10 @@ if __name__ == "__main__":
             print(f"  (page reload on a crash unavailable: {e})")
         # Library sign-ins kept in the Keychain and filled in (signins.py). After
         # the reload fix, whose delegate it builds on.
+        _signin_page = None
         try:
             if sys.platform == "darwin":
-                signins.install(lambda: CONFIG.get("institution_proxies") or [])
+                _signin_page = signins.install(lambda: CONFIG.get("institution_proxies") or [])
         except Exception as e:                      # the windows still open without it
             print(f"  (library sign-ins unavailable: {e})")
         # An article window's new tabs and files stay in MedSearch, with its
@@ -3734,7 +3735,8 @@ if __name__ == "__main__":
         try:
             if sys.platform == "darwin":
                 import article_windows
-                article_windows.install(lambda w: w is not _MAIN_WINDOW, _open_article_window)
+                article_windows.install(lambda w: w is not _MAIN_WINDOW, _open_article_window,
+                                        on_page=_signin_page)
         except Exception as e:                      # the windows still open without it
             print(f"  (article window tabs and downloads unavailable: {e})")
 

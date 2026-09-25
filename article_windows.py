@@ -7,11 +7,14 @@ has none of the session the article window signed in with, so the library asked
 for the login again. A button that opens its new window from a script got no
 window at all, and a PDF the site hands over as a file rather than a page to
 show was dropped without a word. Most publishers' "PDF" buttons do one of the
-three, so the PDF "never opened".
+three, so the PDF "never opened". Ovid's still did nothing after the first fix:
+it sends a form to a new window, and a form's reply has no address to reopen.
 
 WHAT THEY DO NOW (his choices). A new tab opens as a new MedSearch window, which
 shares the sign-in (every window uses the same cookies), with the article left
-open behind it. A file is saved to Downloads by WebKit itself, so with the same
+open behind it. A form sent to a new window, or an empty window the page fills
+in, gets a window MedSearch builds on WebKit's own configuration, which WebKit
+then fills itself, form and all. A file is saved to Downloads by WebKit itself, so with the same
 sign-in; a PDF is then opened in the Mac's PDF app (Preview), anything else is
 shown in the Finder, never opened on its own. A download that fails says so in
 a dialog on that window, and leaves no half a file behind.
@@ -27,6 +30,9 @@ from pathlib import Path
 
 #: The first bytes of every PDF.
 PDF_MAGIC = b"%PDF-"
+#: What marks a window MedSearch built itself for a page, so the menu bar item
+#: counts it as open (statusbar.py), like pywebview's own windows.
+WINDOW_ID = "medsearch.article"
 
 
 def safe_name(suggested: str) -> str:
@@ -72,9 +78,9 @@ def finished(path: Path) -> tuple[Path, bool]:
 
 
 def opens_as_window(url: str, method: str) -> bool:
-    """A new tab that becomes a new MedSearch window: an ordinary web address
-    asked for plainly. A blank page to be written into, or a form's reply, has
-    no address to open again, so it is not."""
+    """A new tab that becomes a new article window: an ordinary web address asked
+    for plainly. A form's reply, or an empty window a page fills in, has no address
+    to open again: WebKit fills a window of MedSearch's own instead (`install`)."""
     return (method or "GET").upper() == "GET" and url.lower().startswith(("http://", "https://"))
 
 
@@ -84,17 +90,19 @@ def loads_in_place(url: str) -> bool:
     return url.lower().startswith(("blob:", "data:"))
 
 
-def install(is_article, open_window, downloads=None, reveal=None, open_file=None,
-            fail=None) -> None:
+def install(is_article, open_window, on_page=None, downloads=None, reveal=None,
+            open_file=None, fail=None, present=None) -> None:
     """Teach every article window pywebview builds from now on to keep new tabs
     and files inside MedSearch. `is_article(window)` tells an article window from
-    the main one; `open_window(url)` opens a new article window. `downloads`,
-    `reveal`, `open_file` and `fail` are the Downloads folder, "show in Finder",
-    "open in its app" and the failure dialog, replaceable for the tests."""
+    the main one; `open_window(url)` opens a new article window; `on_page(web)`,
+    if given, runs on every page a window of MedSearch's own finishes loading (the
+    library sign-in). `downloads`, `reveal`, `open_file`, `fail` and `present` are
+    the Downloads folder, "show in Finder", "open in its app", the failure dialog
+    and putting a new window on screen, replaceable for the tests."""
     import objc
     import WebKit
-    from AppKit import NSAlert, NSWorkspace
-    from Foundation import NSObject, NSURL
+    from AppKit import NSAlert, NSApplication, NSBackingStoreBuffered, NSWindow, NSWorkspace
+    from Foundation import NSMakeRect, NSObject, NSURL
     from webview.platforms.cocoa import BrowserView
 
     base = BrowserView.BrowserDelegate
@@ -159,6 +167,122 @@ def install(is_article, open_window, downloads=None, reveal=None, open_file=None
             except Exception:
                 pass
 
+    def attach(download):
+        d = Download.alloc().init()
+        keep.add(d)
+        download.setDelegate_(d)
+
+    def show(window):
+        window.makeKeyAndOrderFront_(None)
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+    present = present or show
+    windows = set()                   # MedSearch's own windows for a page's new tab
+
+    def new_tab(web, config, action):
+        """What a page's new tab or window becomes (see the module's docstring)."""
+        request = action.request()
+        url = str(request.URL().absoluteString() or "") if request.URL() else ""
+        if opens_as_window(url, str(request.HTTPMethod() or "GET")):
+            open_window(url)
+            return None
+        if loads_in_place(url):
+            # Only the page may open what it built: WebKit ignores a blob
+            # address loaded from outside, so the page is asked to go there.
+            web.evaluateJavaScript_completionHandler_(
+                "location.assign(%s)" % json.dumps(url), None)
+            return None
+        return own_window(web, config)
+
+    def own_window(opener, config):
+        """A form sent to a new window, or an empty window a page fills in (Ovid):
+        neither has an address to open again, so WebKit is handed the new window
+        it asked for, built on its own configuration, and sends the form into it
+        itself, with the same sign-in."""
+        window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(0, 0, 1100, 860), 1 | 2 | 4 | 8, NSBackingStoreBuffered, False)
+        window.setReleasedWhenClosed_(False)
+        window.setTitle_("MedSearch — Article")
+        window.setMinSize_((800, 600))
+        window.setIdentifier_(WINDOW_ID)
+        there = opener.window() if opener is not None else None
+        if there is not None:
+            f = there.frame()
+            window.cascadeTopLeftFromPoint_((f.origin.x, f.origin.y + f.size.height))
+        else:
+            window.center()
+        web = WebKit.WKWebView.alloc().initWithFrame_configuration_(
+            window.contentView().bounds(), config)
+        web.setAutoresizingMask_(2 | 16)          # width and height follow the window
+        pages, closer = OwnPages.alloc().init(), Closer.alloc().init()
+        web.setNavigationDelegate_(pages)
+        web.setUIDelegate_(pages)
+        window.setContentView_(web)
+        window.setDelegate_(closer)
+        closer.held = (window, web, pages, closer)
+        windows.add(closer.held)
+        present(window)
+        return web
+
+    class Closer(NSObject):
+        def windowWillClose_(self, note):
+            held = getattr(self, "held", None)
+            if held is not None:
+                windows.discard(held)
+                held[1].setNavigationDelegate_(None)
+                held[1].setUIDelegate_(None)
+
+    class OwnPages(NSObject):
+        """The pages of a window MedSearch built itself: everything allowed, files
+        downloaded as in any article window, the page may close its window, and
+        its alerts and questions are shown."""
+
+        def webView_decidePolicyForNavigationAction_decisionHandler_(self, web, action, handler):
+            handler(WebKit.WKNavigationActionPolicyAllow)
+
+        def webView_decidePolicyForNavigationResponse_decisionHandler_(self, web, response, handler):
+            if response.canShowMIMEType():
+                handler(WebKit.WKNavigationResponsePolicyAllow)
+            elif as_download is not None:
+                handler(as_download)
+            else:
+                handler(WebKit.WKNavigationResponsePolicyCancel)
+
+        def webView_navigationResponse_didBecomeDownload_(self, web, response, download):
+            attach(download)
+
+        def webView_createWebViewWithConfiguration_forNavigationAction_windowFeatures_(
+                self, web, config, action, features):
+            return new_tab(web, config, action)
+
+        def webView_didFinishNavigation_(self, web, nav):
+            if on_page is not None:
+                try:
+                    on_page(web)
+                except Exception as e:
+                    print(f"  (sign-in fill skipped: {e})")
+
+        def webViewWebContentProcessDidTerminate_(self, web):
+            web.reload()
+
+        def webViewDidClose_(self, web):
+            if web.window() is not None:
+                web.window().close()
+
+        def webView_runJavaScriptAlertPanelWithMessage_initiatedByFrame_completionHandler_(
+                self, web, message, frame, handler):
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_(str(message))
+            alert.runModal()
+            handler()
+
+        def webView_runJavaScriptConfirmPanelWithMessage_initiatedByFrame_completionHandler_(
+                self, web, message, frame, handler):
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_(str(message))
+            alert.addButtonWithTitle_("OK")
+            alert.addButtonWithTitle_("Cancel")
+            handler(alert.runModal() == 1000)     # the first button
+
     class MedSearchArticleDelegate(base):
         def webView_createWebViewWithConfiguration_forNavigationAction_windowFeatures_(
                 self, web, config, action, features):
@@ -166,16 +290,7 @@ def install(is_article, open_window, downloads=None, reveal=None, open_file=None
                 return objc.super(MedSearchArticleDelegate, self) \
                     .webView_createWebViewWithConfiguration_forNavigationAction_windowFeatures_(
                         web, config, action, features)
-            request = action.request()
-            url = str(request.URL().absoluteString() or "") if request.URL() else ""
-            if opens_as_window(url, str(request.HTTPMethod() or "GET")):
-                open_window(url)
-            elif loads_in_place(url):
-                # Only the page may open what it built: WebKit ignores a blob
-                # address loaded from outside, so the page is asked to go there.
-                web.evaluateJavaScript_completionHandler_(
-                    "location.assign(%s)" % json.dumps(url), None)
-            return None
+            return new_tab(web, config, action)
 
         def webView_decidePolicyForNavigationResponse_decisionHandler_(self, web, response, handler):
             if as_download is None or response.canShowMIMEType() or not article(web):
@@ -184,8 +299,6 @@ def install(is_article, open_window, downloads=None, reveal=None, open_file=None
             handler(as_download)
 
         def webView_navigationResponse_didBecomeDownload_(self, web, response, download):
-            d = Download.alloc().init()
-            keep.add(d)
-            download.setDelegate_(d)
+            attach(download)
 
     BrowserView.BrowserDelegate = MedSearchArticleDelegate
