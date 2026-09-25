@@ -500,6 +500,7 @@ document.querySelectorAll('.db-item').forEach(item => {
       return;   // don't check it
     }
     item.classList.toggle('checked');
+    rememberSources();
   });
 });
 
@@ -512,7 +513,23 @@ document.getElementById('selectAllBtn').addEventListener('click', () => {
     i.classList.toggle('checked', !allOn);
   });
   document.getElementById('selectAllBtn').textContent = allOn ? 'Select all' : 'Deselect all';
+  rememberSources();
 });
+
+// The ticks MedSearch starts with may already be all of them.
+document.getElementById('selectAllBtn').textContent =
+  [...document.querySelectorAll('.db-item')].every(i => i.classList.contains('checked'))
+    ? 'Deselect all' : 'Select all';
+
+// Your own ticks are what MedSearch starts with next time. A quick search from
+// the menu bar, or a saved search run again, changes them for that search only:
+// only these two clicks call this.
+function rememberSources() {
+  fetch('/sources', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({sources: getSelectedDBs()})
+  }).catch(() => {});
+}
 
 function getSelectedDBs() {
   return [...document.querySelectorAll('.db-item.checked')].map(i => i.dataset.db);
