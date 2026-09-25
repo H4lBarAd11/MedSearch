@@ -4,6 +4,10 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.25
+
+- The temporary log of what PDF buttons ask for (added in 1.22 to find Ovid's) is removed, and its file is deleted.
+
 ## 1.24
 
 - Ovid's PDF button opens the PDF. A new window a site asks for is now opened the way Safari opens it, as a window of the page that asked for it: Ovid hands over the PDF only to such a window, and sent any other one back to the article.
