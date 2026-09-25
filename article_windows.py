@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -342,7 +343,11 @@ def install(is_article, open_window, on_page=None, downloads=None, reveal=None,
         note("new window", url=url, method=str(request.HTTPMethod() or ""),       # diagnostic
              type=int(action.navigationType()))
         if opens_as_window(url, str(request.HTTPMethod() or "GET")):
-            open_window(url)
+            # NOT ON THIS THREAD. pywebview builds a window only when asked from a
+            # thread of its own: asked from the main one, where WebKit calls this,
+            # it notes the window for a start that has long happened and makes
+            # nothing. That was Ovid's "nothing at all" (seen in the PDF-button log).
+            threading.Thread(target=open_window, args=(url,), daemon=True).start()
             return None
         if loads_in_place(url):
             # Only the page may open what it built: WebKit ignores a blob

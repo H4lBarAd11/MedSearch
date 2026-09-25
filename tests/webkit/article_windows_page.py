@@ -164,7 +164,16 @@ DOWNLOADS = Path(tempfile.mkdtemp(prefix="medsearch-downloads-"))
 atexit.register(shutil.rmtree, DOWNLOADS, ignore_errors=True)   # however the run ends
 (DOWNLOADS / "paper.pdf").write_bytes(b"already here")          # must not be replaced
 opened, revealed, failed_with, windows, own, pages = [], [], [], [], [], []
-article_windows.install(lambda w: w.kind == "article", windows.append, on_page=pages.append,
+on_main = []
+
+
+def open_window(url):
+    """pywebview's create_window, which makes nothing when called on the main thread."""
+    on_main.append(threading.current_thread() is threading.main_thread())
+    windows.append(url)
+
+
+article_windows.install(lambda w: w.kind == "article", open_window, on_page=pages.append,
                         downloads=DOWNLOADS, reveal=revealed.append, open_file=opened.append,
                         fail=lambda window, reason: failed_with.append(reason),
                         present=own.append,      # never put on screen here
@@ -230,6 +239,8 @@ check("a click on something else is not taken for a PDF button", '"tag": "BODY"'
 click("script")
 check("a window opened by a script opens a MedSearch window",
       until(lambda: windows[-1:] == ["https://publisher.example/pdfft?x=1"]))
+check("pywebview is asked for the window off the main thread (Ovid's fault)",
+      len(on_main) == 2 and not any(on_main))
 click("blank")
 check("an empty window a page fills in gets a window of MedSearch's own",
       until(lambda: len(own) == 1) and len(windows) == 2)
