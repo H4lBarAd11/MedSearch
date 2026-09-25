@@ -1,16 +1,20 @@
 """
 Test setup. app.py reads ~/.medsearch at import time, so HOME is pointed at a
-throwaway folder BEFORE app is imported: the suite never reads or writes the
-real configuration, history or cache. Nothing here touches the network — every
-test that would call an outside service replaces that call with a fake.
+throwaway folder BEFORE app is imported, and removed when the run ends: the
+suite never reads or writes the real configuration, history or cache. Nothing
+here touches the network — every test that would call an outside service
+replaces that call with a fake.
 """
+import atexit
 import json
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
 
 _HOME = tempfile.mkdtemp(prefix="medsearch-tests-")
+atexit.register(shutil.rmtree, _HOME, ignore_errors=True)
 os.environ["HOME"] = _HOME
 # The suite never touches the real Keychain: the keys-in-the-Keychain path is
 # exercised with a fake store instead (test_routes.py).
