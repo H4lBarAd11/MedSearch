@@ -112,6 +112,9 @@ DEFAULTS = {
     # Default source for the menu bar's quick search. One of the source keys
     # ("pubmed", "guidelines", "scopus", ...) or "all". Set from that menu.
     "default_source": "pubmed",
+    # The databases ticked in the top bar's Databases panel, which MedSearch
+    # starts with. Only the user's own ticks change it (POST /sources).
+    "search_sources": ["pubmed"],
     # A monthly ceiling in USD for what the AI features may spend. 0 = no
     # ceiling. The hard limit belongs in the Anthropic console; this one is
     # here so the spending is visible and stops before it surprises anyone.
@@ -2232,6 +2235,25 @@ def _asset_version():
 
 ASSET_V = _asset_version()
 
+def _start_sources():
+    """The databases the top bar starts with: the ones last ticked, and PubMed
+    when none (a search needs at least one)."""
+    known = {k for k, *_ in SOURCES}
+    saved = CONFIG.get("search_sources")
+    ticked = [k for k in saved if k in known] if isinstance(saved, list) else []
+    return ticked or ["pubmed"]
+
+@app.route("/sources", methods=["POST"])
+def remember_sources():
+    """The user's own ticks in the Databases panel, kept for the next start."""
+    given = _json_body().get("sources")
+    if not isinstance(given, list):
+        return jsonify({"ok": False, "message": "No list of databases was sent."}), 400
+    known = [k for k, *_ in SOURCES]
+    CONFIG["search_sources"] = [k for k in known if k in given]
+    save_config(CONFIG)
+    return jsonify({"ok": True, "sources": CONFIG["search_sources"]})
+
 @app.route("/")
 def index():
     has_key = bool(_anthropic_key())
@@ -2252,6 +2274,7 @@ def index():
                            has_wos=bool((CONFIG.get("wos_api_key","") or "").strip()),
                            institution_proxies=CONFIG.get("institution_proxies", []),
                            active_proxy=CONFIG.get("active_proxy", 0),
+                           sources=_start_sources(),
                            auto_query=auto_query,
                            auto_source=auto_source)
 
@@ -3619,6 +3642,16 @@ if __name__ == "__main__":
         # PDFs via the library proxy, JS-rendered viewers). This window is a
         # full browser — it runs JavaScript and carries the user's login
         # session/cookies, so institutional access and paywalls just work.
+        def _open_article_window(url, title=None):
+            if not url or not str(url).lower().startswith(("http://", "https://")):
+                raise ValueError("bad url")
+            webview.create_window(
+                title or "MedSearch — Article",
+                url,
+                width=1100, height=860,
+                min_size=(800, 600),
+            )
+
         class Api:
             def page_ready(self):
                 """The page has loaded: the splash may hand over to the window."""
@@ -3627,14 +3660,7 @@ if __name__ == "__main__":
 
             def open_external(self, url, title=None):
                 try:
-                    if not url or not str(url).lower().startswith(("http://", "https://")):
-                        return {"ok": False, "error": "bad url"}
-                    webview.create_window(
-                        title or "MedSearch — Article",
-                        url,
-                        width=1100, height=860,
-                        min_size=(800, 600),
-                    )
+                    _open_article_window(url, title)
                     return {"ok": True}
                 except Exception as e:
                     return {"ok": False, "error": str(e)}
@@ -3703,6 +3729,14 @@ if __name__ == "__main__":
                 signins.install(lambda: CONFIG.get("institution_proxies") or [])
         except Exception as e:                      # the windows still open without it
             print(f"  (library sign-ins unavailable: {e})")
+        # An article window's new tabs and files stay in MedSearch, with its
+        # sign-in (article_windows.py). Not the main window's own links.
+        try:
+            if sys.platform == "darwin":
+                import article_windows
+                article_windows.install(lambda w: w is not _MAIN_WINDOW, _open_article_window)
+        except Exception as e:                      # the windows still open without it
+            print(f"  (article window tabs and downloads unavailable: {e})")
 
         # The splash (splash.py), for a launch that shows the window: not for one
         # opened at login into the menu bar. The window then stays hidden until
