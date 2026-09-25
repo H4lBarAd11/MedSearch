@@ -4,6 +4,10 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.23
+
+- Ovid's PDF button opens the PDF in a new MedSearch window, signed in. The button was asking for the window correctly, but MedSearch asked for it in a way that made no window at all; this affected every site's "open in a new tab" link, not only Ovid's.
+
 ## 1.22
 
 - Temporary, to find out why Ovid's PDF button still does nothing: for 20 seconds after you click something labelled PDF in an article window, MedSearch notes what that button asked for in a file on this Mac (~/.medsearch/articles.log). Parts of web addresses that could hold a session are cut short. It will be removed once Ovid works.
