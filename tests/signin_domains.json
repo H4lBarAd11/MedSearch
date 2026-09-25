@@ -1,0 +1,16 @@
+[
+  ["https://ezp.biblio.unitn.it", "unitn.it"],
+  ["https://ezp.biblio.unitn.it/", "unitn.it"],
+  ["ezp.biblio.unitn.it", "unitn.it"],
+  ["HTTPS://EZP.Biblio.UniTN.it:443/login?url=", "unitn.it"],
+  ["https://ezproxy.fbk.eu/login?url=", "fbk.eu"],
+  ["https://biblioproxy.apss.tn.it", "apss.tn.it"],
+  ["https://ezproxy-prd.bodleian.ox.ac.uk/login?url=", "ox.ac.uk"],
+  ["https://login.ezproxy.uni.edu/login?url=", "uni.edu"],
+  ["https://go.openathens.net/redirector/example.org?url=", "openathens.net"],
+  ["https://user@ezp.example.org/", "example.org"],
+  ["https://proxy.example.org.#frag", "example.org"],
+  ["https://10.0.0.5/login", "10.0.0.5"],
+  ["https://localhost/", "localhost"],
+  ["", ""]
+]

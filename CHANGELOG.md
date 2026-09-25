@@ -4,6 +4,11 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.19
+
+- MedSearch opens with a splash: the icon's book and magnifier are drawn in the middle of the screen while it loads, and the window then opens out of them.
+- Each library in Settings has a new "Remember sign-in" box. Tick it and MedSearch keeps your library login in the Keychain; the next time the library's login page appears, it is filled in and sent for you. It is filled only on that library's own site, and unticking the box deletes it. It starts unticked, since a Mac shared by several people would otherwise sign everyone in as the first person.
+
 ## 1.18
 
 - Closing the PDF viewer with the window's red button or ⌘W now closes only the viewer. It used to hide the whole MedSearch window in the menu bar. The same goes for any other MedSearch dialog that is open; with nothing open, closing the window hides it in the menu bar as before.
