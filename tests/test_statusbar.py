@@ -295,3 +295,34 @@ def test_a_real_quit_is_never_held_up_by_the_page(run_now):
 
     assert applicationShouldTerminate_() is True
     assert host.window.asked == [] and host.hidden == 0
+
+
+class _AppWindow:
+    def __init__(self, ident, visible): self._ident, self._visible = ident, visible
+    def identifier(self): return self._ident
+    def isVisible(self): return self._visible
+
+
+class _Others:
+    """A StatusBar with only the "is anything else open" question real."""
+    _other_windows_visible = SB.StatusBar._other_windows_visible
+    window = object()
+
+
+@pytest.mark.parametrize("windows,open_", [
+    ([], False),
+    ([_AppWindow("medsearch.article", True)], True),       # a PDF window from a form (Ovid)
+    ([_AppWindow("medsearch.article", False)], False),     # closed or minimised away
+    ([_AppWindow(None, True), _AppWindow("other", True)], False),   # the status menu and the like
+])
+def test_a_window_medsearch_built_for_a_page_keeps_the_dock_icon(monkeypatch, windows, open_):
+    import sys
+    import types
+    import AppKit
+    import webview
+    fake = types.ModuleType("webview.platforms.cocoa")
+    fake.BrowserView = type("BrowserView", (), {"instances": {}})
+    monkeypatch.setitem(sys.modules, "webview.platforms.cocoa", fake)   # no Dock icon here
+    monkeypatch.setattr(webview, "windows", [], raising=False)
+    monkeypatch.setattr(AppKit, "NSApp", type("App", (), {"windows": staticmethod(lambda: windows)})())
+    assert _Others()._other_windows_visible() is open_
