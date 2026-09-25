@@ -96,7 +96,6 @@ server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Files)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 BASE = f"http://127.0.0.1:{server.server_port}"
 PAGE = """<!doctype html><html><body>
-<span id="plain">plain words</span>
 <a id="tab" target="_blank" href="/article-pdf?session=abcdefghijklmnop">PDF (new tab)</a>
 <button id="script" onclick="window.open('/pdfft?x=1')">PDF (script)</button>
 <button id="blank" onclick="window.open('')">blank</button>
@@ -178,8 +177,7 @@ opened, revealed, failed_with, own, pages = [], [], [], [], []
 article_windows.install(lambda w: w.kind == "article", on_page=pages.append,
                         downloads=DOWNLOADS, reveal=revealed.append, open_file=opened.append,
                         fail=lambda window, reason: failed_with.append(reason),
-                        present=own.append,      # never put on screen here
-                        log_path=DOWNLOADS / "articles.log")
+                        present=own.append)      # never put on screen here
 
 config = WebKit.WKWebViewConfiguration.alloc().init()
 config.setWebsiteDataStore_(WebKit.WKWebsiteDataStore.nonPersistentDataStore())
@@ -225,10 +223,6 @@ def check(name, ok):
 
 
 load_page()
-LOG = DOWNLOADS / "articles.log"
-click("plain")                                   # a click on something that is not a PDF button
-spin(0.5)
-check("the PDF-button log is silent before a PDF click", not LOG.exists())
 click("tab")
 
 
@@ -250,12 +244,6 @@ check("a new-tab link gets the window WebKit asked for",
 check("the site hears which page opened it, and serves the PDF (Ovid's check)",
       until(lambda: any(p.startswith("/article-pdf") and r.endswith("/page") for p, r in REFERERS)))
 check("so the window is not sent back to the article", not own_url(0).endswith("/page"))
-text = LOG.read_text() if LOG.exists() else ""
-check("the log records the PDF click and the window it asked for",
-      "  click  " in text and "  new window  " in text and '"tag": "A"' in text)
-check("the log cuts every value in an address", "session=abcdefgh…" in text
-      and "abcdefghijklmnop" not in text)
-check("a click on something else is not taken for a PDF button", '"tag": "BODY"' not in text)
 click("script")
 check("a window opened by a script gets the window WebKit asked for",
       until(lambda: len(own) == 2) and until(lambda: own_url(1).endswith("/pdfft?x=1")))

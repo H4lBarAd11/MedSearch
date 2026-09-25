@@ -3735,10 +3735,9 @@ if __name__ == "__main__":
         try:
             if sys.platform == "darwin":
                 import article_windows
-                article_windows.install(lambda w: w is not _MAIN_WINDOW,
-                                        on_page=_signin_page,
-                                        # TEMPORARY: the PDF-button log (article_windows.py)
-                                        log_path=CONFIG_DIR / "articles.log")
+                article_windows.install(lambda w: w is not _MAIN_WINDOW, on_page=_signin_page)
+            # The file of the temporary PDF-button log (1.22 to 1.24) goes too.
+            (CONFIG_DIR / "articles.log").unlink(missing_ok=True)
         except Exception as e:                      # the windows still open without it
             print(f"  (article window tabs and downloads unavailable: {e})")
 
