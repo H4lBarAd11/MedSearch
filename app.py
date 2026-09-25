@@ -3735,7 +3735,7 @@ if __name__ == "__main__":
         try:
             if sys.platform == "darwin":
                 import article_windows
-                article_windows.install(lambda w: w is not _MAIN_WINDOW, _open_article_window,
+                article_windows.install(lambda w: w is not _MAIN_WINDOW,
                                         on_page=_signin_page,
                                         # TEMPORARY: the PDF-button log (article_windows.py)
                                         log_path=CONFIG_DIR / "articles.log")

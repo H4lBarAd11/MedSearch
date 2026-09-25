@@ -4,9 +4,13 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.24
+
+- Ovid's PDF button opens the PDF. A new window a site asks for is now opened the way Safari opens it, as a window of the page that asked for it: Ovid hands over the PDF only to such a window, and sent any other one back to the article.
+
 ## 1.23
 
-- Ovid's PDF button opens the PDF in a new MedSearch window, signed in. The button was asking for the window correctly, but MedSearch asked for it in a way that made no window at all; this affected every site's "open in a new tab" link, not only Ovid's.
+- New-tab links in article windows open a window again: since 1.20, MedSearch asked for those windows in a way that made no window at all. (Ovid's PDF still did not open: see 1.24.)
 
 ## 1.22
 
