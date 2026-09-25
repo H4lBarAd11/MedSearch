@@ -4,6 +4,13 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.20
+
+- A site's PDF button in an article window now opens the PDF in a new MedSearch window, still signed in to your library. It used to send you to Safari to sign in again, or do nothing at all.
+- A PDF that a site sends as a file is now saved to your Downloads folder and opened in Preview. Other files are saved there and shown in the Finder. They used to be dropped without a word.
+- The databases you tick in the Databases panel are remembered: MedSearch starts with them after quitting or updating, instead of PubMed alone. A quick search from the menu bar, or a saved search run again, does not change them.
+- The Settings button shows a gear instead of a sun.
+
 ## 1.19
 
 - MedSearch opens with a splash: the icon's book and magnifier are drawn in the middle of the screen while it loads, and the window then opens out of them.

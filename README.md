@@ -145,7 +145,10 @@ off-campus and copy what appears in front of the publisher's address, for exampl
 work. Several libraries can be saved; the active one is chosen under **Options**.
 
 Papers then show **DOI (via library)**, which opens them in a browser window inside
-MedSearch that carries your library login, so subscribed papers load directly.
+MedSearch that carries your library login, so subscribed papers load directly. A site's
+own PDF button there opens the PDF in another MedSearch window, still signed in; a PDF the
+site sends as a file is saved to Downloads and opened in Preview, and any other file is
+saved there and shown in the Finder.
 
 Tick **Remember sign-in** under a library and MedSearch keeps the username and password
 you type on its login page in the **Keychain** (under *MedSearch sign-in*). The next time
