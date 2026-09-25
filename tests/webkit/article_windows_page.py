@@ -9,6 +9,7 @@ down. Downloads land in a temporary folder, and "open in Preview", "show in Find
 and the failure dialog are recorded instead of done. Prints one PASS/FAIL line per
 check and exits 1 if any failed.
 """
+import atexit
 import http.server
 import shutil
 import socket
@@ -42,9 +43,27 @@ class Files(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode()
+        POSTED.append((self.path, body, self.headers.get("Cookie") or ""))
+        if self.path == "/ovid":
+            self._send(PDF, "application/pdf")
+        elif self.path == "/ovid-file":
+            self._send(PDF, "application/octet-stream", "ovid.pdf")
+        elif self.path == "/closer":
+            self._send(b"<script>window.close()</script>", "text/html")
+        else:
+            self.send_error(404)
+
     def do_GET(self):
         if self.path == "/page":
-            self._send(PAGE.encode(), "text/html")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Set-Cookie", "session=signed-in; Path=/")
+            body = PAGE.encode()
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif self.path == "/file":
             self._send(PDF, "application/octet-stream", "paper.pdf")
         elif self.path == "/nameless":
@@ -61,6 +80,7 @@ class Files(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
 
+POSTED = []
 server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Files)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 BASE = f"http://127.0.0.1:{server.server_port}"
@@ -73,6 +93,14 @@ PAGE = """<!doctype html><html><body>
 <a id="supplement" href="/supplement">supplement</a>
 <a id="inline" href="/inline.pdf">inline</a>
 <a id="broken" href="/broken">broken</a>
+<form id="post" method="post" action="/ovid" target="_blank"><input name="an" value="00012345"></form>
+<form id="named" method="post" action="/ovid"><input name="an" value="00067890"></form>
+<form id="postfile" method="post" action="/ovid-file" target="_blank"><input name="an" value="1"></form>
+<form id="closer" method="post" action="/closer" target="_blank"><input name="x" value="1"></form>
+<button id="ovid" onclick="document.getElementById('post').submit()">Ovid (form)</button>
+<button id="ovidnamed" onclick="window.open('', 'pdfwin'); var f = document.getElementById('named'); f.target = 'pdfwin'; f.submit();">Ovid (named window)</button>
+<button id="ovidfile" onclick="document.getElementById('postfile').submit()">Ovid (file)</button>
+<button id="closes" onclick="document.getElementById('closer').submit()">closes itself</button>
 <button id="built" onclick="window.open(window.URL.createObjectURL(new Blob(['%PDF-1.4'], {type: 'application/pdf'})))">built</button>
 </body></html>"""
 
@@ -129,11 +157,13 @@ sys.modules["webview.platforms.cocoa"].BrowserView = BrowserView
 import article_windows  # noqa: E402
 
 DOWNLOADS = Path(tempfile.mkdtemp(prefix="medsearch-downloads-"))
+atexit.register(shutil.rmtree, DOWNLOADS, ignore_errors=True)   # however the run ends
 (DOWNLOADS / "paper.pdf").write_bytes(b"already here")          # must not be replaced
-opened, revealed, failed_with, windows = [], [], [], []
-article_windows.install(lambda w: w.kind == "article", windows.append, downloads=DOWNLOADS,
-                        reveal=revealed.append, open_file=opened.append,
-                        fail=lambda window, reason: failed_with.append(reason))
+opened, revealed, failed_with, windows, own, pages = [], [], [], [], [], []
+article_windows.install(lambda w: w.kind == "article", windows.append, on_page=pages.append,
+                        downloads=DOWNLOADS, reveal=revealed.append, open_file=opened.append,
+                        fail=lambda window, reason: failed_with.append(reason),
+                        present=own.append)      # never put on screen here
 
 config = WebKit.WKWebViewConfiguration.alloc().init()
 config.setWebsiteDataStore_(WebKit.WKWebsiteDataStore.nonPersistentDataStore())
@@ -185,13 +215,47 @@ click("script")
 check("a window opened by a script opens a MedSearch window",
       until(lambda: windows[-1:] == ["https://publisher.example/pdfft?x=1"]))
 click("blank")
-spin(0.5)
-check("a blank window to be written into opens nothing", len(windows) == 2)
+check("an empty window a page fills in gets a window of MedSearch's own",
+      until(lambda: len(own) == 1) and len(windows) == 2)
 check("nothing went to Safari", log["base_popup"] == 0)
+
+
+def own_url(i):
+    web = own[i].contentView()
+    return str(web.URL().absoluteString()) if web.URL() else ""
+
+
+load_page()
+click("ovid")
+check("a form sent to a new window (Ovid) gets a window of MedSearch's own",
+      until(lambda: len(own) == 2) and len(windows) == 2)
+check("the form is sent into it, with the sign-in's cookie",
+      until(lambda: any(p == "/ovid" and "an=00012345" in b and "session=signed-in" in c
+                        for p, b, c in POSTED)))
+check("and the window shows its reply", until(lambda: own_url(1).endswith("/ovid")))
+check("the sign-in hook runs on its pages", until(lambda: len(pages) >= 1))
+check("its window keeps MedSearch's mark", str(own[1].identifier()) == article_windows.WINDOW_ID)
+
+load_page()
+click("ovidnamed")
+check("an empty named window filled by a form is ONE window",
+      until(lambda: any("an=00067890" in b for _, b, _ in POSTED)) and len(own) == 3)
+check("and the form's reply lands in it", until(lambda: own_url(2).endswith("/ovid")))
+
+load_page()
+click("ovidfile")
+check("a file sent back to such a window is saved and opened",
+      until(lambda: [p.name for p in opened] == ["ovid.pdf"]))
+
+load_page()
+click("closes")
+check("a page may close the window it opened",
+      until(lambda: len(own) == 5 and own[4].contentView() is not None
+            and own[4].contentView().navigationDelegate() is None))
 
 click("file")
 check("a PDF sent as a file is opened in Preview",
-      until(lambda: [p.name for p in opened] == ["paper (2).pdf"]))
+      until(lambda: [p.name for p in opened][-1:] == ["paper (2).pdf"]))
 check("it did not replace a file already in Downloads",
       (DOWNLOADS / "paper.pdf").read_bytes() == b"already here")
 check("what was saved is the PDF, with the sign-in's session",
@@ -205,19 +269,19 @@ check("a PDF sent without a name is named .pdf and opened",
 load_page()
 click("supplement")
 check("any other file is shown in the Finder, not opened",
-      until(lambda: [p.name for p in revealed] == ["supplement.zip"]) and len(opened) == 2)
+      until(lambda: [p.name for p in revealed] == ["supplement.zip"]) and len(opened) == 3)
 
 load_page()
 click("broken")
 check("a download that breaks off says so", until(lambda: len(failed_with) == 1, 15))
-check("and nothing half-downloaded is opened", len(opened) == 2)
+check("and nothing half-downloaded is opened", len(opened) == 3)
 check("or left in Downloads", not (DOWNLOADS / "broken.pdf").exists())
 
 load_page()
 finished = log["finished"]
 click("inline")
 check("a PDF the page can show is shown, not downloaded",
-      until(lambda: log["finished"] > finished) and len(opened) == 2
+      until(lambda: log["finished"] > finished) and len(opened) == 3
       and str(web.URL().absoluteString()).endswith("/inline.pdf"))
 
 load_page()
@@ -234,6 +298,5 @@ check("the main window's new-tab link still goes pywebview's way",
       until(lambda: log["base_popup"] == 1) and len(windows) == 2)
 
 server.shutdown()
-shutil.rmtree(DOWNLOADS, ignore_errors=True)
 print("ALL PASS" if not failed else f"{len(failed)} FAILED")
 sys.exit(1 if failed else 0)
