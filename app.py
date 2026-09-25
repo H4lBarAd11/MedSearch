@@ -31,6 +31,7 @@ from xml.sax.saxutils import escape as escape_xml
 from flask import Flask, render_template, request, Response, jsonify, stream_with_context
 
 import secrets_store
+import signins
 
 # ── resolve paths so app.py works as a script AND as a frozen build ──────────
 # Two freezing tools put bundled data files (templates/, VERSION) in different
@@ -3285,6 +3286,7 @@ def settings():
             if isinstance(data.get(k), str) and data[k].strip():
                 CONFIG[k] = data[k].strip()
         # Institutional proxies: list of {label, url}; active index.
+        libraries_before = list(CONFIG.get("institution_proxies") or [])
         if "institution_proxies" in data and isinstance(data["institution_proxies"], list):
             cleaned = []
             for p in data["institution_proxies"]:
@@ -3298,6 +3300,9 @@ def settings():
                     # URL rehydrates into the right slot (UniTN/ASUIT/FBK) on load.
                     if p.get("id"):
                         entry["id"] = str(p["id"])
+                    # "Remember sign-in": only an explicit yes, never a default.
+                    if p.get("remember_signin") is True:
+                        entry["remember_signin"] = True
                     cleaned.append(entry)
             CONFIG["institution_proxies"] = cleaned
             # keep the legacy single field in sync with the first entry
@@ -3314,6 +3319,10 @@ def settings():
             except Exception:
                 CONFIG["active_proxy"] = 0
         save_config(CONFIG)
+        # A library whose box was unticked, which was removed, or whose address
+        # now points elsewhere loses its saved sign-in.
+        signins.forget_later(signins.dropped(libraries_before,
+                                             CONFIG.get("institution_proxies") or []))
         # The login item is a file outside the config, so it can fail on its
         # own (a managed Mac may refuse ~/Library/LaunchAgents). The settings
         # are already saved by then, so this is a WARNING, not a failure: the
@@ -3611,6 +3620,11 @@ if __name__ == "__main__":
         # full browser — it runs JavaScript and carries the user's login
         # session/cookies, so institutional access and paywalls just work.
         class Api:
+            def page_ready(self):
+                """The page has loaded: the splash may hand over to the window."""
+                if _SPLASH is not None:
+                    _SPLASH.ready.set()
+
             def open_external(self, url, title=None):
                 try:
                     if not url or not str(url).lower().startswith(("http://", "https://")):
@@ -3682,6 +3696,24 @@ if __name__ == "__main__":
             _reload_when_the_page_dies()
         except Exception as e:                      # the window still opens without it
             print(f"  (page reload on a crash unavailable: {e})")
+        # Library sign-ins kept in the Keychain and filled in (signins.py). After
+        # the reload fix, whose delegate it builds on.
+        try:
+            if sys.platform == "darwin":
+                signins.install(lambda: CONFIG.get("institution_proxies") or [])
+        except Exception as e:                      # the windows still open without it
+            print(f"  (library sign-ins unavailable: {e})")
+
+        # The splash (splash.py), for a launch that shows the window: not for one
+        # opened at login into the menu bar. The window then stays hidden until
+        # the splash hands over to it.
+        _SPLASH = None
+        if sys.platform == "darwin" and not _args.background:
+            try:
+                import splash
+                _SPLASH = splash.Splash()
+            except Exception as e:
+                print(f"  (splash unavailable: {e})")
 
         # Start Flask in a background thread
         t = threading.Thread(target=run_server, daemon=True)
@@ -3693,8 +3725,15 @@ if __name__ == "__main__":
             width=1280, height=860,
             min_size=(940, 640),
             js_api=api,
-            hidden=_args.background,
+            hidden=_args.background or _SPLASH is not None,
         )
+        if _SPLASH is not None:
+            try:
+                _SPLASH.open()
+            except Exception as e:                  # the window is still shown, by hand_over
+                print(f"  (splash couldn't open: {e})")
+            threading.Thread(target=_SPLASH.hand_over, args=(_MAIN_WINDOW,),
+                             daemon=True).start()
 
         def _start_statusbar():
             """The menu bar item (macOS). Runs in pywebview's start thread; the

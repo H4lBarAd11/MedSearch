@@ -147,6 +147,14 @@ work. Several libraries can be saved; the active one is chosen under **Options**
 Papers then show **DOI (via library)**, which opens them in a browser window inside
 MedSearch that carries your library login, so subscribed papers load directly.
 
+Tick **Remember sign-in** under a library and MedSearch keeps the username and password
+you type on its login page in the **Keychain** (under *MedSearch sign-in*). The next time
+that page opens, the form is filled and sent for you, once; if it comes back, it is filled
+and left for you. The sign-in is filled only on an https page of the library's own domain,
+shown under the box (`unitn.it` for UniTN), and unticking the box deletes it. The box
+starts unticked: on a Mac that several people share, a saved sign-in would sign every one
+of them in as the first.
+
 ## What the AI costs
 
 The one-line summaries use the smallest Claude model, the assistant reuses a cached,
