@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import time
 from pathlib import Path
 
 #: The first bytes of every PDF.
@@ -90,15 +92,114 @@ def loads_in_place(url: str) -> bool:
     return url.lower().startswith(("blob:", "data:"))
 
 
+# ── TEMPORARY: the PDF-button log ───────────────────────────────────────────
+# Asked for 25 Sep, to see what Ovid's PDF button does after two fixes did not
+# reach it. Remove this section, its hooks below (marked "diagnostic") and the
+# log_path argument in app.py once Ovid's PDF opens.
+#
+# WHAT IS WRITTEN, AND WHAT NOT. Only the 20 s after a click on something that
+# says PDF: what was clicked (its markup, link, script, form), and every page,
+# window and file the article windows then ask for, with WebKit's own errors.
+# Every value in an address is cut to its first 8 characters, so a session in
+# the address is never written whole. The file stays on this Mac, readable only
+# by its owner.
+DIAG_ARM_S = 20
+DIAG_MAX_BYTES = 2_000_000
+
+_QUERY_VALUE = re.compile(r"([?&;][A-Za-z0-9_.\-]+=)([^&;\"'\s<>]{8})[^&;\"'\s<>]+")
+
+
+def short(text: str) -> str:
+    """Addresses in `text` with every query value cut to 8 characters."""
+    return _QUERY_VALUE.sub(lambda m: m.group(1) + m.group(2) + "…", str(text or ""))
+
+
+class DiagLog:
+    def __init__(self, path):
+        self.path, self.armed_until = Path(path), 0.0
+
+    def write(self, kind, **fields):
+        now = time.time()
+        if kind == "click":
+            self.armed_until = now + DIAG_ARM_S
+        elif now > self.armed_until:
+            return
+        fields = {k: short(v) if isinstance(v, str) else v for k, v in fields.items()}
+        line = f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {kind}  {json.dumps(fields, ensure_ascii=False)}\n"
+        try:
+            if self.path.exists() and self.path.stat().st_size > DIAG_MAX_BYTES:
+                self.path.write_text("")
+            fd = os.open(str(self.path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as fh:
+                fh.write(line)
+        except OSError:
+            pass
+
+
+#: Runs in every frame of an article window: reports a click on something that
+#: says PDF, and what the page then does with windows and forms.
+DIAG_SCRIPT = """
+(function () {
+  if (window.__medsearchDiag) return;
+  window.__medsearchDiag = true;
+  function post(o) {
+    o.frame = location.href;
+    try { window.webkit.messageHandlers.browserDelegate.postMessage({ medsearchDiag: o }); } catch (e) {}
+  }
+  function says(x) {
+    if (!x || !x.getAttribute || /^(BODY|HTML)$/.test(x.tagName)) return false;
+    var label = String(x.innerText || x.value || '');
+    if (label.length > 60) label = '';           // a container, not a button
+    var t = label + ' ' + (x.getAttribute('title') || '') + ' '
+          + (x.getAttribute('aria-label') || '') + ' ' + (x.getAttribute('href') || '')
+          + ' ' + (x.getAttribute('class') || '') + ' ' + (x.getAttribute('id') || '');
+    return /pdf/i.test(t);
+  }
+  document.addEventListener('click', function (e) {
+    for (var x = e.target, n = 0; x && n < 6; x = x.parentElement, n++) {
+      if (says(x)) {
+        var f = x.form || (x.closest && x.closest('form'));
+        post({ kind: 'click', tag: x.tagName, html: (x.outerHTML || '').slice(0, 1500),
+               href: x.href || '', target: x.target || '',
+               onclick: (x.getAttribute('onclick') || '').slice(0, 600),
+               form: f ? { action: f.action, method: f.method, target: f.target,
+                           fields: Array.prototype.map.call(f.elements, function (i) { return i.name; }).join(',') } : null });
+        return;
+      }
+    }
+  }, true);
+  var open = window.open;
+  window.open = function (u, name, features) {
+    var w = open.apply(this, arguments);
+    post({ kind: 'window.open', url: String(u || ''), name: String(name || ''),
+           features: String(features || ''), got: w ? 'a window' : 'null' });
+    return w;
+  };
+  var submit = HTMLFormElement.prototype.submit;
+  HTMLFormElement.prototype.submit = function () {
+    post({ kind: 'form.submit', action: this.action, method: this.method, target: this.target });
+    return submit.apply(this, arguments);
+  };
+  window.addEventListener('error', function (ev) {
+    post({ kind: 'script error', message: String(ev.message), at: String(ev.filename) + ':' + ev.lineno });
+  });
+  window.addEventListener('unhandledrejection', function (ev) {
+    post({ kind: 'script error', message: 'unhandled: ' + String(ev.reason) });
+  });
+})();
+"""
+
+
 def install(is_article, open_window, on_page=None, downloads=None, reveal=None,
-            open_file=None, fail=None, present=None) -> None:
+            open_file=None, fail=None, present=None, log_path=None) -> None:
     """Teach every article window pywebview builds from now on to keep new tabs
     and files inside MedSearch. `is_article(window)` tells an article window from
     the main one; `open_window(url)` opens a new article window; `on_page(web)`,
     if given, runs on every page a window of MedSearch's own finishes loading (the
     library sign-in). `downloads`, `reveal`, `open_file`, `fail` and `present` are
     the Downloads folder, "show in Finder", "open in its app", the failure dialog
-    and putting a new window on screen, replaceable for the tests."""
+    and putting a new window on screen, replaceable for the tests. `log_path`,
+    if given, is where the temporary PDF-button log is written (diagnostic)."""
     import objc
     import WebKit
     from AppKit import NSAlert, NSApplication, NSBackingStoreBuffered, NSWindow, NSWorkspace
@@ -123,6 +224,62 @@ def install(is_article, open_window, on_page=None, downloads=None, reveal=None,
             alert.runModal()
     fail = fail or tell
     keep = set()                      # downloads in flight, and their delegates
+    diag = DiagLog(log_path) if log_path else None                           # diagnostic
+    watched = set()                   # content controllers that have the script (diagnostic)
+    from WebKit import WKUserScript
+
+    def watch(web):                                                          # diagnostic
+        """The PDF-button script in every frame of this window from now on, and in
+        the page already there."""
+        if diag is None:
+            return
+        controller = web.configuration().userContentController()
+        if id(controller) not in watched:
+            watched.add(id(controller))
+            controller.addUserScript_(WKUserScript.alloc()
+                                      .initWithSource_injectionTime_forMainFrameOnly_(
+                                          DIAG_SCRIPT, 1, False))   # at document end, all frames
+        web.evaluateJavaScript_completionHandler_(DIAG_SCRIPT, None)
+
+    def note(kind, **fields):                                                # diagnostic
+        if diag is not None:
+            diag.write(kind, **fields)
+
+    def note_action(web, action):                                           # diagnostic
+        if diag is None:
+            return
+        request, frame = action.request(), action.targetFrame()
+        note("navigate", url=str(request.URL().absoluteString() or "") if request.URL() else "",
+             method=str(request.HTTPMethod() or ""), type=int(action.navigationType()),
+             frame="new window" if frame is None else ("main" if frame.isMainFrame() else "sub"))
+
+    def note_response(response):                                            # diagnostic
+        if diag is None:
+            return
+        r = response.response()
+        headers = dict(r.allHeaderFields()) if hasattr(r, "allHeaderFields") else {}
+        note("response", url=str(r.URL().absoluteString() or ""), mime=str(r.MIMEType() or ""),
+             status=int(r.statusCode()) if hasattr(r, "statusCode") else 0,
+             shown=bool(response.canShowMIMEType()), main=bool(response.isForMainFrame()),
+             disposition=str(headers.get("Content-Disposition", "")))
+
+    def note_failure(web, error):                                           # diagnostic
+        if diag is not None and error is not None:
+            note("failed", url=str(web.URL().absoluteString() or "") if web.URL() else "",
+                 error=str(error.localizedDescription()), domain=str(error.domain()),
+                 code=int(error.code()))
+
+    def note_message(body):                                                 # diagnostic
+        """True if the page's message was the script's report."""
+        if not (hasattr(body, "get") and "medsearchDiag" in body):
+            return False
+        got = body["medsearchDiag"]
+        fields = {str(k): (dict(v) if hasattr(v, "keys") else (str(v) if v is not None else None))
+                  for k, v in dict(got).items()}
+        kind = fields.pop("kind", "page")
+        note(kind, **{k: (json.dumps({str(a): str(b) for a, b in v.items()}) if isinstance(v, dict) else v)
+                      for k, v in fields.items()})
+        return True
 
     def article(web):
         inst = BrowserView.get_instance("webview", web)
@@ -182,6 +339,8 @@ def install(is_article, open_window, on_page=None, downloads=None, reveal=None,
         """What a page's new tab or window becomes (see the module's docstring)."""
         request = action.request()
         url = str(request.URL().absoluteString() or "") if request.URL() else ""
+        note("new window", url=url, method=str(request.HTTPMethod() or ""),       # diagnostic
+             type=int(action.navigationType()))
         if opens_as_window(url, str(request.HTTPMethod() or "GET")):
             open_window(url)
             return None
@@ -237,9 +396,11 @@ def install(is_article, open_window, on_page=None, downloads=None, reveal=None,
         its alerts and questions are shown."""
 
         def webView_decidePolicyForNavigationAction_decisionHandler_(self, web, action, handler):
+            note_action(web, action)                                         # diagnostic
             handler(WebKit.WKNavigationActionPolicyAllow)
 
         def webView_decidePolicyForNavigationResponse_decisionHandler_(self, web, response, handler):
+            note_response(response)                                          # diagnostic
             if response.canShowMIMEType():
                 handler(WebKit.WKNavigationResponsePolicyAllow)
             elif as_download is not None:
@@ -254,7 +415,14 @@ def install(is_article, open_window, on_page=None, downloads=None, reveal=None,
                 self, web, config, action, features):
             return new_tab(web, config, action)
 
+        def webView_didFailProvisionalNavigation_withError_(self, web, nav, error):
+            note_failure(web, error)                                         # diagnostic
+
+        def webView_didFailNavigation_withError_(self, web, nav, error):
+            note_failure(web, error)                                         # diagnostic
+
         def webView_didFinishNavigation_(self, web, nav):
+            watch(web)                                                       # diagnostic
             if on_page is not None:
                 try:
                     on_page(web)
@@ -292,7 +460,34 @@ def install(is_article, open_window, on_page=None, downloads=None, reveal=None,
                         web, config, action, features)
             return new_tab(web, config, action)
 
+        def webView_decidePolicyForNavigationAction_decisionHandler_(self, web, action, handler):
+            if article(web):
+                note_action(web, action)                                     # diagnostic
+            return objc.super(MedSearchArticleDelegate, self) \
+                .webView_decidePolicyForNavigationAction_decisionHandler_(web, action, handler)
+
+        def webView_didFailProvisionalNavigation_withError_(self, web, nav, error):
+            if article(web):
+                note_failure(web, error)                                     # diagnostic
+
+        def webView_didFailNavigation_withError_(self, web, nav, error):
+            if article(web):
+                note_failure(web, error)                                     # diagnostic
+
+        def webView_didFinishNavigation_(self, web, nav):
+            objc.super(MedSearchArticleDelegate, self).webView_didFinishNavigation_(web, nav)
+            if article(web):
+                watch(web)                                                   # diagnostic
+
+        def userContentController_didReceiveScriptMessage_(self, controller, message):
+            if note_message(message.body()):                                 # diagnostic
+                return
+            objc.super(MedSearchArticleDelegate, self) \
+                .userContentController_didReceiveScriptMessage_(controller, message)
+
         def webView_decidePolicyForNavigationResponse_decisionHandler_(self, web, response, handler):
+            if article(web):
+                note_response(response)                                      # diagnostic
             if as_download is None or response.canShowMIMEType() or not article(web):
                 return objc.super(MedSearchArticleDelegate, self) \
                     .webView_decidePolicyForNavigationResponse_decisionHandler_(web, response, handler)

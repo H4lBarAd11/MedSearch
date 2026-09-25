@@ -99,4 +99,26 @@ def test_a_real_page_keeps_its_tabs_and_files_in_medsearch():
 def test_medsearch_installs_it_for_article_windows_only():
     app = (ROOT / "app.py").read_text()
     assert "article_windows.install(lambda w: w is not _MAIN_WINDOW, _open_article_window," in app
-    assert "on_page=_signin_page)" in app
+    assert "on_page=_signin_page," in app
+
+
+def test_the_pdf_button_log_cuts_every_value_in_an_address():
+    assert W.short("https://ovidsp.ovid.com/ovidweb.cgi?QS2=434f4e1a73d37e8cb17d&T=JS") == \
+        "https://ovidsp.ovid.com/ovidweb.cgi?QS2=434f4e1a…&T=JS"
+    assert W.short('<a href="/pdf?session=0123456789abcdef">') == '<a href="/pdf?session=01234567…">'
+
+
+def test_the_pdf_button_log_writes_only_after_a_pdf_click(tmp_path, monkeypatch):
+    log = W.DiagLog(tmp_path / "articles.log")
+    now = [1000.0]
+    monkeypatch.setattr(W.time, "time", lambda: now[0])
+    log.write("navigate", url="https://a.org/x")
+    assert not (tmp_path / "articles.log").exists()
+    log.write("click", html="<a>PDF</a>")
+    now[0] += W.DIAG_ARM_S - 1
+    log.write("navigate", url="https://a.org/pdf")
+    now[0] += 2
+    log.write("navigate", url="https://a.org/later")
+    lines = (tmp_path / "articles.log").read_text().splitlines()
+    assert [ln.split("  ")[1] for ln in lines] == ["click", "navigate"]
+    assert oct((tmp_path / "articles.log").stat().st_mode & 0o777) == "0o600"

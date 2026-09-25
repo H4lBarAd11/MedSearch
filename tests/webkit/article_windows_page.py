@@ -85,7 +85,8 @@ server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Files)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 BASE = f"http://127.0.0.1:{server.server_port}"
 PAGE = """<!doctype html><html><body>
-<a id="tab" target="_blank" href="https://publisher.example/article/pdf">PDF (new tab)</a>
+<span id="plain">plain words</span>
+<a id="tab" target="_blank" href="https://publisher.example/article/pdf?session=abcdefghijklmnop">PDF (new tab)</a>
 <button id="script" onclick="window.open('https://publisher.example/pdfft?x=1')">PDF (script)</button>
 <button id="blank" onclick="window.open('')">blank</button>
 <a id="file" href="/file">file</a>
@@ -112,6 +113,9 @@ class PywebviewDelegate(NSObject):
 
     def webView_didFinishNavigation_(self, web, nav):
         log["finished"] += 1
+
+    def userContentController_didReceiveScriptMessage_(self, controller, message):
+        pass
 
     def webView_createWebViewWithConfiguration_forNavigationAction_windowFeatures_(
             self, web, config, action, features):
@@ -163,13 +167,15 @@ opened, revealed, failed_with, windows, own, pages = [], [], [], [], [], []
 article_windows.install(lambda w: w.kind == "article", windows.append, on_page=pages.append,
                         downloads=DOWNLOADS, reveal=revealed.append, open_file=opened.append,
                         fail=lambda window, reason: failed_with.append(reason),
-                        present=own.append)      # never put on screen here
+                        present=own.append,      # never put on screen here
+                        log_path=DOWNLOADS / "articles.log")
 
 config = WebKit.WKWebViewConfiguration.alloc().init()
 config.setWebsiteDataStore_(WebKit.WKWebsiteDataStore.nonPersistentDataStore())
 # A click here is a script's, not a person's: let it open windows as a click would.
 config.preferences().setJavaScriptCanOpenWindowsAutomatically_(True)
 delegate = BrowserView.BrowserDelegate.alloc().init()
+config.userContentController().addScriptMessageHandler_name_(delegate, "browserDelegate")  # as pywebview does
 web = WebKit.WKWebView.alloc().initWithFrame_configuration_(NSMakeRect(0, 0, 800, 600), config)
 web.setNavigationDelegate_(delegate)
 web.setUIDelegate_(delegate)
@@ -208,9 +214,19 @@ def check(name, ok):
 
 
 load_page()
+LOG = DOWNLOADS / "articles.log"
+click("plain")                                   # a click on something that is not a PDF button
+spin(0.5)
+check("the PDF-button log is silent before a PDF click", not LOG.exists())
 click("tab")
 check("a new-tab link opens a MedSearch window",
-      until(lambda: windows == ["https://publisher.example/article/pdf"]))
+      until(lambda: windows == ["https://publisher.example/article/pdf?session=abcdefghijklmnop"]))
+text = LOG.read_text() if LOG.exists() else ""
+check("the log records the PDF click and the window it asked for",
+      "  click  " in text and "  new window  " in text and '"tag": "A"' in text)
+check("the log cuts every value in an address", "session=abcdefgh…" in text
+      and "abcdefghijklmnop" not in text)
+check("a click on something else is not taken for a PDF button", '"tag": "BODY"' not in text)
 click("script")
 check("a window opened by a script opens a MedSearch window",
       until(lambda: windows[-1:] == ["https://publisher.example/pdfft?x=1"]))
