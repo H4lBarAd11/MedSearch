@@ -380,13 +380,31 @@ function buildInstitutions() {
       label: base.label,
       url: saved && saved.url != null ? saved.url : base.url,
       predefined: true,
+      remember: !!(saved && saved.remember_signin === true),
     };
   });
   // Append custom (non-predefined) institutions
   (savedProxies || []).forEach(p => {
-    if (!p.id) merged.push({id: null, label: p.label || 'Institution', url: p.url || '', predefined: false});
+    if (!p.id) merged.push({id: null, label: p.label || 'Institution', url: p.url || '',
+                            predefined: false, remember: p.remember_signin === true});
   });
   return merged;
+}
+
+// The domain a library's sign-in is filled on, from its proxy address:
+// https://ezp.biblio.unitn.it → unitn.it. The same rule as signins.domain_of,
+// which is the one that decides; this one only says it in Settings.
+function signinDomain(url) {
+  const shared = new Set(['ac', 'co', 'com', 'edu', 'gov', 'net', 'nhs', 'org']);
+  let s = String(url || '').trim().toLowerCase();
+  if (s.includes('://')) s = s.slice(s.indexOf('://') + 3);
+  let host = s.split('/')[0].split('?')[0].split('#')[0];
+  host = host.split('@').pop().split(':')[0].replace(/^\.+|\.+$/g, '');
+  const labels = host.split('.').filter(Boolean);
+  if (labels.length < 2 || labels.every(x => /^\d+$/.test(x))) return host;
+  const second = labels[labels.length - 2];
+  const keep = labels.length >= 3 && (second.length <= 2 || shared.has(second)) ? 3 : 2;
+  return labels.slice(-keep).join('.');
 }
 
 let institutionProxies = buildInstitutions();
@@ -1500,6 +1518,14 @@ function resetAssistantSuggestions() {
 }
 
 // auto-grow the textarea
+// The splash keeps the window hidden until the page says it has loaded
+// (splash.py). pywebview's bridge arrives once the page has finished loading.
+function tellWindowReady() {
+  try { window.pywebview.api.page_ready(); } catch (e) { /* a browser tab: no splash */ }
+}
+if (window.pywebview && window.pywebview.api && window.pywebview.api.page_ready) tellWindowReady();
+else window.addEventListener('pywebviewready', tellWindowReady, {once: true});
+
 document.addEventListener('DOMContentLoaded', () => {
   const ai = document.getElementById('assistantInput');
   if (ai) ai.addEventListener('input', () => {
@@ -2097,6 +2123,11 @@ function renderProxyRows() {
         ${status}
         <button class="proxy-edit" onclick="openProxyEditor(${i})">${hasUrl ? 'Edit' : 'Set up'}</button>
         ${delBtn}
+        ${hasUrl ? `<div class="proxy-remember">
+          <label class="settings-check"><input type="checkbox" ${p.remember ? 'checked' : ''}
+                 onchange="institutionProxies[${i}].remember = this.checked"> Remember sign-in</label>
+          <div class="settings-hint">Kept in your Keychain; filled only on ${escHtml(signinDomain(p.url))}</div>
+        </div>` : ''}
       </div>`;
   }).join('');
 }
@@ -2238,6 +2269,7 @@ async function saveSettings() {
       ...(p.id ? {id: p.id} : {}),
       label: (p.label || '').trim() || 'Institution',
       url: (p.url || '').trim(),
+      ...(p.remember ? {remember_signin: true} : {}),
     }));
   payload.institution_proxies = cleanProxies;
   payload.active_proxy = activeProxy;
