@@ -7,17 +7,24 @@ has none of the session the article window signed in with, so the library asked
 for the login again. A button that opens its new window from a script got no
 window at all, and a PDF the site hands over as a file rather than a page to
 show was dropped without a word. Most publishers' "PDF" buttons do one of the
-three, so the PDF "never opened". Ovid's still did nothing after the first fix:
-it sends a form to a new window, and a form's reply has no address to reopen.
+three, so the PDF "never opened".
 
-WHAT THEY DO NOW (his choices). A new tab opens as a new MedSearch window, which
-shares the sign-in (every window uses the same cookies), with the article left
-open behind it. A form sent to a new window, or an empty window the page fills
-in, gets a window MedSearch builds on WebKit's own configuration, which WebKit
-then fills itself, form and all. A file is saved to Downloads by WebKit itself, so with the same
-sign-in; a PDF is then opened in the Mac's PDF app (Preview), anything else is
-shown in the Finder, never opened on its own. A download that fails says so in
-a dialog on that window, and leaves no half a file behind.
+OVID TOOK THREE MORE TRIES, and the PDF-button log is what settled it. Its button
+opens the PDF's address in a new window. Opened as a separate pywebview window,
+that address was first never shown at all (pywebview builds nothing when asked
+from the main thread, where WebKit asks), and then, once shown, Ovid sent it
+straight back to the article: a window the article page did not open itself is
+not one Ovid serves the PDF to.
+
+WHAT THEY DO NOW (his choices). Every new tab or window a page asks for gets the
+window WebKit asked for: MedSearch builds it on WebKit's own configuration and
+hands it back, and WebKit loads it as the page meant, as Safari does, with the
+page as its opener and the same sign-in (every window shares the cookies); the
+article stays open behind it. A PDF the page built itself is shown in place. A
+file is saved to Downloads by WebKit itself, so with the same sign-in; a PDF is
+then opened in the Mac's PDF app (Preview), anything else is shown in the
+Finder, never opened on its own. A download that fails says so in a dialog on
+that window, and leaves no half a file behind.
 
 ONLY ARTICLE WINDOWS. MedSearch's own window keeps pywebview's behaviour: its
 plain DOI and PubMed links are meant to open in the browser.
@@ -27,7 +34,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import threading
 import time
 from pathlib import Path
 
@@ -78,13 +84,6 @@ def finished(path: Path) -> tuple[Path, bool]:
         except OSError:
             pass
     return path, pdf
-
-
-def opens_as_window(url: str, method: str) -> bool:
-    """A new tab that becomes a new article window: an ordinary web address asked
-    for plainly. A form's reply, or an empty window a page fills in, has no address
-    to open again: WebKit fills a window of MedSearch's own instead (`install`)."""
-    return (method or "GET").upper() == "GET" and url.lower().startswith(("http://", "https://"))
 
 
 def loads_in_place(url: str) -> bool:
@@ -191,13 +190,12 @@ DIAG_SCRIPT = """
 """
 
 
-def install(is_article, open_window, on_page=None, downloads=None, reveal=None,
+def install(is_article, on_page=None, downloads=None, reveal=None,
             open_file=None, fail=None, present=None, log_path=None) -> None:
     """Teach every article window pywebview builds from now on to keep new tabs
     and files inside MedSearch. `is_article(window)` tells an article window from
-    the main one; `open_window(url)` opens a new article window; `on_page(web)`,
-    if given, runs on every page a window of MedSearch's own finishes loading (the
-    library sign-in). `downloads`, `reveal`, `open_file`, `fail` and `present` are
+    the main one; `on_page(web)`, if given, runs on every page a window of
+    MedSearch's own finishes loading (the library sign-in). `downloads`, `reveal`, `open_file`, `fail` and `present` are
     the Downloads folder, "show in Finder", "open in its app", the failure dialog
     and putting a new window on screen, replaceable for the tests. `log_path`,
     if given, is where the temporary PDF-button log is written (diagnostic)."""
@@ -342,13 +340,6 @@ def install(is_article, open_window, on_page=None, downloads=None, reveal=None,
         url = str(request.URL().absoluteString() or "") if request.URL() else ""
         note("new window", url=url, method=str(request.HTTPMethod() or ""),       # diagnostic
              type=int(action.navigationType()))
-        if opens_as_window(url, str(request.HTTPMethod() or "GET")):
-            # NOT ON THIS THREAD. pywebview builds a window only when asked from a
-            # thread of its own: asked from the main one, where WebKit calls this,
-            # it notes the window for a start that has long happened and makes
-            # nothing. That was Ovid's "nothing at all" (seen in the PDF-button log).
-            threading.Thread(target=open_window, args=(url,), daemon=True).start()
-            return None
         if loads_in_place(url):
             # Only the page may open what it built: WebKit ignores a blob
             # address loaded from outside, so the page is asked to go there.
@@ -358,10 +349,10 @@ def install(is_article, open_window, on_page=None, downloads=None, reveal=None,
         return own_window(web, config)
 
     def own_window(opener, config):
-        """A form sent to a new window, or an empty window a page fills in (Ovid):
-        neither has an address to open again, so WebKit is handed the new window
-        it asked for, built on its own configuration, and sends the form into it
-        itself, with the same sign-in."""
+        """The new window WebKit asked for, built on its own configuration and
+        handed back: WebKit then loads it as the page meant, a plain address, a
+        form's reply or an empty window the page fills in, with the page as its
+        opener and the same sign-in."""
         window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(0, 0, 1100, 860), 1 | 2 | 4 | 8, NSBackingStoreBuffered, False)
         window.setReleasedWhenClosed_(False)
@@ -420,6 +411,9 @@ def install(is_article, open_window, on_page=None, downloads=None, reveal=None,
                 self, web, config, action, features):
             return new_tab(web, config, action)
 
+        def webView_didReceiveServerRedirectForProvisionalNavigation_(self, web, nav):
+            note("redirected", to=str(web.URL().absoluteString() or "") if web.URL() else "")  # diagnostic
+
         def webView_didFailProvisionalNavigation_withError_(self, web, nav, error):
             note_failure(web, error)                                         # diagnostic
 
@@ -470,6 +464,10 @@ def install(is_article, open_window, on_page=None, downloads=None, reveal=None,
                 note_action(web, action)                                     # diagnostic
             return objc.super(MedSearchArticleDelegate, self) \
                 .webView_decidePolicyForNavigationAction_decisionHandler_(web, action, handler)
+
+        def webView_didReceiveServerRedirectForProvisionalNavigation_(self, web, nav):
+            if article(web):                                                 # diagnostic
+                note("redirected", to=str(web.URL().absoluteString() or "") if web.URL() else "")
 
         def webView_didFailProvisionalNavigation_withError_(self, web, nav, error):
             if article(web):

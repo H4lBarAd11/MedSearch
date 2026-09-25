@@ -64,6 +64,17 @@ class Files(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif self.path.startswith(("/article-pdf", "/pdfft")):
+            # As Ovid does: the PDF only for a window the article page opened
+            # itself; anything else is sent back to the article.
+            REFERERS.append((self.path, self.headers.get("Referer") or ""))
+            if (self.headers.get("Referer") or "").endswith("/page"):
+                self._send(PDF, "application/pdf")
+            else:
+                self.send_response(302)
+                self.send_header("Location", "/page")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
         elif self.path == "/file":
             self._send(PDF, "application/octet-stream", "paper.pdf")
         elif self.path == "/nameless":
@@ -80,14 +91,14 @@ class Files(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
 
 
-POSTED = []
+POSTED, REFERERS = [], []
 server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Files)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 BASE = f"http://127.0.0.1:{server.server_port}"
 PAGE = """<!doctype html><html><body>
 <span id="plain">plain words</span>
-<a id="tab" target="_blank" href="https://publisher.example/article/pdf?session=abcdefghijklmnop">PDF (new tab)</a>
-<button id="script" onclick="window.open('https://publisher.example/pdfft?x=1')">PDF (script)</button>
+<a id="tab" target="_blank" href="/article-pdf?session=abcdefghijklmnop">PDF (new tab)</a>
+<button id="script" onclick="window.open('/pdfft?x=1')">PDF (script)</button>
 <button id="blank" onclick="window.open('')">blank</button>
 <a id="file" href="/file">file</a>
 <a id="nameless" href="/nameless">nameless</a>
@@ -163,17 +174,8 @@ import article_windows  # noqa: E402
 DOWNLOADS = Path(tempfile.mkdtemp(prefix="medsearch-downloads-"))
 atexit.register(shutil.rmtree, DOWNLOADS, ignore_errors=True)   # however the run ends
 (DOWNLOADS / "paper.pdf").write_bytes(b"already here")          # must not be replaced
-opened, revealed, failed_with, windows, own, pages = [], [], [], [], [], []
-on_main = []
-
-
-def open_window(url):
-    """pywebview's create_window, which makes nothing when called on the main thread."""
-    on_main.append(threading.current_thread() is threading.main_thread())
-    windows.append(url)
-
-
-article_windows.install(lambda w: w.kind == "article", open_window, on_page=pages.append,
+opened, revealed, failed_with, own, pages = [], [], [], [], []
+article_windows.install(lambda w: w.kind == "article", on_page=pages.append,
                         downloads=DOWNLOADS, reveal=revealed.append, open_file=opened.append,
                         fail=lambda window, reason: failed_with.append(reason),
                         present=own.append,      # never put on screen here
@@ -228,23 +230,6 @@ click("plain")                                   # a click on something that is 
 spin(0.5)
 check("the PDF-button log is silent before a PDF click", not LOG.exists())
 click("tab")
-check("a new-tab link opens a MedSearch window",
-      until(lambda: windows == ["https://publisher.example/article/pdf?session=abcdefghijklmnop"]))
-text = LOG.read_text() if LOG.exists() else ""
-check("the log records the PDF click and the window it asked for",
-      "  click  " in text and "  new window  " in text and '"tag": "A"' in text)
-check("the log cuts every value in an address", "session=abcdefgh…" in text
-      and "abcdefghijklmnop" not in text)
-check("a click on something else is not taken for a PDF button", '"tag": "BODY"' not in text)
-click("script")
-check("a window opened by a script opens a MedSearch window",
-      until(lambda: windows[-1:] == ["https://publisher.example/pdfft?x=1"]))
-check("pywebview is asked for the window off the main thread (Ovid's fault)",
-      len(on_main) == 2 and not any(on_main))
-click("blank")
-check("an empty window a page fills in gets a window of MedSearch's own",
-      until(lambda: len(own) == 1) and len(windows) == 2)
-check("nothing went to Safari", log["base_popup"] == 0)
 
 
 def own_url(i):
@@ -252,22 +237,52 @@ def own_url(i):
     return str(web.URL().absoluteString()) if web.URL() else ""
 
 
+def js_in(view, source):
+    box = {}
+    view.evaluateJavaScript_completionHandler_(source, lambda r, e: box.update(r=r))
+    until(lambda: bool(box), 3)
+    return box.get("r")
+
+
+check("a new-tab link gets the window WebKit asked for",
+      until(lambda: len(own) == 1)
+      and until(lambda: own_url(0).endswith("/article-pdf?session=abcdefghijklmnop")))
+check("the site hears which page opened it, and serves the PDF (Ovid's check)",
+      until(lambda: any(p.startswith("/article-pdf") and r.endswith("/page") for p, r in REFERERS)))
+check("so the window is not sent back to the article", not own_url(0).endswith("/page"))
+text = LOG.read_text() if LOG.exists() else ""
+check("the log records the PDF click and the window it asked for",
+      "  click  " in text and "  new window  " in text and '"tag": "A"' in text)
+check("the log cuts every value in an address", "session=abcdefgh…" in text
+      and "abcdefghijklmnop" not in text)
+check("a click on something else is not taken for a PDF button", '"tag": "BODY"' not in text)
+click("script")
+check("a window opened by a script gets the window WebKit asked for",
+      until(lambda: len(own) == 2) and until(lambda: own_url(1).endswith("/pdfft?x=1")))
+click("blank")
+check("an empty window a page fills in gets one too", until(lambda: len(own) == 3))
+# (A target="_blank" link has no opener by the browsers' own rule; window.open has.)
+check("a window the page opens has the page as its opener",
+      js_in(own[2].contentView(), "window.opener !== null && window.opener.location.pathname") == "/page")
+check("nothing went to Safari", log["base_popup"] == 0)
+
+
 load_page()
 click("ovid")
-check("a form sent to a new window (Ovid) gets a window of MedSearch's own",
-      until(lambda: len(own) == 2) and len(windows) == 2)
+check("a form sent to a new window gets a window of MedSearch's own",
+      until(lambda: len(own) == 4))
 check("the form is sent into it, with the sign-in's cookie",
       until(lambda: any(p == "/ovid" and "an=00012345" in b and "session=signed-in" in c
                         for p, b, c in POSTED)))
-check("and the window shows its reply", until(lambda: own_url(1).endswith("/ovid")))
+check("and the window shows its reply", until(lambda: own_url(3).endswith("/ovid")))
 check("the sign-in hook runs on its pages", until(lambda: len(pages) >= 1))
-check("its window keeps MedSearch's mark", str(own[1].identifier()) == article_windows.WINDOW_ID)
+check("its window keeps MedSearch's mark", str(own[3].identifier()) == article_windows.WINDOW_ID)
 
 load_page()
 click("ovidnamed")
 check("an empty named window filled by a form is ONE window",
-      until(lambda: any("an=00067890" in b for _, b, _ in POSTED)) and len(own) == 3)
-check("and the form's reply lands in it", until(lambda: own_url(2).endswith("/ovid")))
+      until(lambda: any("an=00067890" in b for _, b, _ in POSTED)) and len(own) == 5)
+check("and the form's reply lands in it", until(lambda: own_url(4).endswith("/ovid")))
 
 load_page()
 click("ovidfile")
@@ -277,8 +292,8 @@ check("a file sent back to such a window is saved and opened",
 load_page()
 click("closes")
 check("a page may close the window it opened",
-      until(lambda: len(own) == 5 and own[4].contentView() is not None
-            and own[4].contentView().navigationDelegate() is None))
+      until(lambda: len(own) == 7 and own[6].contentView() is not None
+            and own[6].contentView().navigationDelegate() is None))
 
 click("file")
 check("a PDF sent as a file is opened in Preview",
@@ -315,14 +330,14 @@ load_page()
 finished = log["finished"]
 click("built")
 check("a PDF the page built itself is shown in the same window",
-      until(lambda: str(web.URL().absoluteString()).startswith("blob:")) and len(windows) == 2)
+      until(lambda: str(web.URL().absoluteString()).startswith("blob:")) and len(own) == 7)
 
 # The main window keeps pywebview's own behaviour.
 _Window.kind = "main"
 load_page()
 click("tab")
 check("the main window's new-tab link still goes pywebview's way",
-      until(lambda: log["base_popup"] == 1) and len(windows) == 2)
+      until(lambda: log["base_popup"] == 1) and len(own) == 7)
 
 server.shutdown()
 print("ALL PASS" if not failed else f"{len(failed)} FAILED")

@@ -56,20 +56,6 @@ def test_a_finished_pdf_keeps_its_name_and_other_files_are_left_alone(tmp_path):
     assert W.finished(tmp_path / "data.zip") == (tmp_path / "data.zip", False)
 
 
-@pytest.mark.parametrize("url,method,window", [
-    ("https://www.nejm.org/doi/pdf/10.1056/x", "GET", True),
-    ("http://doi-org.ezp.biblio.unitn.it/10.1/x", "get", True),
-    ("https://www.nejm.org/doi/pdf/10.1056/x", "POST", False),   # a form's reply
-    ("", "GET", False),                                            # window.open('')
-    ("about:blank", "GET", False),
-    ("blob:https://site/1234", "GET", False),
-    ("javascript:alert(1)", "GET", False),
-    ("file:///etc/passwd", "GET", False),
-])
-def test_which_new_tabs_open_as_a_medsearch_window(url, method, window):
-    assert W.opens_as_window(url, method) is window
-
-
 @pytest.mark.parametrize("url,here", [
     ("blob:https://site/1234", True), ("data:application/pdf;base64,JVBERi0=", True),
     ("about:blank", False), ("javascript:alert(1)", False), ("https://x.org", False),
@@ -98,7 +84,7 @@ def test_a_real_page_keeps_its_tabs_and_files_in_medsearch():
 
 def test_medsearch_installs_it_for_article_windows_only():
     app = (ROOT / "app.py").read_text()
-    assert "article_windows.install(lambda w: w is not _MAIN_WINDOW, _open_article_window," in app
+    assert "article_windows.install(lambda w: w is not _MAIN_WINDOW," in app
     assert "on_page=_signin_page," in app
 
 
