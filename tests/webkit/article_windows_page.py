@@ -113,6 +113,9 @@ PAGE = """<!doctype html><html><body>
 <button id="ovidfile" onclick="document.getElementById('postfile').submit()">Ovid (file)</button>
 <button id="closes" onclick="document.getElementById('closer').submit()">closes itself</button>
 <button id="built" onclick="window.open(window.URL.createObjectURL(new Blob(['%PDF-1.4'], {type: 'application/pdf'})))">built</button>
+<button id="oldsave" onclick="var a = document.createElement('a'); a.href = window.URL.createObjectURL(new Blob(['%PDF-1.4'], {type: 'application/pdf'})); a.download = 'x.pdf'; document.body.appendChild(a); a.click(); a.remove();">the viewer's old Save</button>
+<button id="toblob" onclick="location.assign(window.URL.createObjectURL(new Blob(['%PDF-1.4'], {type: 'application/pdf'})))">to a blob</button>
+<a id="elsewhere" href="https://doi.org/10.1016/j.neuroimage.2017.07.015">elsewhere, same window</a>
 </body></html>"""
 
 log = {"nav": [], "base_popup": 0, "finished": 0}
@@ -326,6 +329,24 @@ load_page()
 click("tab")
 check("the main window's new-tab link still goes pywebview's way",
       until(lambda: log["base_popup"] == 1) and len(own) == 7)
+
+# ...but never leaves its page (26 Sep: the PDF viewer's Save put the PDF there).
+def stays_put(element_id):
+    click(element_id)
+    spin(1.0)
+    return str(web.URL().absoluteString()) == BASE + "/page"
+
+
+load_page()
+check("the viewer's old Save (a download link to a blob) leaves the main window on its page",
+      stays_put("oldsave"))
+check("so does a script sending it to a blob", stays_put("toblob"))
+nav = len(log["nav"])
+check("and a plain link to another site", stays_put("elsewhere") and len(log["nav"]) == nav)
+finished = log["finished"]
+click("inline")
+check("an address of its own server is still followed",
+      until(lambda: str(web.URL().absoluteString()).endswith("/inline.pdf")))
 
 server.shutdown()
 print("ALL PASS" if not failed else f"{len(failed)} FAILED")
