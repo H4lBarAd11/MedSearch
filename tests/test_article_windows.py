@@ -64,6 +64,25 @@ def test_only_what_the_page_made_itself_is_shown_in_place(url, here):
     assert W.loads_in_place(url) is here
 
 
+APP = "http://127.0.0.1:5050/?t=abc"
+
+
+@pytest.mark.parametrize("current,target,stays", [
+    (APP, "http://127.0.0.1:5050/", True),                        # its own server
+    (APP, "http://127.0.0.1:5050/static/x.css", True),
+    (APP, "blob:http://127.0.0.1:5050/0f3a-11", False),           # the old Save (26 Sep)
+    (APP, "data:application/pdf;base64,JVBERi0=", False),
+    (APP, "file:///Users/me/Downloads/paper.pdf", False),         # a file dropped on it
+    (APP, "https://doi.org/10.1016/x", False),
+    (APP, "http://127.0.0.1:5051/", False),                       # another server here
+    (APP, "about:blank", False),
+    ("", "http://127.0.0.1:5050/?t=abc", True),                   # the first load
+    ("about:blank", "http://127.0.0.1:5050/?t=abc", True),
+])
+def test_medsearch_s_window_only_goes_to_its_own_server(current, target, stays):
+    assert W.stays_on_page(current, target) is stays
+
+
 def _webkit():
     if sys.platform != "darwin":
         return False

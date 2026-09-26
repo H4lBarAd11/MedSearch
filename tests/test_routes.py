@@ -261,6 +261,55 @@ def test_local_addresses_are_private():
     assert not A._is_private_host("93.184.216.34")
 
 
+# ── The PDF viewer's Save ───────────────────────────────────────────────────
+# Save used to be a download link in the page, which showed the PDF in place
+# of MedSearch's window (26 Sep); the page now hands the bytes to /save_pdf.
+
+PDF = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+
+
+@pytest.fixture
+def downloads(tmp_path, monkeypatch):
+    monkeypatch.setattr(A, "DOWNLOADS_DIR", tmp_path / "Downloads")
+    return tmp_path / "Downloads"
+
+
+def _save(client, auth, body, name="recognition_of_white_matter.pdf"):
+    return client.post(f"/save_pdf?name={name}", data=body, headers=auth, base_url=BASE,
+                       content_type="application/pdf")
+
+
+def test_save_puts_the_pdf_in_downloads_under_the_article_name(client, auth, downloads):
+    r = _save(client, auth, PDF)
+    assert r.status_code == 200 and r.json == {"name": "recognition_of_white_matter.pdf"}
+    assert (downloads / "recognition_of_white_matter.pdf").read_bytes() == PDF
+
+
+def test_save_never_replaces_a_file_already_there(client, auth, downloads):
+    downloads.mkdir()
+    (downloads / "paper.pdf").write_bytes(b"already here")
+    assert _save(client, auth, PDF, "paper.pdf").json["name"] == "paper (2).pdf"
+    assert _save(client, auth, PDF, "paper.pdf").json["name"] == "paper (3).pdf"
+    assert (downloads / "paper.pdf").read_bytes() == b"already here"
+
+
+def test_save_keeps_the_name_a_plain_pdf_name(client, auth, downloads):
+    assert _save(client, auth, PDF, "..%2F..%2Fescape").json["name"] == "escape.pdf"
+    assert sorted(p.name for p in downloads.iterdir()) == ["escape.pdf"]
+
+
+def test_save_refuses_what_is_not_a_pdf(client, auth, downloads):
+    r = _save(client, auth, b"<html>a login page</html>")
+    assert r.status_code == 400 and "not a PDF" in r.json["error"]
+    assert not downloads.exists()
+
+
+def test_save_needs_the_window_token(client, downloads):
+    r = client.post("/save_pdf?name=x.pdf", data=PDF, base_url=BASE)
+    assert r.status_code == 403
+    assert not downloads.exists()
+
+
 # ── PubMed Central PDFs ─────────────────────────────────────────────────────
 # PMC answers every program with a proof-of-work JavaScript page instead of the
 # PDF, so the viewer's server-side fetch never got one: it fell through to the

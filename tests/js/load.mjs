@@ -11,9 +11,9 @@ import { dirname, join } from "node:path";
 
 const APP_JS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "static", "js", "app.js");
 
-/** The source of a top-level `function name(...) { ... }`, braces balanced. */
+/** The source of a top-level `[async] function name(...) { ... }`, braces balanced. */
 function extract(src, name) {
-  const start = src.search(new RegExp(`^function ${name}\\s*\\(`, "m"));
+  const start = src.search(new RegExp(`^(?:async\\s+)?function ${name}\\s*\\(`, "m"));
   if (start < 0) throw new Error(`function ${name} not found in app.js`);
   let i = src.indexOf("{", start), depth = 0;
   for (let j = i; j < src.length; j++) {

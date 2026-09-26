@@ -28,6 +28,13 @@ that window, and leaves no half a file behind.
 
 ONLY ARTICLE WINDOWS. MedSearch's own window keeps pywebview's behaviour: its
 plain DOI and PubMed links are meant to open in the browser.
+
+MEDSEARCH'S OWN WINDOW NEVER LEAVES ITS PAGE (seen 26 Sep). The PDF viewer's
+Save was a download link, and pywebview let WebKit follow it, so the PDF took
+the place of MedSearch in its window; closing the window only hid it, and
+quitting was the only way back. Save no longer uses a link (app.py, /save_pdf),
+and the window now refuses to go anywhere but another address of the MedSearch
+server it shows, whatever asks it to (a link, a script, a file dropped on it).
 """
 from __future__ import annotations
 
@@ -88,6 +95,17 @@ def loads_in_place(url: str) -> bool:
     """A new tab whose content only exists for the page that made it (a PDF the
     page built itself): shown in the same window, where that content lives."""
     return url.lower().startswith(("blob:", "data:"))
+
+
+def stays_on_page(current: str, target: str) -> bool:
+    """Whether MedSearch's window may go from `current` to `target`: only to an
+    address of the same server. Before it shows MedSearch (the first load) it
+    may go anywhere."""
+    from urllib.parse import urlsplit
+    here, there = urlsplit(current or ""), urlsplit(target or "")
+    if here.scheme not in ("http", "https"):
+        return True
+    return (there.scheme, there.hostname, there.port) == (here.scheme, here.hostname, here.port)
 
 
 def install(is_article, on_page=None, downloads=None, reveal=None,
@@ -279,6 +297,18 @@ def install(is_article, on_page=None, downloads=None, reveal=None,
             handler(alert.runModal() == 1000)     # the first button
 
     class MedSearchArticleDelegate(base):
+        def webView_decidePolicyForNavigationAction_decisionHandler_(self, web, action, handler):
+            frame = action.targetFrame()
+            if frame is not None and frame.isMainFrame() and not article(web):
+                current = str(web.URL().absoluteString()) if web.URL() else ""
+                target = str(action.request().URL().absoluteString() or "")
+                if not stays_on_page(current, target):
+                    print(f"  (MedSearch's window stays on its page, not {target[:40]})")
+                    handler(WebKit.WKNavigationActionPolicyCancel)
+                    return
+            objc.super(MedSearchArticleDelegate, self) \
+                .webView_decidePolicyForNavigationAction_decisionHandler_(web, action, handler)
+
         def webView_createWebViewWithConfiguration_forNavigationAction_windowFeatures_(
                 self, web, config, action, features):
             if not article(web):

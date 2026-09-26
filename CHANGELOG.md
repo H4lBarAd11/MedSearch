@@ -4,6 +4,12 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.26
+
+- Save in the PDF viewer now puts the PDF in your Downloads folder, named after the article, and says so. It used to show the PDF in place of MedSearch, and closing the window then left MedSearch stuck on the PDF until you quit.
+- Nothing can take MedSearch's own window away from MedSearch any more: a link, a script or a file dropped on it is refused.
+- A paper is no longer called free when the only free part is its graphical abstract, a picture that the open-access indexes list as the PDF for Elsevier papers. It is offered through your library instead. An openly licensed paper now opens at its publisher, not at its entry in the DOAJ directory. Free-copy answers from the last three days are checked again.
+
 ## 1.25
 
 - The temporary log of what PDF buttons ask for (added in 1.22 to find Ovid's) is removed, and its file is deleted.

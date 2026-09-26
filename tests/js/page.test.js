@@ -167,3 +167,48 @@ test("a dialog it has no closer for is left alone and it says no", () => {
     assert.deepEqual(closed, []);
   });
 });
+
+// ── The PDF viewer's Save ───────────────────────────────────────────────────
+// A download link here showed the PDF in place of MedSearch's window (26 Sep):
+// Save now hands the bytes to MedSearch, which writes them to Downloads.
+
+const { savePdf } = load(["savePdf"]);
+
+async function saving(answer, run) {
+  const names = ["document", "fetch", "fail", "showToast", "pdfBytes", "pdfFilename"];
+  const saved = Object.fromEntries(names.map((n) => [n, globalThis[n]]));
+  const seen = { requests: [], failed: [], toasts: [] };
+  globalThis.document = { createElement: () => { throw new Error("Save made an element"); } };
+  globalThis.fetch = async (url, init) => { seen.requests.push([url, init]); return answer(); };
+  globalThis.fail = (...a) => seen.failed.push(a);
+  globalThis.showToast = (...a) => seen.toasts.push(a);
+  globalThis.pdfBytes = new TextEncoder().encode("%PDF-1.4").buffer;
+  globalThis.pdfFilename = "recognition of white matter.pdf";
+  try { await run(seen); } finally {
+    for (const n of names) {
+      if (saved[n] === undefined) delete globalThis[n]; else globalThis[n] = saved[n];
+    }
+  }
+}
+
+test("Save hands the PDF's bytes to MedSearch, under the article's name", async () => {
+  const ok = () => ({ ok: true, status: 200, json: async () => ({ name: "recognition of white matter (2).pdf" }) });
+  await saving(ok, async (seen) => {
+    await savePdf();
+    const [[url, init]] = seen.requests;
+    assert.equal(url, "/save_pdf?name=recognition%20of%20white%20matter.pdf");
+    assert.equal(init.method, "POST");
+    assert.equal(init.body, globalThis.pdfBytes);
+    assert.deepEqual(seen.toasts, [["Saved to Downloads: recognition of white matter (2).pdf", "green"]]);
+    assert.deepEqual(seen.failed, []);
+  });
+});
+
+test("a Save MedSearch refuses is said in a popup, not a toast", async () => {
+  const refused = () => ({ ok: false, status: 400, json: async () => ({ error: "not a PDF" }) });
+  await saving(refused, async (seen) => {
+    await savePdf();
+    assert.deepEqual(seen.failed, [["not a PDF", "Couldn't save the PDF"]]);
+    assert.deepEqual(seen.toasts, []);
+  });
+});

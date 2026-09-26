@@ -207,6 +207,122 @@ def test_enrichment_is_cached_per_doi(monkeypatch):
     assert calls == ["10.1/cached"]
 
 
+# ── Open access: what counts as a free copy ────────────────────────────────
+# The payloads are Unpaywall's and OpenAlex's own answers of 26 Sep, trimmed.
+# Both list Elsevier's graphical abstract as the article's PDF.
+
+GARYFALLIDIS = "10.1016/j.neuroimage.2017.07.015"      # paywalled (bronze)
+CLASSIFYBER = "10.1016/j.neuroimage.2020.117402"       # CC BY (gold)
+ABSTRACT_JPG = "https://ars.els-cdn.com/content/image/1-s2.0-S1053811917305839-fx1_lrg.jpg"
+
+UNPAYWALL = {
+    GARYFALLIDIS: {"is_oa": True, "oa_status": "bronze", "oa_locations": [
+        {"url": ABSTRACT_JPG, "url_for_pdf": ABSTRACT_JPG, "license": None,
+         "url_for_landing_page": f"https://doi.org/{GARYFALLIDIS}",
+         "host_type": "publisher", "version": "publishedVersion"}]},
+    CLASSIFYBER: {"is_oa": True, "oa_status": "gold", "oa_locations": [
+        {"url": ABSTRACT_JPG, "url_for_pdf": ABSTRACT_JPG, "license": "cc-by",
+         "url_for_landing_page": f"https://doi.org/{CLASSIFYBER}",
+         "host_type": "publisher", "version": "publishedVersion"},
+        {"url": "https://doaj.org/article/8889caff0b464aa4aed1c5c495033f1b", "url_for_pdf": None,
+         "url_for_landing_page": "https://doaj.org/article/8889caff0b464aa4aed1c5c495033f1b",
+         "host_type": "repository", "version": "submittedVersion", "license": "cc-by"},
+        {"url": "https://www.sciencedirect.com/science/article/pii/S1053811920308879",
+         "url_for_pdf": None, "host_type": "repository", "version": "submittedVersion",
+         "url_for_landing_page": "https://www.sciencedirect.com/science/article/pii/S1053811920308879",
+         "license": None}]},
+}
+
+OPENALEX = {
+    GARYFALLIDIS: {"open_access": {"is_oa": True, "oa_url": ABSTRACT_JPG}, "locations": [
+        {"is_oa": True, "pdf_url": ABSTRACT_JPG, "license": None, "version": "publishedVersion",
+         "landing_page_url": f"https://doi.org/{GARYFALLIDIS}", "source": {"type": "journal"}},
+        {"is_oa": False, "pdf_url": None, "landing_page_url": "https://pubmed.ncbi.nlm.nih.gov/28712994",
+         "source": {"type": "repository"}}]},
+    CLASSIFYBER: {"open_access": {"is_oa": True, "oa_url": ABSTRACT_JPG}, "locations": [
+        {"is_oa": True, "pdf_url": ABSTRACT_JPG, "license": "cc-by", "version": "publishedVersion",
+         "landing_page_url": f"https://doi.org/{CLASSIFYBER}", "source": {"type": "journal"}},
+        {"is_oa": True, "pdf_url": None, "version": "submittedVersion",
+         "landing_page_url": "https://doaj.org/article/8889caff0b464aa4aed1c5c495033f1b",
+         "source": {"type": "repository"}}]},
+}
+
+
+def _indexes(monkeypatch, email):
+    monkeypatch.setitem(A.CONFIG, "unpaywall_email", email)
+    asked = []
+
+    def fetch_json(url, *a, **k):
+        asked.append(url)
+        for doi, body in (UNPAYWALL if "unpaywall" in url else OPENALEX).items():
+            if doi in A.urllib.parse.unquote(url):
+                return body, 200
+        return None, 404
+    monkeypatch.setattr(A, "fetch_json", fetch_json)
+    return asked
+
+
+def test_a_picture_is_never_the_free_copy():
+    assert not A._is_full_text(ABSTRACT_JPG)
+    assert not A._is_full_text("https://example.org/figure.PNG?size=large")
+    assert A._is_full_text("https://hal.science/hal-01622403v1/file/paper.pdf")
+    assert A._is_full_text("https://doi.org/10.1016/j.neuroimage.2017.07.015")
+
+
+def test_an_article_called_open_only_for_its_graphical_abstract_is_not_open(monkeypatch):
+    for email in ("you@example.com", ""):            # Unpaywall, then OpenAlex alone
+        _indexes(monkeypatch, email)
+        assert A.check_oa(GARYFALLIDIS) is None, email
+
+
+def test_so_it_is_offered_through_the_library_instead(monkeypatch):
+    _indexes(monkeypatch, "you@example.com")
+    monkeypatch.setattr(A, "pmcids_for_dois", lambda dois: {})
+    monkeypatch.setattr(A, "retraction_status", lambda doi: None)
+    a = A._article(doi=GARYFALLIDIS, source="Scopus")
+    A.enrich_access([a])
+    assert (a["access_kind"], a["access_link"]) == ("doi", f"https://doi.org/{GARYFALLIDIS}")
+
+
+def test_an_openly_licensed_article_opens_at_its_publisher_not_at_doaj(monkeypatch):
+    for email in ("you@example.com", ""):
+        _indexes(monkeypatch, email)
+        assert A.check_oa(CLASSIFYBER) == f"https://doi.org/{CLASSIFYBER}", email
+
+
+def test_a_doaj_record_is_still_used_when_it_is_all_there_is():
+    record = "https://doaj.org/article/8889caff0b464aa4aed1c5c495033f1b"
+    assert A._best_oa_url([{"url": record, "url_for_landing_page": record,
+                            "host_type": "repository"}]) == record
+
+
+def test_a_repository_pdf_still_beats_the_publisher():
+    pmc = "https://pmc.ncbi.nlm.nih.gov/articles/PMC123/pdf/"
+    assert A._best_oa_url([
+        {"url": "https://www.sciencedirect.com/x.pdf", "url_for_pdf": "https://www.sciencedirect.com/x.pdf",
+         "host_type": "publisher", "version": "publishedVersion"},
+        {"url": pmc, "url_for_pdf": pmc, "host_type": "repository"}]) == pmc
+
+
+def test_openalex_is_asked_only_when_unpaywall_cannot_answer(monkeypatch):
+    asked = _indexes(monkeypatch, "you@example.com")
+    A.check_oa(GARYFALLIDIS)
+    assert [u for u in asked if "openalex" in u] == []
+
+
+def test_an_answer_cached_under_the_old_rules_is_looked_up_again(monkeypatch):
+    calls = []
+    monkeypatch.setattr(A, "check_oa", lambda doi: calls.append(doi) or None)
+    monkeypatch.setattr(A, "pmcids_for_dois", lambda dois: {})
+    monkeypatch.setattr(A, "retraction_status", lambda doi: None)
+    A._DOI_CACHE[GARYFALLIDIS] = {"t": A.time.time(), "kind": "open",     # as 1.25 left it
+                                  "link": ABSTRACT_JPG, "retraction": None}
+    a = A._article(doi=GARYFALLIDIS, source="Scopus")
+    A.enrich_access([a])
+    assert calls == [GARYFALLIDIS]
+    assert a["access_kind"] == "doi"
+
+
 # ── Scopus: why a request was refused ───────────────────────────────────────
 
 def test_scopus_says_the_key_is_wrong_when_elsevier_says_so(monkeypatch):

@@ -1678,21 +1678,24 @@ function openPdf(url, title) {
     .catch(e => openInAppBrowser(url, title));
 }
 
-// Save the currently-open PDF to disk (opens the browser's save dialog)
-function savePdf() {
+// Save the currently-open PDF to Downloads. MedSearch writes the file (/save_pdf):
+// a download link here showed the PDF in place of the whole window (26 Sep).
+async function savePdf() {
   if (!pdfBytes) { fail('PDF still loading — try again in a moment.'); return; }
   try {
-    const blob = new Blob([pdfBytes], {type: 'application/pdf'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = pdfFilename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const res = await fetch('/save_pdf?name=' + encodeURIComponent(pdfFilename), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/pdf'},
+      body: pdfBytes
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.name) {
+      fail(data.error || `MedSearch answered ${res.status}.`, "Couldn't save the PDF");
+      return;
+    }
+    showToast('Saved to Downloads: ' + data.name, 'green');
   } catch(e) {
-    fail('Could not save the PDF: ' + e.message);
+    fail('Could not save the PDF: ' + e.message, "Couldn't save the PDF");
   }
 }
 
