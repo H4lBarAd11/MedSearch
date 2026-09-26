@@ -30,6 +30,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape as escape_xml
 from flask import Flask, render_template, request, Response, jsonify, stream_with_context
 
+import article_windows
 import secrets_store
 import signins
 
@@ -415,6 +416,20 @@ def register(seen, doi, title):
 #  ACCESS RESOLUTION
 # ══════════════════════════════════════════════════════════════════════════════
 
+# WHAT THE INDEXES CALL A PDF IS SOMETIMES A PICTURE (seen 26 Sep). For Elsevier
+# papers Unpaywall, OpenAlex and Europe PMC alike list the graphical abstract
+# (ars.els-cdn.com/content/image/…-fx1_lrg.jpg) as the free PDF, and a paywalled
+# NeuroImage paper was called open on the strength of it. A link to an image is
+# never the article.
+_PICTURE = re.compile(r"\.(?:jpe?g|png|gif|webp|tiff?|bmp|svg)$", re.I)
+
+def _is_full_text(url):
+    """False for a link that cannot be the article's text: a picture."""
+    try:
+        return not _PICTURE.search(urllib.parse.urlparse(url).path)
+    except Exception:
+        return False
+
 def _best_oa_url(locations):
     """
     Given a list of Unpaywall oa_location dicts, pick the URL most likely to
@@ -422,6 +437,12 @@ def _best_oa_url(locations):
     frequently 403 a server-side fetch even when the article is open-access,
     whereas PubMed Central and other repositories serve PDFs reliably. So we
     rank: PMC/repository PDF > any direct PDF > repository landing > any URL.
+
+    A picture is never a copy. When a location's only link is one, its landing
+    page stands in only if the article carries an open licence (gold, hybrid):
+    without one the free picture was the whole reason it was called open.
+    A DOAJ record is the directory's page about the article, not the article,
+    so it comes last.
     """
     if not locations:
         return None
@@ -432,8 +453,10 @@ def _best_oa_url(locations):
     # Hosts that serve PDFs reliably (prioritize these)
     friendly = ("ncbi.nlm.nih.gov", "europepmc", "pmc", "arxiv", "biorxiv",
                 "medrxiv", "ssrn", "researchgate-not", "osf.io", "zenodo",
-                "doaj", "plos", "frontiersin", "mdpi", "hindawi", "biomedcentral",
+                "plos", "frontiersin", "mdpi", "hindawi", "biomedcentral",
                 ".edu", "repository", "repec")
+    # Directories: their page only points to the text
+    directories = ("doaj.org",)
 
     def host_of(u):
         try: return (urllib.parse.urlparse(u).hostname or "").lower()
@@ -442,14 +465,19 @@ def _best_oa_url(locations):
     def score(loc):
         pdf = loc.get("url_for_pdf")
         url = loc.get("url")
+        if pdf and not _is_full_text(pdf): pdf = None
+        if url and not _is_full_text(url): url = None
+        if not (pdf or url) and loc.get("license"):
+            url = loc.get("url_for_landing_page")
         target = pdf or url
-        if not target:
+        if not target or not _is_full_text(target):
             return (-999, None)
         h = host_of(target)
         s = 0
         if pdf: s += 10                                  # direct PDF beats landing
         if any(f in h for f in friendly): s += 20        # reliable host
         if any(b in h for b in blocky):   s -= 15        # likely to 403
+        if any(h == d or h.endswith("." + d) for d in directories): s -= 30
         if loc.get("host_type") == "repository": s += 5  # repos > publishers
         if loc.get("version") == "publishedVersion": s += 1
         return (s, target)
@@ -460,11 +488,26 @@ def _best_oa_url(locations):
             return target
     return None
 
+def _openalex_locations(work):
+    """An OpenAlex work's open locations, in Unpaywall's shape for _best_oa_url."""
+    out = []
+    for loc in work.get("locations") or []:
+        if not loc.get("is_oa"):
+            continue
+        pdf, landing = loc.get("pdf_url"), loc.get("landing_page_url")
+        out.append({"url_for_pdf": pdf, "url_for_landing_page": landing,
+                    "url": pdf or landing, "license": loc.get("license"),
+                    "version": loc.get("version"),
+                    "host_type": "repository" if (loc.get("source") or {}).get("type")
+                                 == "repository" else "publisher"})
+    return out
+
 def check_oa(doi):
     """
     Find a free full-text URL for a DOI. Tries Unpaywall first (preferring an OA
     copy that will actually fetch — PMC/repository over publisher, which often
-    403s); falls back to OpenAlex when Unpaywall can't answer. Returns URL or None.
+    403s); falls back to OpenAlex when Unpaywall can't answer. Both answers are
+    ranked by _best_oa_url. Returns URL or None.
     """
     if not doi:
         return None
@@ -489,17 +532,7 @@ def check_oa(doi):
     if not unpaywall_answered:
         data2, _ = fetch_json(f"https://api.openalex.org/works/doi:{urllib.parse.quote(doi)}")
         if data2:
-            oa = data2.get("open_access") or {}
-            if oa.get("oa_url"):
-                return oa["oa_url"]
-            best = data2.get("best_oa_location") or {}
-            if best.get("pdf_url"):
-                return best["pdf_url"]
-            if best.get("landing_page_url"):
-                return best["landing_page_url"]
-            for loc in (data2.get("locations") or []):
-                if loc.get("is_oa") and loc.get("pdf_url"):
-                    return loc["pdf_url"]
+            return _best_oa_url(_openalex_locations(data2))
     return None
 
 def _pmc_pdf_url(pmcid):
@@ -598,6 +631,9 @@ def retraction_status(doi):
 DOI_CACHE_FILE = CONFIG_DIR / "doi_cache.json"
 _DOI_CACHE_TTL = 3 * 24 * 3600
 _DOI_CACHE_MAX = 5000
+# The rules an entry was chosen by. An entry from older rules is looked up
+# again: before 2, a picture could be cached as the open copy (1.26).
+_DOI_CACHE_RULES = 2
 _DOI_CACHE_LOCK = threading.Lock()
 
 def _load_doi_cache():
@@ -612,13 +648,13 @@ _DOI_CACHE = _load_doi_cache()
 def _doi_cache_get(doi):
     with _DOI_CACHE_LOCK:
         e = _DOI_CACHE.get(doi.lower())
-    if e and time.time() - e.get("t", 0) < _DOI_CACHE_TTL:
+    if e and e.get("rules") == _DOI_CACHE_RULES and time.time() - e.get("t", 0) < _DOI_CACHE_TTL:
         return e
     return None
 
 def _doi_cache_put(doi, kind, link, retraction):
     with _DOI_CACHE_LOCK:
-        _DOI_CACHE[doi.lower()] = {"t": time.time(), "kind": kind,
+        _DOI_CACHE[doi.lower()] = {"t": time.time(), "rules": _DOI_CACHE_RULES, "kind": kind,
                                    "link": link, "retraction": retraction}
 
 def save_doi_cache():
@@ -3063,6 +3099,39 @@ def _try_scihub_chain(mirrors):
             continue   # try the next mirror
     return None
 
+# THE VIEWER'S SAVE PUT THE PDF IN PLACE OF MEDSEARCH (seen 26 Sep). It was a
+# download link to the bytes in the page, and pywebview turns such a link into
+# a download only when its downloads are switched on, so WebKit showed the PDF
+# in the MedSearch window instead; closing the window then only hid it, and
+# quitting was the way back. The page now hands the bytes here, and they are
+# saved to Downloads as an article window's files are: named after the
+# article, never replacing a file (his choice).
+DOWNLOADS_DIR = Path.home() / "Downloads"
+
+@app.route("/save_pdf", methods=["POST"])
+def save_pdf():
+    """Save the PDF in the request's body to Downloads as `name`; answers the
+    name it was saved under."""
+    data = request.get_data(cache=False)
+    if data[:len(article_windows.PDF_MAGIC)] != article_windows.PDF_MAGIC:
+        return jsonify({"error": "What the viewer holds is not a PDF, so it was not saved."}), 400
+    name = article_windows.safe_name(request.args.get("name") or "article.pdf")
+    if not name.lower().endswith(".pdf"):
+        name += ".pdf"
+    try:
+        DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+        while True:
+            path = article_windows.free_path(DOWNLOADS_DIR, name)
+            try:
+                with open(path, "xb") as fh:      # a name taken meanwhile is skipped
+                    fh.write(data)
+                break
+            except FileExistsError:
+                continue
+    except OSError as e:
+        return jsonify({"error": f"The PDF couldn't be saved in Downloads: {e.strerror or e}"}), 500
+    return jsonify({"name": path.name})
+
 @app.route("/pdf_proxy")
 def pdf_proxy():
     """
@@ -3734,7 +3803,6 @@ if __name__ == "__main__":
         # sign-in (article_windows.py). Not the main window's own links.
         try:
             if sys.platform == "darwin":
-                import article_windows
                 article_windows.install(lambda w: w is not _MAIN_WINDOW, on_page=_signin_page)
             # The file of the temporary PDF-button log (1.22 to 1.24) goes too.
             (CONFIG_DIR / "articles.log").unlink(missing_ok=True)
