@@ -447,6 +447,54 @@ def test_a_windowed_app_with_no_console_gets_one_that_takes_anything(tmp_path):
                        env=env, capture_output=True, timeout=60)
     assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[-800:]
     assert r.stdout.endswith(b"survived")
+    # ...and what it printed can be read afterwards.
+    assert "🔬  MedSearch → ok" in (tmp_path / ".medsearch" / "medsearch.log").read_text(encoding="utf-8")
+
+
+def _log_into(monkeypatch, tmp_path, frozen):
+    import io
+    import logging
+    server_log = logging.getLogger("werkzeug")
+    monkeypatch.setattr(server_log, "level", server_log.level)      # put back afterwards
+    monkeypatch.setattr(A.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(A.sys, "frozen", frozen, raising=False)
+    monkeypatch.setattr(A.sys, "stdout", io.StringIO())
+    monkeypatch.setattr(A.sys, "stderr", io.StringIO())
+    A._safe_console()
+    return tmp_path / ".medsearch" / "medsearch.log"
+
+
+def test_the_installed_app_writes_its_messages_to_a_log(monkeypatch, tmp_path):
+    """It has a console of sorts on the Mac (/dev/null) and none on Windows:
+    either way, what it prints is kept where it can be read."""
+    import logging
+    log = _log_into(monkeypatch, tmp_path, frozen=True)
+    print("  (tray icon failed: an example)")
+    sys.stderr.write("a traceback\n")
+    sys.stdout.close()
+    text = log.read_text(encoding="utf-8")
+    assert "MedSearch starting" in text and "(tray icon failed: an example)" in text
+    assert "a traceback" in text
+    # No line per request: an address can carry a search's words.
+    assert logging.getLogger("werkzeug").level == logging.WARNING
+
+
+def test_a_clone_run_from_a_terminal_keeps_its_console(monkeypatch, tmp_path):
+    log = _log_into(monkeypatch, tmp_path, frozen=False)
+    assert not log.exists()
+
+
+def test_the_log_is_added_to_and_set_aside_when_too_big(monkeypatch, tmp_path):
+    monkeypatch.setattr(A.Path, "home", lambda: tmp_path)
+    folder = tmp_path / ".medsearch"
+    folder.mkdir()
+    (folder / "medsearch.log").write_text("earlier run\n", encoding="utf-8")
+    fh = A._log_file(); fh.write("this run\n"); fh.close()
+    assert (folder / "medsearch.log").read_text(encoding="utf-8") == "earlier run\nthis run\n"
+    monkeypatch.setattr(A, "LOG_LIMIT", 10)
+    fh = A._log_file(); fh.write("fresh\n"); fh.close()
+    assert (folder / "medsearch.log.1").read_text(encoding="utf-8").startswith("earlier run")
+    assert (folder / "medsearch.log").read_text(encoding="utf-8") == "fresh\n"
 
 
 def test_a_first_window_fits_a_small_screen():
