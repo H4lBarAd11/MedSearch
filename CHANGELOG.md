@@ -4,6 +4,10 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.27
+
+- On a Mac where Python was installed from python.org, searches work from the first start. Until now every database said it didn't respond, and updates looked offline, until Python's "Install Certificates" step had been run by hand. MedSearch now uses the Mac's own certificates when Python has none.
+
 ## 1.26
 
 - Save in the PDF viewer now puts the PDF in your Downloads folder, named after the article, and says so. It used to show the PDF in place of MedSearch, and closing the window then left MedSearch stuck on the PDF until you quit.
