@@ -214,12 +214,21 @@ jobs:
           for ($i = 0; $i -lt 30 -and -not $ping; $i++) {
             try { $ping = Invoke-RestMethod "http://127.0.0.1:$port/ping" } catch { Start-Sleep 1 }
           }
-          Start-Sleep 5; try { Shot "windows-window" } catch { Write-Warning "no screenshot: $_" }
           if ($ping.version -ne $V) { throw "MedSearch answered '$($ping.version)', not $V" }
           Write-Host "running $($ping.version)"
 
+          # The window comes once the page is ready and the splash has handed
+          # over, which a cold machine can take a while to reach.
+          $w = $null
+          for ($i = 0; $i -lt 40 -and -not $w; $i++) {
+            $w = Get-Process MedSearch -ErrorAction SilentlyContinue |
+                 Where-Object { $_.MainWindowTitle -eq "MedSearch" } | Select-Object -First 1
+            if (-not $w) { Start-Sleep 1 }
+          }
+          Start-Sleep 2; try { Shot "windows-window" } catch { Write-Warning "no screenshot: $_" }
+          if (-not $w) { throw "MedSearch's window did not appear within 40 s of its server answering" }
+
           # The window must open inside the screen: Windows does not keep it there.
-          $w = Get-Process MedSearch | Where-Object { $_.MainWindowTitle -eq "MedSearch" } | Select-Object -First 1
           $r = New-Object Grab+RECT
           [void][Grab]::GetWindowRect($w.MainWindowHandle, [ref]$r)
           $area = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
