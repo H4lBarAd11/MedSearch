@@ -125,8 +125,8 @@ if (_onboardingShowing) window.addEventListener('load', () => { openOnboarding()
 
 // ── Auto-update ────────────────────────────────────────────────────────────
 // Checked when MedSearch starts and each time its window comes back: it lives
-// on in the menu bar, so its start can be weeks ago. At most once a minute,
-// since GitHub's answer is itself up to a minute old. "Later" puts the offer off
+// on in the menu bar, so its start can be weeks ago. At most once a minute:
+// coming back to the window many times in a row needs one answer. "Later" puts the offer off
 // until the next day (the server keeps that); Settings ▸ Check for updates asks
 // at any time and always says what it found.
 let _updateOffered = null;     // the version the open popup offers
@@ -155,13 +155,13 @@ function checkForUpdate(manual) {
     });
 }
 
-// Launch, and the window coming back. Never over another dialog: the next
-// time the window comes back will do. Before the page has loaded, the load
+// Launch, and the window coming back. Never over another dialog or the PDF
+// viewer: the next time the window comes back will do. Before the page has loaded, the load
 // handler below decides, since the welcome dialog may be about to open.
 function autoCheckForUpdate() {
   if (document.readyState !== 'complete') return;
   if (Date.now() - _lastUpdateCheck < 60000) return;
-  if (document.querySelector('.modal-overlay.open')) return;
+  if (document.querySelector('.modal-overlay.open, .pdf-overlay.open')) return;
   checkForUpdate(false);
 }
 
@@ -229,7 +229,10 @@ function closeUpdate() {
   closeOverlay('updateOverlay');
 }
 
+// A failed update keeps the offer, so closing its message puts it off for the
+// day as Later does, instead of it coming back each time the window does.
 function applyUpdate() {
+  const offered = _updateOffered;
   _updateOffered = null;
   document.getElementById('updateActions').style.display = 'none';
   document.getElementById('updateProgress').style.display = 'flex';
@@ -265,6 +268,7 @@ function applyUpdate() {
           '<button class="btn-primary" onclick="closeUpdate()">Got it</button>';
       } else {
         prog.style.display = 'none';
+        _updateOffered = offered;
         title.textContent = 'Update failed';
         text.innerHTML = escHtml(data.message || 'Could not update.') +
           (data.error ? `<br><br><span style="font-size:0.72rem;color:var(--text3);font-family:var(--mono)">${escHtml(data.error)}</span>` : '');
@@ -274,6 +278,7 @@ function applyUpdate() {
       }
     })
     .catch(e => {
+      _updateOffered = offered;
       document.getElementById('updateProgress').style.display = 'none';
       document.getElementById('updateTitle').textContent = 'Update failed';
       document.getElementById('updateText').textContent = 'Could not reach the update service: ' + e.message;
