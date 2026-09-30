@@ -35,8 +35,16 @@ def _safe_console():
     """What MedSearch prints must never stop it. On Windows its output can go to
     a console whose code page has no emoji or arrows (cp1252), and one print of
     the start message then ended MedSearch before its server was up (seen in the
-    first Windows build, 30 Sep). A character the console cannot show becomes ?."""
-    for stream in (sys.stdout, sys.stderr):
+    first Windows build, 30 Sep). A character the console cannot show becomes ?.
+
+    A windowed Windows app starts with no output at all, and pywebview fills that
+    gap with a null file in the same code page, so the gap is filled here first,
+    in UTF-8: pywebview only fills a gap it finds."""
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name)
+        if stream is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8", errors="replace"))
+            continue
         try:
             stream.reconfigure(errors="replace")
         except Exception:

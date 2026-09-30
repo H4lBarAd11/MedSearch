@@ -434,6 +434,21 @@ def test_a_console_without_emoji_never_stops_medsearch(tmp_path):
     assert b"MedSearch" in r.stdout
 
 
+def test_a_windowed_app_with_no_console_gets_one_that_takes_anything(tmp_path):
+    """The second Windows build: a windowed app has no stdout at all, pywebview
+    then opens a null file in cp1252 in its place, and the same print ended it.
+    MedSearch fills the gap first, with one that takes any character."""
+    env = dict(os.environ, HOME=str(tmp_path), USERPROFILE=str(tmp_path), MEDSEARCH_KEYCHAIN="0")
+    code = ("import sys; sys.stdout = None; sys.stderr = None; import app; "
+            "assert sys.stdout is not None and sys.stderr is not None; "
+            "print('\\n  🔬  MedSearch → ok'); print('🔬', file=sys.stderr); "
+            "sys.__stdout__.write('survived')")
+    r = subprocess.run([sys.executable, "-B", "-c", code], cwd=Path(A.__file__).parent,
+                       env=env, capture_output=True, timeout=60)
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[-800:]
+    assert r.stdout.endswith(b"survived")
+
+
 def test_the_page_speaks_of_windows_on_windows(client, monkeypatch):
     _on_windows(monkeypatch)
     page = client.get("/", base_url=BASE).get_data(as_text=True)
