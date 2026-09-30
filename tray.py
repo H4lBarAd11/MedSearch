@@ -219,13 +219,12 @@ class Tray:
     # ── closing the window hides it; quitting still quits ──────────────────
     def closing(self):
         """pywebview's `closing` handler for the main window: False keeps it
-        open (and hides it instead), anything else lets it close. Any other close
-        is decided off the GUI thread, which evaluate_js needs free."""
+        open, anything else lets it close. It cannot see why the window is
+        closing, so it only keeps the window; `_form_closing`, which runs right
+        after and does see the reason, decides what happens instead."""
         if self.quitting:
             print("  window closed: MedSearch is quitting")
             return True
-        print("  window closed: hiding it by the clock (a dialog closes first)")
-        threading.Thread(target=self._close_dialog_or_hide, daemon=True).start()
         return False
 
     def _close_dialog_or_hide(self):
@@ -233,13 +232,22 @@ class Tray:
             self.hide()
 
     def _form_closing(self, sender, args):
-        """After pywebview's own handler, which asked `closing`: Windows ending
-        the session, Task Manager and Quit are let through whatever it said."""
+        """After pywebview's own handler. Windows ending the session, Task
+        Manager, Setup closing MedSearch for an update (all "TaskManagerClosing"
+        or "WindowsShutDown") and Quit are let through; the close button hides
+        the window, once the page has had the chance to close a dialog.
+
+        THE PAGE IS NEVER ASKED ON A QUIT (seen on the release build, 30 Sep):
+        asked while MedSearch was ending, the question reached a .NET already
+        shutting down, and the quit crashed."""
         reason = str(args.CloseReason)
-        print(f"  close asked by {reason}; {'letting it through' if reason in _LET_THROUGH else 'kept'}")
         if reason in _LET_THROUGH:
+            print(f"  close asked by {reason}: MedSearch quits")
             self.quitting = True
             args.Cancel = False
+            return
+        print(f"  close asked by {reason}: hiding the window by the clock (a dialog closes first)")
+        threading.Thread(target=self._close_dialog_or_hide, daemon=True).start()
 
     def quit(self):
         print("  Quit chosen in the tray menu")
