@@ -31,24 +31,58 @@ from pathlib import Path
 from xml.sax.saxutils import escape as escape_xml
 from flask import Flask, render_template, request, Response, jsonify, stream_with_context
 
-def _safe_console():
-    """What MedSearch prints must never stop it. On Windows its output can go to
-    a console whose code page has no emoji or arrows (cp1252), and one print of
-    the start message then ended MedSearch before its server was up (seen in the
-    first Windows build, 30 Sep). A character the console cannot show becomes ?.
+LOG_LIMIT = 1_000_000          # bytes; past this the log is set aside as medsearch.log.1
 
-    A windowed Windows app starts with no output at all, and pywebview fills that
-    gap with a null file in the same code page, so the gap is filled here first,
-    in UTF-8: pywebview only fills a gap it finds."""
+def _log_file():
+    """~/.medsearch/medsearch.log, for the messages of a MedSearch that has no
+    console to show them (his choice, 30 Sep: the first Windows walk crashed with
+    nothing to read). Added to, not replaced: a second launch handing over to a
+    running MedSearch must not wipe that one's log. Past LOG_LIMIT it is set
+    aside once, so it never grows without end."""
+    folder = Path.home() / ".medsearch"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / "medsearch.log"
+        if path.exists() and path.stat().st_size > LOG_LIMIT:
+            try:
+                path.replace(folder / "medsearch.log.1")
+            except OSError:
+                pass                       # in use by a running copy: next time
+        return open(path, "a", encoding="utf-8", errors="replace", buffering=1)
+    except OSError:
+        return open(os.devnull, "w", encoding="utf-8", errors="replace")
+
+def _safe_console():
+    """What MedSearch prints must never stop it, and must end up somewhere it
+    can be read.
+
+    On Windows its output can go to a console whose code page has no emoji or
+    arrows (cp1252), and one print of the start message then ended MedSearch
+    before its server was up (seen in the first Windows build, 30 Sep): a
+    character the console cannot show becomes ?. A windowed Windows app starts
+    with no output at all, and pywebview fills that gap with a null file in the
+    same code page, so the gap is filled here first: pywebview only fills a gap
+    it finds.
+
+    The installed app (and any MedSearch with no console) writes to the log
+    file instead. The web server's line per request is left out of it, since
+    an address can carry a search's words; its warnings and errors stay."""
+    installed = getattr(sys, "frozen", False)
+    log = None
     for name in ("stdout", "stderr"):
         stream = getattr(sys, name)
-        if stream is None:
-            setattr(sys, name, open(os.devnull, "w", encoding="utf-8", errors="replace"))
+        if stream is None or installed:
+            log = log or _log_file()
+            setattr(sys, name, log)
             continue
         try:
             stream.reconfigure(errors="replace")
         except Exception:
             pass
+    if log is not None:
+        import logging
+        logging.getLogger("werkzeug").setLevel(logging.WARNING)
+        print(f"\n── MedSearch starting, {datetime.now():%Y-%m-%d %H:%M:%S} ──", file=log)
 
 _safe_console()
 
