@@ -27,6 +27,10 @@ MedSearch.app/
 # macOS
 .DS_Store
 
+# Editor and Claude Code settings: local permissions, never published
+.idea/
+.claude/
+
 # Marks the development clone: never offered the move to the installed app
 .development
 

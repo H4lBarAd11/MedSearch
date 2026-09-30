@@ -4531,7 +4531,8 @@ if __name__ == "__main__":
                         print("  (a window's page process ended; not reloading it)")
                         return
                     reloads[inst.uid] = recent + [now]
-                    print(f"  (a window's page process ended; loading {url.absoluteString()} again)")
+                    print("  (a window's page process ended; loading "
+                          f"{article_windows.log_address(url.absoluteString())} again)")
                     AppHelper.callAfter(web.loadRequest_, NSURLRequest.requestWithURL_(url))
 
             BrowserView.BrowserDelegate = MedSearchBrowserDelegate

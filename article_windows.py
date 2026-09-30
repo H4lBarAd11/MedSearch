@@ -121,6 +121,13 @@ def stays_on_page(current: str, target: str) -> bool:
     return (there.scheme, there.hostname, there.port) == (here.scheme, here.hostname, here.port)
 
 
+def log_address(url) -> str:
+    """An address as the log may keep it: without the query, fragment or ;params
+    where signed links and sessions travel, and at most 60 characters. Someone
+    may attach the log to a report, and it must not sign a reader in."""
+    return re.split(r"[?#;]", str(url or ""), maxsplit=1)[0][:60]
+
+
 def install(is_article, on_page=None, downloads=None, reveal=None,
             open_file=None, fail=None, present=None) -> None:
     """Teach every article window pywebview builds from now on to keep new tabs
@@ -316,7 +323,7 @@ def install(is_article, on_page=None, downloads=None, reveal=None,
                 current = str(web.URL().absoluteString()) if web.URL() else ""
                 target = str(action.request().URL().absoluteString() or "")
                 if not stays_on_page(current, target):
-                    print(f"  (MedSearch's window stays on its page, not {target[:40]})")
+                    print(f"  (MedSearch's window stays on its page, not {log_address(target)})")
                     handler(WebKit.WKNavigationActionPolicyCancel)
                     return
             objc.super(MedSearchArticleDelegate, self) \
@@ -501,7 +508,7 @@ def install_windows(is_article, on_page=None, on_message=None, downloads=None,
                 current = str(sender.Source) if sender.Source is not None else ""
                 target = str(args.Uri or "")
                 if not stays_on_page(current, target):
-                    print(f"  (MedSearch's window stays on its page, not {target[:40]})")
+                    print(f"  (MedSearch's window stays on its page, not {log_address(target)})")
                     args.Cancel = True
                     return
             super().on_navigation_start(sender, args)
