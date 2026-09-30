@@ -60,8 +60,13 @@ WINDOW_ID = "medsearch.article"
 def safe_name(suggested: str) -> str:
     """A file name the server suggested, reduced to a plain name: no folders, no
     leading dots, nothing empty."""
-    name = os.path.basename((suggested or "").replace("\\", "/")).strip().lstrip(".")
+    # The last part after any slash, by hand: Windows' own reading of a path
+    # would also take "a:" in "a:b.pdf" for a drive and drop it.
+    name = (suggested or "").replace("\\", "/").rsplit("/", 1)[-1].strip().lstrip(".")
     name = "".join(c for c in name if c >= " " and c not in ':/"')
+    if os.name == "nt":
+        # Characters Windows forbids in a file name, and a dot or space at its end.
+        name = "".join(c for c in name if c not in '<>|?*').rstrip(". ")
     return name or "download"
 
 

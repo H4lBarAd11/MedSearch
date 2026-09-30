@@ -1,6 +1,9 @@
 """Pure logic: dedup, versions, PubMed query building, exports, parsers."""
 import re
+import sys
 from pathlib import Path
+
+import pytest
 
 import app as A
 from conftest import article
@@ -44,6 +47,8 @@ def _opener_installed_by_the_fallback(monkeypatch):
     return installed
 
 
+@pytest.mark.skipif(sys.platform != "darwin",
+                    reason="the fallback is the Mac's; Windows' Python always reads Windows' own list")
 def test_a_python_without_certificates_trusts_the_macs_instead(monkeypatch):
     # python.org's Python before "Install Certificates": the list is empty.
     monkeypatch.setenv("SSL_CERT_FILE", "/nonexistent")

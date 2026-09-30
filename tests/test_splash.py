@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _tokens(theme):
-    css = (ROOT / "static" / "css" / "app.css").read_text()
+    css = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")
     light, dark = css.split("@media (prefers-color-scheme: dark)", 1)
     part = light if theme == "light" else dark
     return {m.group(1): tuple(int(m.group(2)[i:i + 2], 16) for i in (0, 2, 4))
@@ -31,7 +31,7 @@ def test_the_colours_are_the_interfaces_own():
 
 
 def test_the_drawing_is_the_icons_drawing():
-    icon = (ROOT / "render_icon.py").read_text()
+    icon = (ROOT / "render_icon.py").read_text(encoding="utf-8")
     assert "line_w, thin_w = int(30 * u), int(22 * u)" in icon
     assert (S.BOOK_W, S.TEXT_W) == (30, 22)
     assert "cx, cy, r = 648 * u, 520 * u, 96 * u" in icon and S.RING == (648, 520, 96)
@@ -259,9 +259,9 @@ def test_showing_plainly_survives_a_window_without_its_native_half():
 # ── the page's side ──────────────────────────────────────────────────────────
 
 def test_the_page_tells_the_window_it_is_ready():
-    js = (ROOT / "static" / "js" / "app.js").read_text()
+    js = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
     assert "window.pywebview.api.page_ready()" in js
     assert "addEventListener('pywebviewready', tellWindowReady" in js
-    app = (ROOT / "app.py").read_text()
+    app = (ROOT / "app.py").read_text(encoding="utf-8")
     assert "_SPLASH.ready.set()" in app
     assert "hidden=_args.background or _SPLASH is not None" in app

@@ -57,7 +57,7 @@ def test_a_malformed_request_is_refused(client, auth):
 def test_only_your_own_ticks_are_saved():
     """A quick search from the menu bar or a saved search run again changes the
     ticks for that search only: just the panel's two clicks save them."""
-    js = (ROOT / "static" / "js" / "app.js").read_text()
+    js = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
     calls = [m.start() for m in re.finditer(r"\brememberSources\(\);", js)]
     assert len(calls) == 2
     for name in ("function runSearchWithSource", "function runSaved"):
@@ -69,7 +69,7 @@ def test_only_your_own_ticks_are_saved():
 
 
 def test_the_settings_icon_is_a_gear_not_a_sun():
-    html = (ROOT / "templates" / "index.html").read_text()
+    html = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
     sym = re.search(r'<symbol id="i-settings".*?</symbol>', html).group(0)
     assert sym.count(" Z") == 1 and "<circle" in sym      # one toothed outline round a hub
     assert "M12 3v2.5" not in sym                         # the sun's rays

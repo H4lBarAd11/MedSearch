@@ -64,7 +64,7 @@ def test_a_part_without_intel_code_or_for_a_newer_macos_fails_the_check(tmp_path
 
 
 def test_the_release_waits_for_both_systems_and_publishes_both_installers():
-    w = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+    w = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     assert "paths: [VERSION]" in w                              # a VERSION bump releases (his choice)
     assert "needs: [mac, windows]" in w
     assert 'MedSearch-$V-mac.dmg" "dist/MedSearch-$V-Setup.exe"' in w
