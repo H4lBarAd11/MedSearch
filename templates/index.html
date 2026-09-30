@@ -387,6 +387,11 @@
         <label class="settings-check"><input type="checkbox" id="set_open_at_login"> Open at login</label>
         <div class="settings-hint">MedSearch starts in the menu bar with its window closed, ready for a quick search.</div>
       </div>
+      <div class="settings-field">
+        <label>Updates</label>
+        <div class="settings-version">This is MedSearch {{ app_version }}.</div>
+        <button class="btn-secondary update-check-btn" id="updateCheckBtn" onclick="checkForUpdatesNow()">Check for updates</button>
+      </div>
     </div>
     <div class="settings-footer">
       <button class="btn-secondary" onclick="closeSettings()">Cancel</button>

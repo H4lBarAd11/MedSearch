@@ -124,34 +124,85 @@ const _onboardingShowing = MS.showOnboarding;
 if (_onboardingShowing) window.addEventListener('load', () => { openOnboarding(); });
 
 // ── Auto-update ────────────────────────────────────────────────────────────
-function checkForUpdate() {
-  fetch('/update/check')
+// Checked when MedSearch starts and each time its window comes back: it lives
+// on in the menu bar, so its start can be weeks ago. At most once a minute,
+// since GitHub's answer is itself up to a minute old. "Later" puts the offer off
+// until the next day (the server keeps that); Settings ▸ Check for updates asks
+// at any time and always says what it found.
+let _updateOffered = null;     // the version the open popup offers
+let _lastUpdateCheck = 0;
+
+// What a check's answer calls for: 'offer', 'latest', 'unreachable', or null
+// for nothing. Asked from Settings, there is always an answer; by itself, the
+// window speaks only to offer an update that was not put off today.
+function updateVerdict(data, manual) {
+  if (!data || !data.ok) return manual ? 'unreachable' : null;
+  if (!data.update_available) return manual ? 'latest' : null;
+  return (manual || !data.deferred) ? 'offer' : null;
+}
+
+function checkForUpdate(manual) {
+  _lastUpdateCheck = Date.now();
+  return fetch('/update/check')
     .then(r => r.json())
+    .catch(() => null)
     .then(data => {
-      if (!data.ok || !data.update_available) return;   // silent if up-to-date or offline
-      const text = document.getElementById('updateText');
-      const actions = document.getElementById('updateActions');
-      const btn = document.getElementById('updateNowBtn');
-      // What the new version changes, when it says so.
-      const notes = (data.changes || []).length
-        ? `<ul class="update-changes">${data.changes.map(c => `<li>${escHtml(c)}</li>`).join('')}</ul>`
-        : '';
-      if (data.can_apply) {
-        text.innerHTML = `A new version of MedSearch is available.<br><br>
-          <span class="ver">${escHtml(data.local)}</span> → <span class="ver">${escHtml(data.remote)}</span>
-          ${notes}`;
-        btn.style.display = '';
-      } else {
-        // Not a git checkout (e.g. a frozen .app) — can't auto-apply. Point
-        // them at the source install, which DOES auto-update.
-        text.innerHTML = `A new version (<span class="ver">${escHtml(data.remote)}</span>) is available, but this copy can't auto-update.${notes}<br><br>
-          To get automatic updates, run MedSearch from a clone of the GitHub repo
-          (double-click <span class="mono">MedSearch.command</span>) instead of the packaged app.`;
-        btn.style.display = 'none';
-      }
-      openOverlay('updateOverlay');
-    })
-    .catch(() => { /* offline — stay silent */ });
+      const verdict = updateVerdict(data, manual);
+      if (verdict === 'offer') showUpdateOffer(data);
+      else if (verdict === 'latest') showToast(`MedSearch ${data.local} is the latest version.`, 'green');
+      else if (verdict === 'unreachable') fail("MedSearch couldn't reach GitHub, where its updates are published. "
+                                               + 'Check the internet connection and try again.', "Couldn't check for updates");
+    });
+}
+
+// Launch, and the window coming back. Never over another dialog: the next
+// time the window comes back will do. Before the page has loaded, the load
+// handler below decides, since the welcome dialog may be about to open.
+function autoCheckForUpdate() {
+  if (document.readyState !== 'complete') return;
+  if (Date.now() - _lastUpdateCheck < 60000) return;
+  if (document.querySelector('.modal-overlay.open')) return;
+  checkForUpdate(false);
+}
+
+// Settings ▸ Check for updates.
+function checkForUpdatesNow() {
+  const btn = document.getElementById('updateCheckBtn');
+  btn.disabled = true;
+  btn.textContent = 'Checking…';
+  checkForUpdate(true).finally(() => {
+    btn.disabled = false;
+    btn.textContent = 'Check for updates';
+  });
+}
+
+// The popup is set up afresh each time: an update that failed earlier in this
+// session left its own title and buttons in it.
+function showUpdateOffer(data) {
+  const text = document.getElementById('updateText');
+  const actions = document.getElementById('updateActions');
+  document.getElementById('updateTitle').textContent = 'Update available';
+  document.getElementById('updateProgress').style.display = 'none';
+  actions.style.display = 'flex';
+  actions.innerHTML = '<button class="btn-secondary" onclick="closeUpdate()">Later</button>'
+    + (data.can_apply ? '<button class="btn-primary" id="updateNowBtn" onclick="applyUpdate()">Update now</button>' : '');
+  // What the new version changes, when it says so.
+  const notes = (data.changes || []).length
+    ? `<ul class="update-changes">${data.changes.map(c => `<li>${escHtml(c)}</li>`).join('')}</ul>`
+    : '';
+  if (data.can_apply) {
+    text.innerHTML = `A new version of MedSearch is available.<br><br>
+      <span class="ver">${escHtml(data.local)}</span> → <span class="ver">${escHtml(data.remote)}</span>
+      ${notes}`;
+  } else {
+    // Not a git checkout (e.g. a frozen .app) — can't auto-apply. Point
+    // them at the source install, which DOES auto-update.
+    text.innerHTML = `A new version (<span class="ver">${escHtml(data.remote)}</span>) is available, but this copy can't auto-update.${notes}<br><br>
+      To get automatic updates, run MedSearch from a clone of the GitHub repo
+      (double-click <span class="mono">MedSearch.command</span>) instead of the packaged app.`;
+  }
+  _updateOffered = data.remote;
+  openOverlay('updateOverlay');
 }
 
 // The server starts a fresh copy once this one has exited, so the window
@@ -166,11 +217,20 @@ function restartApp() {
     .catch(() => { /* the server went away mid-response: that is the restart */ });
 }
 
+// Closing the offer without updating, by Later or Escape, puts it off for the day.
 function closeUpdate() {
+  if (_updateOffered) {
+    fetch('/update/later', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({version: _updateOffered})
+    }).catch(() => {});
+    _updateOffered = null;
+  }
   closeOverlay('updateOverlay');
 }
 
 function applyUpdate() {
+  _updateOffered = null;
   document.getElementById('updateActions').style.display = 'none';
   document.getElementById('updateProgress').style.display = 'flex';
   document.getElementById('updateProgressText').textContent = 'Downloading update…';
@@ -224,18 +284,22 @@ function applyUpdate() {
 // Run the update check on launch — but defer if onboarding is showing,
 // so we never stack two popups on a first-time user.
 window.addEventListener('load', () => {
-  const delay = _onboardingShowing ? 0 : 1500;
   if (_onboardingShowing) {
     // wait until they've closed onboarding, then check
     const iv = setInterval(() => {
       if (!document.getElementById('onboardOverlay').classList.contains('open')) {
         clearInterval(iv);
-        setTimeout(checkForUpdate, 800);
+        setTimeout(autoCheckForUpdate, 800);
       }
     }, 1000);
   } else {
-    setTimeout(checkForUpdate, delay);
+    autoCheckForUpdate();
   }
+});
+// And each time the window comes back: from the menu bar, the Dock, or another app.
+window.addEventListener('focus', autoCheckForUpdate);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') autoCheckForUpdate();
 });
 
 // Apply the initial AI on/off state to the UI (hides the dock's Assistant button if off)

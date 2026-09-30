@@ -4,6 +4,12 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.28
+
+- A new version is offered within a minute of its release, each time the MedSearch window comes up. It used to be offered only when MedSearch started, so a MedSearch kept in the menu bar could miss it for weeks, and for five minutes after a release it was not seen at all.
+- Later puts the offer off until the next day.
+- Settings has a Check for updates button. It shows the update if there is one, and otherwise says that this is the latest version, or that GitHub could not be reached.
+
 ## 1.27
 
 - On a Mac where Python was installed from python.org, searches work from the first start. Until now every database said it didn't respond, and updates looked offline, until Python's "Install Certificates" step had been run by hand. MedSearch now uses the Mac's own certificates when Python has none.
