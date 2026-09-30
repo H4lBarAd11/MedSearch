@@ -4,6 +4,15 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 2.0
+
+- MedSearch for Windows is ready: searching, the icon by the clock, library sign-ins, article windows and PDFs have all been through a hands-on check on Windows 11.
+- Windows: searches work on every PC. On a PC that had not yet stored the certificates some databases use, every database said it didn't respond.
+- Windows: when Windows closes MedSearch, to sign out, shut down or install an update, MedSearch now quits cleanly. It used to crash.
+- Windows: library sign-ins work, Remember sign-in included. In 1.31 they were off on Windows.
+- Windows: Search MedSearch… in the menu of the MedSearch icon by the clock brings the window forward, ready to type. Open MedSearch window is gone from that menu, as it did the same.
+- The installed app keeps a record of what it does, medsearch.log in the .medsearch folder of your home folder, to attach to a problem report. Web addresses in it are cut short, so it never holds a sign-in.
+
 ## 1.31
 
 - MedSearch is now an app to download and install on a Mac (Intel or Apple silicon, macOS 12 and later): no Python, no git, no Terminal. It is on the Releases page on GitHub.
