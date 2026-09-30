@@ -55,57 +55,88 @@ on/off* in the bottom bar, turns all of it off.
 **Citations and export.** A citation graph for any paper (what it cites, what cites it),
 and export to Markdown, BibTeX or RIS, or straight into Zotero.
 
-**From the menu bar.** MedSearch keeps an icon in the macOS menu bar: a quick search from
-anywhere, your recent searches, and the default source for quick searches. Closing the
-window leaves it there; *Quit* or ⌘Q ends it. Settings can open it at login, window closed,
-ready in the menu bar.
+**From the menu bar.** MedSearch keeps an icon in the macOS menu bar, or by the clock on
+Windows: a quick search from anywhere, your recent searches, and the default source for
+quick searches. Closing the window leaves it there; *Quit* (or ⌘Q on a Mac) ends it.
+Settings can open it at login, window closed, ready in the menu bar or by the clock.
 
 ---
 
 ## Install (macOS)
 
-You need **Python 3.8+** and **Git**, both preinstalled on most Macs (or
-`xcode-select --install`).
+For macOS 12 Monterey or later, on Intel or Apple silicon. Nothing else is needed: the
+app carries its own Python.
 
-```bash
-git clone https://github.com/H4lBarAd11/MedSearch.git
-```
+1. Download **`MedSearch-<version>-mac.dmg`** from the
+   [latest release](https://github.com/H4lBarAd11/MedSearch/releases/latest).
+2. Open it and drag **MedSearch** onto **Applications**.
+3. Open MedSearch from Applications.
 
-Then double-click **`Create Desktop App.command`** in the new folder, once. It sets up the
-environment, installs the dependencies and puts a **MedSearch** app on the Desktop. From
-then on, that icon is the way in: it opens MedSearch in its own window, with no Terminal.
+The first time, macOS says it cannot verify the developer, because MedSearch is not
+signed with a paid Apple certificate. Once, and only for this download:
 
-> If macOS refuses to open the `.command` file the first time ("unidentified developer"),
-> right-click it ▸ **Open** ▸ **Open**. Once.
+- **macOS 15 Sequoia and later:** press **Done**, then open **System Settings ▸ Privacy &
+  Security**, scroll down to the message about MedSearch and press **Open Anyway**.
+- **macOS 12 to 14:** right-click MedSearch in Applications ▸ **Open** ▸ **Open**.
 
-The Desktop app is only a launcher: MedSearch runs from the folder you cloned, which is
-what lets it update itself. If you move that folder, run `Create Desktop App.command` again.
+On macOS 15 and later, MedSearch may also ask to *find devices on local networks*. Either
+answer works: searching, the PDF reader and the AI never need it. Allow it only if you open
+articles from an address on a hospital or university intranet.
+
+## Install (Windows)
+
+> [!NOTE]
+> **New in 1.31.** The Windows version is built and checked automatically with every
+> release, but has not yet been used day to day. If something doesn't work, please
+> [open an issue](https://github.com/H4lBarAd11/MedSearch/issues).
+
+For Windows 10 and 11, 64-bit. Nothing else is needed, and no administrator rights.
+
+1. Download **`MedSearch-<version>-Setup.exe`** from the
+   [latest release](https://github.com/H4lBarAd11/MedSearch/releases/latest).
+2. Run it. MedSearch is installed for you alone, with an entry in the Start menu and, unless
+   you untick it, an icon on the Desktop.
+
+The first time, Windows warns that it *protected your PC*, because MedSearch is not signed
+with a paid certificate. Press **More info ▸ Run anyway**, once. Setup also installs
+Microsoft's WebView2, which draws MedSearch's window, on the rare PC that lacks it.
 
 ## Updates
 
-When MedSearch opens, and each time its window comes back, it compares its `VERSION` with
-the one on GitHub, which it reads within a minute of a push. If GitHub's is newer it offers
-**Update now**, which downloads the new version, installs any new dependencies and restarts
-the app. Nothing else needs doing: the launcher and the menu bar item are part of what
-updates. **Later** puts the offer off until the next day, and *Settings ▸ Check for
-updates* asks at any time.
+When MedSearch opens, and each time its window comes back, it checks GitHub for a newer
+version and offers **Update now**. The installed app then downloads the new version, puts
+it in place of itself and reopens, which takes a few seconds; the offer appears only once
+the new version's installers are published. **Later** puts the offer off until the next
+day, and *Settings ▸ Check for updates* asks at any time. The prompt shows what the new
+version changes, from [`CHANGELOG.md`](CHANGELOG.md).
 
-A new version is offered only when `VERSION` goes up, so a change meant to reach other
-Macs is released by raising it — with its lines added to [`CHANGELOG.md`](CHANGELOG.md),
-which is what the update prompt shows before anyone accepts it.
+A Mac that runs MedSearch from a git clone (the way it was installed before 1.31) is
+offered **Move to it** instead: MedSearch is installed into Applications, and the Desktop
+icon and *Open at login* open the installed app from then on. Settings, keys, history and
+saved searches stay as they are.
 
-## Other ways to run it
+A new version is released by raising `VERSION`, with its lines added to `CHANGELOG.md`, and
+pushing: GitHub then tests both installers, installs and starts each, and publishes them
+as a release.
+
+## Run from source
 
 ```bash
+git clone https://github.com/H4lBarAd11/MedSearch.git
 cd MedSearch
 pip install -r requirements.txt
 python3 app.py
 ```
 
 This works on macOS, Windows and Linux; without the native-window library it opens in the
-browser instead. `MedSearch.command` does the same on macOS with the Terminal visible,
-which is useful when something needs diagnosing. The menu bar item and the Desktop
-launcher are macOS-only.
+browser instead. On a Mac, double-clicking **`Create Desktop App.command`** once sets up the
+environment and puts a launcher on the Desktop that runs this folder with no Terminal, and
+**`MedSearch.command`** runs it with the Terminal visible, which helps when something needs
+diagnosing. A clone updates itself with git. A clone holding a file named `.development`
+is never offered the move to the installed app.
+
+The installers are built with `packaging/build-mac.sh` and `packaging/build-windows.ps1`
+(PyInstaller, and Inno Setup on Windows).
 
 ---
 
@@ -114,14 +145,15 @@ launcher are macOS-only.
 The free sources need no keys: PubMed, Cochrane, ClinicalTrials.gov and arXiv work out of
 the box. Keys are added in **Settings** (bottom bar) and never leave the machine: on macOS
 they are kept in the **Keychain** (visible in Keychain Access under *MedSearch*, and
-revocable from there), so no key is written to a file. A key saved by an older version is
-moved into the Keychain the next time MedSearch starts. Where there is no Keychain, they
-stay in `~/.medsearch/config.json`, which is readable only by its owner.
+revocable from there), and on Windows in **Credential Manager** (*Windows Credentials*, as
+*MedSearch/…*), so no key is written to a file. A key saved by an older version is moved
+there the next time MedSearch starts. Where there is neither, they stay in
+`~/.medsearch/config.json`, which is readable only by its owner.
 
-macOS asks for the login password when MedSearch stores a key, and may keep asking when it
-reads one back — a new Keychain item does not yet name the tool allowed to read it.
-`bash scripts/keychain-no-prompt.sh` grants that to Apple's own keychain tool and to
-nothing else; run it once, and again after saving a new key. Saving other settings never
+On a Mac, macOS asks for the login password when MedSearch stores a key, and may keep
+asking when it reads one back — a new Keychain item does not yet name the tool allowed to
+read it. `bash scripts/keychain-no-prompt.sh` grants that to Apple's own keychain tool and
+to nothing else; run it once, and again after saving a new key. Saving other settings never
 touches the Keychain, so it never asks.
 
 | Key | Where to get it | What it unlocks |
@@ -149,16 +181,17 @@ work. Several libraries can be saved; the active one is chosen under **Options**
 Papers then show **DOI (via library)**, which opens them in a browser window inside
 MedSearch that carries your library login, so subscribed papers load directly. A site's
 own PDF button there opens the PDF in another MedSearch window, still signed in; a PDF the
-site sends as a file is saved to Downloads and opened in Preview, and any other file is
-saved there and shown in the Finder.
+site sends as a file is saved to Downloads and opened in Preview (on Windows, in your PDF
+app), and any other file is saved there and shown in the Finder (or Explorer).
 
 Tick **Remember sign-in** under a library and MedSearch keeps the username and password
-you type on its login page in the **Keychain** (under *MedSearch sign-in*). The next time
+you type on its login page in the **Keychain** (under *MedSearch sign-in*), or on Windows in
+**Credential Manager**. The next time
 that page opens, the form is filled and sent for you, once; if it comes back, it is filled
 and left for you. The sign-in is filled only on an https page of the library's own domain,
 shown under the box (`unitn.it` for UniTN), and unticking the box deletes it. The box
-starts unticked: on a Mac that several people share, a saved sign-in would sign every one
-of them in as the first.
+starts unticked: on a computer that several people share, a saved sign-in would sign every
+one of them in as the first.
 
 ## What the AI costs
 
@@ -175,8 +208,8 @@ own API key in its own Anthropic console workspace and set the spend limit there
 ## Privacy
 
 Everything runs on your machine. Searches, keys, history and saved searches stay in
-`~/.medsearch/`. The only traffic out is to the literature services you search and, with
-AI on, to the Anthropic API.
+`~/.medsearch/` (on Windows, `.medsearch` in your user folder). The only traffic out is to
+the literature services you search and, with AI on, to the Anthropic API.
 
 ---
 
@@ -185,18 +218,24 @@ AI on, to the Anthropic API.
 ```
 MedSearch/
 ├── app.py                    the backend (Flask) and the native window
-├── statusbar.py              the macOS menu bar item
-├── launcher.sh               how the Desktop app starts MedSearch (updates with it)
-├── Create Desktop App.command  one-time macOS install
+├── statusbar.py, tray.py     the macOS menu bar item, and its Windows twin by the clock
+├── appmenu.py                what both menus offer
+├── splash.py, splash_win.py  the splash, drawn on each system
+├── secrets_store.py          the keys: Keychain, or Credential Manager (wincred.py)
+├── signins.py                library sign-ins, remembered and filled in
+├── article_windows.py        article windows' new tabs and downloads
+├── launcher.sh               how a clone's Desktop app starts MedSearch
+├── Create Desktop App.command  a clone's one-time macOS setup
 ├── MedSearch.command         the same start, with the Terminal visible
 ├── templates/index.html      the page
 ├── static/css, static/js     its style and behaviour
 ├── static/fonts, vendor/     DM Sans (OFL) and PDF.js, bundled so it works offline
 ├── tests/                    pytest suite  (pip install -r requirements-dev.txt)
 ├── scripts/make-readme-art.py  draws docs/readme/banner.svg from the app's own style
-├── render_icon.py            draws the app icon's artwork (icon.icns is built from it)
+├── render_icon.py            draws the app icon's artwork (icon.icns and icon.ico)
 ├── render_menubar_icon.py    draws the menu bar glyph's variants (menubar_icon.png)
 ├── packaging/                the installers: build spec, build scripts, Windows Setup
+├── .github/workflows/        builds, checks and publishes both installers
 ├── CHANGELOG.md              what each version changed (shown in the update prompt)
 └── VERSION                   what the update check compares
 ```
@@ -213,6 +252,9 @@ page rather than to a PDF file. MedSearch opens it in its own browser window, wh
 library login applies.
 
 **PubMed answers with HTTP 429.** Too many requests: add a free NCBI key in Settings.
+
+**On Windows the window stays empty.** Microsoft's WebView2 is missing or broken: install
+the *WebView2 Runtime* from microsoft.com and open MedSearch again.
 
 **A key doesn't seem to take effect.** Enter it again in Settings and press Save; restart
 MedSearch if it still doesn't.

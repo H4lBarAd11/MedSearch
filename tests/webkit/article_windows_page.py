@@ -205,10 +205,24 @@ def until(cond, seconds=5.0):
     return cond()
 
 
+def js_in(view, source):
+    box = {}
+    view.evaluateJavaScript_completionHandler_(source, lambda r, e: box.update(r=r))
+    until(lambda: bool(box), 3)
+    return box.get("r")
+
+
 def load_page():
+    """The test page, loaded and ready. Not just "a load finished": a navigation
+    the step before started (the page's own PDF, a blob) can finish late on a
+    slow machine, and then the next click lands on that page instead (seen on
+    the release build's Mac, 30 Sep)."""
     before = log["finished"]
     web.loadRequest_(NSURLRequest.requestWithURL_(NSURL.URLWithString_(BASE + "/page")))
-    until(lambda: log["finished"] > before)
+    until(lambda: log["finished"] > before
+          and str(web.URL().absoluteString()) == BASE + "/page"
+          and js_in(web, "!!document.getElementById('tab') && document.readyState") == "complete",
+          10)
 
 
 def click(element_id):
@@ -232,13 +246,6 @@ click("tab")
 def own_url(i):
     web = own[i].contentView()
     return str(web.URL().absoluteString()) if web.URL() else ""
-
-
-def js_in(view, source):
-    box = {}
-    view.evaluateJavaScript_completionHandler_(source, lambda r, e: box.update(r=r))
-    until(lambda: bool(box), 3)
-    return box.get("r")
 
 
 check("a new-tab link gets the window WebKit asked for",
