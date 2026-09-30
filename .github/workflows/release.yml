@@ -161,14 +161,34 @@ jobs:
           $V = (Get-Content VERSION -Raw).Trim()
           New-Item -ItemType Directory -Force shots | Out-Null
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-          # CaptureBlt: without it a screen copy leaves out see-through
-          # (layered) windows, and the splash is one.
+          # Windows' own screen copy with CAPTUREBLT: without it a copy leaves out
+          # see-through (layered) windows, and the splash is one. .NET's
+          # CopyFromScreen refuses that flag, so the copy is made here.
+          Add-Type -TypeDefinition @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class Grab {
+            [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr h);
+            [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr h, IntPtr dc);
+            [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+            [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleBitmap(IntPtr dc, int w, int h);
+            [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr o);
+            [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+            [DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr d, int x, int y, int w, int h,
+                                                             IntPtr s, int sx, int sy, uint op);
+            public static IntPtr Screen(int x, int y, int w, int h) {
+              IntPtr screen = GetDC(IntPtr.Zero), mem = CreateCompatibleDC(screen);
+              IntPtr bmp = CreateCompatibleBitmap(screen, w, h), old = SelectObject(mem, bmp);
+              BitBlt(mem, 0, 0, w, h, screen, x, y, 0x00CC0020u | 0x40000000u);   // SRCCOPY | CAPTUREBLT
+              SelectObject(mem, old); DeleteDC(mem); ReleaseDC(IntPtr.Zero, screen);
+              return bmp;
+            }
+          }
+          "@
           function Shot($name) {
             $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-            $mode = [System.Drawing.CopyPixelOperation]::SourceCopy -bor [System.Drawing.CopyPixelOperation]::CaptureBlt
-            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size, $mode)
-            $bmp.Save("shots\$name.png")
+            $h = [Grab]::Screen($b.X, $b.Y, $b.Width, $b.Height)
+            [System.Drawing.Image]::FromHbitmap($h).Save("shots\$name.png")
           }
 
           $setup = Start-Process "dist\MedSearch-$V-Setup.exe" -Wait -PassThru `
