@@ -252,19 +252,33 @@ jobs:
           $hidden = -not (Shown)
           Write-Host "after the close button: running $alive, hidden $hidden"
 
-          # Task Manager's End task (and Windows shutting down, and Setup
-          # closing MedSearch for an update) quits it, cleanly.
-          [void][Grab]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
-          $ended = $app.WaitForExit(20000)
+          # An update: the same Setup run quietly with /RELAUNCH=1, as the in-app
+          # update runs it. It must close MedSearch cleanly (the Restart Manager
+          # asks it to end, as Windows shutting down does), install, and open it
+          # again.
+          $setup2 = Start-Process "dist\MedSearch-$V-Setup.exe" -Wait -PassThru `
+                      -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/RELAUNCH=1'
+          $ended = $app.WaitForExit(5000)
           $code = if ($ended) { $app.ExitCode } else { "still running" }
-          Write-Host "after End task: exit code $code"
+          Write-Host "update Setup exit $($setup2.ExitCode); the old MedSearch: exit code $code"
+          $again = $null
+          for ($i = 0; $i -lt 60 -and -not $again; $i++) {
+            Start-Sleep 1
+            try {
+              $p2 = (Get-Content "$h\.medsearch\server_port" -Raw).Trim()
+              $again = Invoke-RestMethod "http://127.0.0.1:$p2/ping"
+            } catch { }
+          }
+          Write-Host "reopened after the update: $(if ($again) { $again.version } else { 'no' })"
 
           Write-Host "---- medsearch.log"
           Get-Content "$h\.medsearch\medsearch.log" -Encoding utf8 -ErrorAction SilentlyContinue | Write-Host
           if (-not $alive) { throw "The close button ended MedSearch instead of hiding it" }
           if (-not $hidden) { throw "The close button left the window on screen" }
-          if ($code -ne 0) { throw "End task did not end MedSearch cleanly: $code" }
-          Write-Host "the close button hid it; End task ended it cleanly"
+          if ($setup2.ExitCode -ne 0) { throw "The update's Setup failed: $($setup2.ExitCode)" }
+          if ($code -ne 0) { throw "The update did not end MedSearch cleanly: $code" }
+          if (-not $again) { throw "MedSearch did not open again after the update" }
+          Write-Host "the close button hid it; an update closed it cleanly and opened it again"
 
           Get-Process MedSearch -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep 2
