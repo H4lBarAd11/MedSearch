@@ -276,10 +276,10 @@ NATIONAL_GUIDELINE_BODIES = {
 # APP_DIR_PATH is set above (frozen-aware). VERSION ships as a bundled resource,
 # so read it from RESOURCE_DIR; fall back to the app dir for source checkouts.
 VERSION_FILE    = RESOURCE_DIR / "VERSION"
-# Raw GitHub URL for the VERSION file on the main branch
-GITHUB_RAW_VERSION = "https://raw.githubusercontent.com/H4lBarAd11/MedSearch/main/VERSION"
-# The same files through GitHub's API, which is fresher (see _github_file)
-GITHUB_API_CONTENTS = "https://api.github.com/repos/H4lBarAd11/MedSearch/contents/"
+# The published files, as raw.githubusercontent.com/<repo>/<commit>/<file>
+GITHUB_RAW = "https://raw.githubusercontent.com/H4lBarAd11/MedSearch"
+# Which commit each branch is at: git's own answer, the first step of a clone
+GITHUB_REFS = "https://github.com/H4lBarAd11/MedSearch.git/info/refs?service=git-upload-pack"
 
 def get_local_version():
     try:
@@ -2492,37 +2492,25 @@ def pending_search():
 
 CHANGELOG_FILE = "CHANGELOG.md"
 
-# The ETag and text of GitHub's last answer for each file (see _github_file).
-_GITHUB_SEEN = {}
+def _published_commit():
+    """The commit GitHub's main branch is at now, "main" when GitHub answers
+    but not as expected, or None when GitHub cannot be reached.
 
-def _github_file(name):
-    """A file of the published MedSearch as GitHub has it now, or None.
+    raw.githubusercontent.com goes on serving a file of main for five minutes
+    after a push, so a new version was seen up to five minutes late. GitHub's
+    API is current, but it counts every call, even "not modified", against 60 an
+    hour per internet address, which a hospital's Macs share. git's own answer
+    to "which commit is main at?" is current and not counted, and a file at a
+    given commit never changes, so its cached copy is always the right one."""
+    refs, status = http_get(GITHUB_REFS, timeout=8)
+    if refs is None:
+        return None if status == 0 else "main"
+    m = re.search(r"([0-9a-f]{40}) refs/heads/main\n", refs)
+    return m.group(1) if m else "main"
 
-    raw.githubusercontent.com goes on serving a file for five minutes after a
-    push, so a new version stayed invisible that long. GitHub's API is at most a
-    minute behind, but it allows 60 calls an hour per internet address, and a
-    hospital's Macs share one. An answer of "not modified" costs nothing, so the
-    ETag of the last answer is sent back, and most checks are free. When the API
-    refuses anyway, the raw copy is used; when GitHub cannot be reached at all,
-    there is nothing to fall back to."""
-    seen = _GITHUB_SEEN.get(name)
-    headers = {"User-Agent": "MedSearch/1.0 (academic literature search)",
-               "Accept": "application/vnd.github.raw"}
-    if seen:
-        headers["If-None-Match"] = seen[0]
-    req = urllib.request.Request(f"{GITHUB_API_CONTENTS}{name}?ref=main", headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=8) as r:
-            text = r.read().decode("utf-8", errors="replace")
-            if r.headers.get("ETag"):
-                _GITHUB_SEEN[name] = (r.headers["ETag"], text)
-            return text
-    except urllib.error.HTTPError as e:
-        if e.code == 304 and seen:
-            return seen[1]
-    except Exception:
-        return None
-    body, _ = http_get(GITHUB_RAW_VERSION.rsplit("/", 1)[0] + "/" + name, timeout=8)
+def _github_file(name, commit):
+    """A file of the published MedSearch at that commit, or None."""
+    body, _ = http_get(f"{GITHUB_RAW}/{commit}/{name}", timeout=8)
     return body
 
 def _today():
@@ -2554,7 +2542,8 @@ def changelog_entry(text, version):
 def update_check():
     """Compare local VERSION with the one on GitHub. No git needed for the check."""
     local = get_local_version()
-    body = _github_file("VERSION")
+    commit = _published_commit()
+    body = _github_file("VERSION", commit) if commit else None
     if not body:
         return jsonify({"ok": False, "reason": "offline",
                         "local": local})
@@ -2563,7 +2552,7 @@ def update_check():
     # What the new version changes, read from the same place it is published.
     changes = []
     if update_available:
-        changes = changelog_entry(_github_file(CHANGELOG_FILE), remote)
+        changes = changelog_entry(_github_file(CHANGELOG_FILE, commit), remote)
     # Is this a git checkout? (update can only be applied if so)
     is_git = (APP_DIR_PATH / ".git").exists()
     return jsonify({

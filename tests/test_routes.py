@@ -761,97 +761,94 @@ def test_a_version_with_nothing_written_about_it_invents_nothing():
     assert A.changelog_entry(None, "1.5") == []
 
 
-def test_the_update_check_reports_what_changed(client, auth, monkeypatch):
-    calls = []
+def _published_at(monkeypatch, files, commit="c0ffee"):
+    """GitHub, faked: main is at `commit`, holding `files` ({name: text})."""
+    asked = []
 
-    def fake_file(name):
-        calls.append(name)
-        return "9.9\n" if name == "VERSION" else CHANGELOG.replace("1.5", "9.9")
-    monkeypatch.setattr(A, "_github_file", fake_file)
+    def file(name, at):
+        asked.append((name, at))
+        return files.get(name)
+    monkeypatch.setattr(A, "_published_commit", lambda: commit)
+    monkeypatch.setattr(A, "_github_file", file)
+    return asked
+
+
+def test_the_update_check_reports_what_changed(client, auth, monkeypatch):
+    asked = _published_at(monkeypatch, {"VERSION": "9.9\n",
+                                        "CHANGELOG.md": CHANGELOG.replace("1.5", "9.9")})
     r = client.get("/update/check", headers=auth, base_url=BASE).json
     assert r["update_available"] is True
     assert r["changes"] == ["Keys in the Keychain.", "A monthly limit for the AI."]
-    assert "CHANGELOG.md" in calls
+    # Both read at the same commit, so the notes belong to that version.
+    assert asked == [("VERSION", "c0ffee"), ("CHANGELOG.md", "c0ffee")]
 
 
 def test_no_changelog_is_fetched_when_there_is_nothing_to_update(client, auth, monkeypatch):
     """The check runs every time the window comes back: it must not fetch what it
     cannot use."""
-    calls = []
-
-    def fake_file(name):
-        calls.append(name)
-        return A.get_local_version()
-    monkeypatch.setattr(A, "_github_file", fake_file)
+    asked = _published_at(monkeypatch, {"VERSION": A.get_local_version()})
     r = client.get("/update/check", headers=auth, base_url=BASE).json
     assert r["update_available"] is False and r["changes"] == []
-    assert calls == ["VERSION"]
+    assert asked == [("VERSION", "c0ffee")]
 
 
-class _GitHub:
-    """GitHub's API, faked at urlopen: answers 200 with an ETag, and 304 to a
-    request that sends that ETag back, or refuses everything with `refuse`."""
-    def __init__(self, text="9.9", refuse=None):
-        self.text, self.refuse, self.requests = text, refuse, []
-
-    def __call__(self, req, timeout=None):
-        self.requests.append(req)
-        if self.refuse is not None:
-            raise self.refuse
-        if req.get_header("If-none-match") == '"v1"':
-            raise A.urllib.error.HTTPError(req.full_url, 304, "Not Modified", {}, None)
-        text = self.text
-
-        class Answer:
-            headers = {"ETag": '"v1"'}
-            def read(self): return text.encode()
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
-        return Answer()
+# What github.com answers to "which commit is each branch at?" (git's smart HTTP).
+MAIN, OTHER = "e31676a5e387e61b52c7dd4b951548cfc4c65d86", "80cba50" + "0" * 33
+REFS = ("001e# service=git-upload-pack\n0000"
+        f"0155{MAIN} HEAD\0multi_ack thin-pack side-band symref=HEAD:refs/heads/main\n"
+        f"0044{OTHER} refs/heads/main-old\n"
+        f"003f{MAIN} refs/heads/main\n0000")
 
 
-def test_the_version_is_read_through_githubs_api_not_the_five_minute_cache(monkeypatch):
-    github = _GitHub()
-    monkeypatch.setattr(A.urllib.request, "urlopen", github)
-    monkeypatch.setattr(A, "_GITHUB_SEEN", {})
-    monkeypatch.setattr(A, "http_get", lambda *a, **k: pytest.fail("raw copy fetched"))
-    assert A._github_file("VERSION") == "9.9"
-    [req] = github.requests
-    assert req.full_url.startswith("https://api.github.com/repos/H4lBarAd11/MedSearch/contents/VERSION")
+def _github_answers(monkeypatch, refs, status=200, files=None):
+    asked = []
+
+    def get(url, timeout=None):
+        asked.append(url)
+        if url == A.GITHUB_REFS:
+            return refs, status
+        name = url.rsplit("/", 1)[1]
+        return (files or {}).get(name), 200
+    monkeypatch.setattr(A, "http_get", get)
+    return asked
 
 
-def test_a_second_check_asks_only_whether_it_changed(monkeypatch):
-    """A "not modified" answer does not count against GitHub's 60 calls an hour."""
-    github = _GitHub()
-    monkeypatch.setattr(A.urllib.request, "urlopen", github)
-    monkeypatch.setattr(A, "_GITHUB_SEEN", {})
-    assert A._github_file("VERSION") == "9.9"
-    assert A._github_file("VERSION") == "9.9"
-    assert github.requests[1].get_header("If-none-match") == '"v1"'
+def test_the_version_is_read_at_the_commit_main_is_at(monkeypatch):
+    """A file at a commit never changes, so the five-minute cache that hid a new
+    version on main cannot serve a stale one."""
+    asked = _github_answers(monkeypatch, REFS, files={"VERSION": "9.9\n"})
+    commit = A._published_commit()
+    assert commit == MAIN
+    assert A._github_file("VERSION", commit) == "9.9\n"
+    assert asked == ["https://github.com/H4lBarAd11/MedSearch.git/info/refs?service=git-upload-pack",
+                     f"https://raw.githubusercontent.com/H4lBarAd11/MedSearch/{MAIN}/VERSION"]
 
 
-def test_when_the_api_refuses_the_raw_copy_is_used(monkeypatch):
-    refused = A.urllib.error.HTTPError("https://api.github.com", 403, "rate limit", {}, None)
-    monkeypatch.setattr(A.urllib.request, "urlopen", _GitHub(refuse=refused))
-    monkeypatch.setattr(A, "_GITHUB_SEEN", {})
-    raw = []
-    monkeypatch.setattr(A, "http_get", lambda url, timeout=None: (raw.append(url), ("9.8", 200))[1])
-    assert A._github_file("VERSION") == "9.8"
-    assert raw == ["https://raw.githubusercontent.com/H4lBarAd11/MedSearch/main/VERSION"]
+def test_a_branch_named_like_main_is_not_taken_for_it(monkeypatch):
+    _github_answers(monkeypatch, REFS.replace(f"003f{MAIN} refs/heads/main\n", ""))
+    assert A._published_commit() == "main"
 
 
-def test_when_github_cannot_be_reached_nothing_else_is_tried(monkeypatch):
+def test_an_answer_in_another_form_falls_back_to_main(monkeypatch):
+    _github_answers(monkeypatch, "<html>Sorry</html>")
+    assert A._published_commit() == "main"
+
+
+def test_a_refused_question_falls_back_to_main(monkeypatch):
+    _github_answers(monkeypatch, None, status=503)
+    assert A._published_commit() == "main"
+
+
+def test_when_github_cannot_be_reached_nothing_else_is_tried(client, auth, monkeypatch):
     """Offline, a second address would only add a second wait."""
-    unreachable = A.urllib.error.URLError("no route to host")
-    monkeypatch.setattr(A.urllib.request, "urlopen", _GitHub(refuse=unreachable))
-    monkeypatch.setattr(A, "_GITHUB_SEEN", {})
-    monkeypatch.setattr(A, "http_get", lambda *a, **k: pytest.fail("raw copy fetched"))
-    assert A._github_file("VERSION") is None
+    asked = _github_answers(monkeypatch, None, status=0)
+    r = client.get("/update/check", headers=auth, base_url=BASE).json
+    assert r["ok"] is False and r["reason"] == "offline"
+    assert asked == [A.GITHUB_REFS]
 
 
 def _published(monkeypatch, version):
-    monkeypatch.setattr(A, "_github_file",
-                        lambda name: version if name == "VERSION" else "")
+    _published_at(monkeypatch, {"VERSION": version, "CHANGELOG.md": ""})
 
 
 def test_later_puts_the_offer_off_for_the_rest_of_the_day(client, auth, monkeypatch):

@@ -41,18 +41,29 @@ published = {"version": "9.9"}
 asked = []
 
 
-def github_file(name):
+def published_commit():
+    asked.append("which commit")
+    return None if published["version"] is None else "c0ffee"
+
+
+def github_file(name, commit):
     asked.append(name)
-    if published["version"] is None:
-        return None
     if name == "VERSION":
         return published["version"] + "\n"
     return f"## {published['version']}\n\n- Something new.\n"
 
 
+A._published_commit = published_commit
 A._github_file = github_file
 A.http_get = lambda *a, **k: (None, 0)
 A.CONFIG["onboarding_seen"] = True
+
+# NEVER the real update or restart here: the update resets this very folder to
+# GitHub's main, and a restart starts a real MedSearch. The update fails, as
+# one can; a restart is refused.
+A.app.view_functions["update_apply"] = lambda: A.jsonify(
+    {"ok": False, "message": "The update could not be downloaded (test)."})
+A.app.view_functions["app_restart"] = lambda: (A.jsonify({"ok": False}), 403)
 
 with socket.socket() as s:
     s.bind(("127.0.0.1", 0))
@@ -116,11 +127,12 @@ def check(name, ok):
 
 
 web.loadRequest_(NSURLRequest.requestWithURL_(NSURL.URLWithString_(f"http://127.0.0.1:{PORT}/")))
-until(lambda: js("document.readyState") == "complete", 20)
+# Not document.readyState alone: the blank page before the load is "complete" too.
+check("the page loads", until(lambda: js("document.readyState === 'complete'"
+                                         " && typeof autoCheckForUpdate === 'function'"), 20))
 # Outside a window WebKit never advances an animation, so a dialog would never
 # finish closing: run without them, as the page does under Reduce motion.
 js("Element.prototype.animate = null; 1")
-check("the page loads", until(lambda: js("typeof autoCheckForUpdate") == "function"))
 
 # ── by itself ───────────────────────────────────────────────────────────────
 check("at launch, a newer version is offered", until(lambda: is_open("updateOverlay")))
@@ -152,6 +164,25 @@ before = len(asked)
 window_comes_back(throttled=True)
 spin(0.5)
 check("within a minute of the last check, GitHub is not asked again", len(asked) == before)
+
+published["version"] = "9.20"
+window_comes_back()
+until(lambda: is_open("updateOverlay"))
+js("document.getElementById('updateNowBtn').click(); 1")
+check("an update that fails says so", until(
+    lambda: js("document.getElementById('updateTitle').textContent") == "Update failed"))
+js("document.querySelector('#updateActions .btn-secondary').click(); 1")
+check("closing its message puts the offer off, as Later does", until(
+    lambda: (A.CONFIG.get("update_later") or {}).get("version") == "9.20"))
+
+published["version"] = "9.30"
+js("document.getElementById('pdfOverlay').classList.add('open'); 1")
+before = len(asked)
+window_comes_back()
+spin(0.5)
+check("the window coming back never offers over a PDF being read",
+      len(asked) == before and not is_open("updateOverlay"))
+js("document.getElementById('pdfOverlay').classList.remove('open'); 1")
 
 # ── Settings ▸ Check for updates ────────────────────────────────────────────
 js("openSettings(); 1")

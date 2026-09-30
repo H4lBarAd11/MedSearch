@@ -4,6 +4,12 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.29
+
+- Checking for a new version no longer uses up GitHub's hourly allowance, which all the Macs on one network share: MedSearch now asks in a way GitHub does not count.
+- When an update fails, closing its message puts the offer off until the next day, as Later does. It used to come back each time the window came up.
+- The update offer no longer opens over a PDF you are reading.
+
 ## 1.28
 
 - A new version is offered within a minute of its release, each time the MedSearch window comes up. It used to be offered only when MedSearch started, so a MedSearch kept in the menu bar could miss it for weeks, and for five minutes after a release it was not seen at all.
