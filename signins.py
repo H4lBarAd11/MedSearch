@@ -413,9 +413,11 @@ def install_windows(institutions):
 
     WebView2 hands this object only the messages of a window's top page, never
     a frame's, which is WebKit's "main frame" test done by Edge itself."""
+    # pywebview's Edge module first: it loads the bridge to .NET (clr), without
+    # which there is no System to import (seen in the first Windows walk).
+    import webview.platforms.edgechromium as edge
     from System import Action, String
     from System.Threading.Tasks import Task, TaskScheduler
-    import webview.platforms.edgechromium as edge
 
     base = edge.EdgeChrome
     submitted = set()                      # windows whose form was already sent once

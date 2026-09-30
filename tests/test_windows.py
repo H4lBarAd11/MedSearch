@@ -557,3 +557,45 @@ def test_the_installer_ships_what_windows_needs():
     Image = pytest.importorskip("PIL.Image")
     sizes = Image.open(root / "icon.ico").info["sizes"]
     assert {(16, 16), (32, 32), (256, 256)} <= set(sizes)
+
+
+def test_windows_sign_ins_load_the_bridge_to_net_first(monkeypatch):
+    """The first Windows walk: 'library sign-ins unavailable: No module named
+    System'. .NET's names exist only once pywebview's Edge module has loaded the
+    bridge (clr); asking for them first failed. A stand-in for that module makes
+    System appear only when it is imported, as the real one does."""
+    import importlib.abc
+    import importlib.util
+
+    system = types.ModuleType("System")
+    system.Action, system.String = (lambda f: f), str
+    tasks = types.ModuleType("System.Threading.Tasks")
+    tasks.Task = type("Task", (), {"__class_getitem__": classmethod(lambda cls, item: cls)})
+    tasks.TaskScheduler = object
+    names = ("System", "System.Threading", "System.Threading.Tasks",
+             "webview.platforms.edgechromium")
+
+    class Bridge(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+        def find_spec(self, name, path, target=None):
+            if name == "webview.platforms.edgechromium":
+                return importlib.util.spec_from_loader(name, self)
+            return None
+
+        def create_module(self, spec):
+            return None
+
+        def exec_module(self, module):
+            module.EdgeChrome = type("EdgeChrome", (), {})
+            sys.modules.update({"System": system, "System.Threading": types.ModuleType("System.Threading"),
+                                "System.Threading.Tasks": tasks})
+
+    saved = {n: sys.modules.pop(n) for n in names if n in sys.modules}
+    monkeypatch.setattr(sys, "meta_path", [Bridge()] + sys.meta_path)
+    try:
+        on_page, on_message = signins.install_windows(lambda: [])
+        assert callable(on_page) and callable(on_message)
+        assert sys.modules["webview.platforms.edgechromium"].EdgeChrome.__name__ == "MedSearchSignInEdge"
+    finally:
+        for n in names:
+            sys.modules.pop(n, None)
+        sys.modules.update(saved)

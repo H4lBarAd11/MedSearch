@@ -80,9 +80,17 @@ def _safe_console():
         except Exception:
             pass
     if log is not None:
+        import faulthandler
         import logging
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
         print(f"\n── MedSearch starting, {datetime.now():%Y-%m-%d %H:%M:%S} ──", file=log)
+        # A crash below Python (the .NET under pywebview on Windows) leaves no
+        # traceback of its own: this writes where each thread was (seen 30 Sep:
+        # a close crashed the first Windows walk with nothing in the log).
+        try:
+            faulthandler.enable(file=log, all_threads=True)
+        except Exception:
+            pass
 
 _safe_console()
 
