@@ -256,8 +256,11 @@ jobs:
           # update runs it. It must close MedSearch cleanly (the Restart Manager
           # asks it to end, as Windows shutting down does), install, and open it
           # again.
-          $setup2 = Start-Process "dist\MedSearch-$V-Setup.exe" -Wait -PassThru `
+          # Setup itself only: -Wait would also wait for the MedSearch it reopens.
+          $setup2 = Start-Process "dist\MedSearch-$V-Setup.exe" -PassThru `
                       -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/RELAUNCH=1'
+          $null = $setup2.Handle
+          if (-not $setup2.WaitForExit(180000)) { throw "The update's Setup did not finish in 3 minutes" }
           $ended = $app.WaitForExit(5000)
           $code = if ($ended) { $app.ExitCode } else { "still running" }
           Write-Host "update Setup exit $($setup2.ExitCode); the old MedSearch: exit code $code"
