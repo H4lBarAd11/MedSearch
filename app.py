@@ -428,6 +428,29 @@ def _trust_the_macs_certificates():
 
 _trust_the_macs_certificates()
 
+def _add_the_public_roots_on_windows():
+    """Windows fetches a missing root certificate from Windows Update when its
+    own programs need one (Edge, PowerShell); Python only reads the roots
+    already stored, and a fresh or little-used PC stores few. In the first
+    Windows walk (30 Sep, a Windows 11 with 32 stored) every source "didn't
+    respond" while GitHub, whose root happened to be there, answered. So
+    Windows' stored roots are joined by certifi's copy of Mozilla's list, which
+    each build refreshes. Windows' own stay in: a hospital's network
+    certificates live there."""
+    if sys.platform != "win32":
+        return
+    try:
+        import certifi
+        ctx = ssl.create_default_context()              # Windows' stored roots
+        ctx.load_verify_locations(cafile=certifi.where())
+    except Exception as e:
+        print(f"  (the public root certificates could not be added: {e})")
+        return
+    urllib.request.install_opener(
+        urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx)))
+
+_add_the_public_roots_on_windows()
+
 class _RateLimiter:
     """Spaces calls to one service evenly across threads."""
     def __init__(self):

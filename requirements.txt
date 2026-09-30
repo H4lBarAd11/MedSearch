@@ -3,6 +3,7 @@
 
 flask>=3.0          # web framework powering the local backend
 pywebview>=4.4      # native desktop window (falls back to browser if absent)
+certifi; sys_platform == "win32"   # the public root certificates a fresh Windows has not stored yet
 
 # The macOS menu bar item (statusbar.py) uses PyObjC, which pywebview already
 # installs on macOS. Nothing extra to add.
