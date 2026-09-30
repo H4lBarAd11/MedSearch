@@ -99,6 +99,20 @@ def test_medsearch_s_window_only_goes_to_its_own_server(current, target, stays):
     assert W.stays_on_page(current, target) is stays
 
 
+@pytest.mark.parametrize("url,kept", [
+    ("https://pdf.example/a.pdf?X-Amz-Signature=abc&X-Amz-Credential=k", "https://pdf.example/a.pdf"),
+    ("https://ezp.biblio.unitn.it/login?url=https://doi.org/10.1/x", "https://ezp.biblio.unitn.it/login"),
+    ("https://journal.example/article;jsessionid=0123456789ABCDEF", "https://journal.example/article"),
+    ("https://journal.example/read#access_token=abc", "https://journal.example/read"),
+    ("data:application/pdf;base64,JVBERi0=", "data:application/pdf"),
+    ("https://journal.example/" + "a" * 80, "https://journal.example/" + "a" * 36),
+    (None, ""),
+])
+def test_the_log_keeps_an_address_without_what_signs_in(url, kept):
+    """A user may attach the log to a report: no signed link or session in it."""
+    assert W.log_address(url) == kept
+
+
 def _webkit():
     if sys.platform != "darwin":
         return False
