@@ -4,6 +4,10 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.30
+
+- Search by DOI: paste a DOI, a doi.org link or a link to the article, or several DOIs at once, and each ticked database looks those papers up. Years and Strict don't apply. A paper none of the ticked databases has is shown from Crossref, and a DOI nobody knows is reported, so it can be checked for a typo. ClinicalTrials.gov says it can't be searched by DOI; arXiv looks up its own DOIs.
+
 ## 1.29
 
 - Checking for a new version no longer uses up GitHub's hourly allowance, which all the Macs on one network share: MedSearch now asks in a way GitHub does not count.

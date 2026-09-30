@@ -24,7 +24,7 @@ Server-Sent Events (SSE).
 
 import sys, os, json, re, time, threading, urllib.parse, urllib.request
 import urllib.error, xml.etree.ElementTree as ET
-import concurrent.futures, hashlib, hmac, secrets, ssl, subprocess
+import concurrent.futures, hashlib, hmac, html, secrets, ssl, subprocess
 from datetime import datetime
 from pathlib import Path
 from xml.sax.saxutils import escape as escape_xml
@@ -1158,12 +1158,7 @@ def _crossref_meta(doi):
     msg = data.get("message", {})
     title_list = msg.get("title", [])
     title = title_list[0] if title_list else "(title unavailable)"
-    # Year
-    year = ""
-    for key in ("published-print","published-online","issued","created"):
-        parts = msg.get(key, {}).get("date-parts", [[]])
-        if parts and parts[0]:
-            year = str(parts[0][0]); break
+    year = _crossref_year(msg)
     # Authors (first 2)
     authors = []
     for a in msg.get("author", [])[:2]:
@@ -1556,6 +1551,18 @@ def search_arxiv(query, max_r, y_from, y_to, sort="relevance", offset=0):
                        f"&sortBy={sort_by}&sortOrder=descending", timeout=20)
     if not body:
         raise RuntimeError("arXiv didn't respond. Try again in a moment.")
+    return _arxiv_articles(body, y_from, y_to), 0
+
+def arxiv_by_ids(ids):
+    """The arXiv papers with these arXiv ids (e.g. 2101.00001), as articles."""
+    body, _ = http_get(f"https://export.arxiv.org/api/query?id_list="
+                       f"{urllib.parse.quote(','.join(ids))}&max_results={len(ids)}", timeout=20)
+    if not body:
+        raise RuntimeError("arXiv didn't respond. Try again in a moment.")
+    return _arxiv_articles(body)
+
+def _arxiv_articles(body, y_from=None, y_to=None):
+    """The entries of an arXiv API answer, as articles."""
     ns = {"a": "http://www.w3.org/2005/Atom"}
     try:
         root = ET.fromstring(body)
@@ -1581,7 +1588,7 @@ def search_arxiv(query, max_r, y_from, y_to, sort="relevance", offset=0):
                 pub_types=["Preprint"]))
         except Exception:
             continue
-    return results, 0
+    return results
 
 def search_clinicaltrials(query, max_r, y_from, y_to, sort="relevance", offset=0):
     # ClinicalTrials v2: default ordering is relevance; LastUpdatePostDate:desc
@@ -2007,6 +2014,178 @@ def cited_by(doi, sources=("pubmed", "scopus"), max_results=200, enrich=True):
         save_doi_cache()
     return {"doi": doi, "articles": articles,
             "sources": {k: reports[k] for k in _CITING_SOURCES if k in reports}}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DOI SEARCH  (a search box holding only DOIs looks those papers up)
+# ══════════════════════════════════════════════════════════════════════════════
+# Each ticked source is asked by its own DOI field. The DOIs none of them
+# returned are then asked of Crossref, so a real DOI always shows its paper.
+
+MAX_DOIS = 50            # one PubMed lookup (see _DOI_BATCH); Web of Science's page size
+
+# "10.", the registrant's number, "/", then anything but a space: old Wiley
+# DOIs hold ; ( ) < > and are DOIs all the same.
+_DOI_RE = re.compile(r"10\.\d{4,9}/\S+")
+_DOI_ORG = re.compile(r"^(?:https?://)?(?:dx\.|www\.)?doi\.org/", re.I)
+# What publishers' links carry after the DOI: the page's view, or a PDF.
+_DOI_LINK_TAIL = re.compile(r"(?:/(?:full|abstract|pdf|epdf|epub|fulltext|full\.pdf|meta|"
+                            r"references|figures|summary|html))+$|\.pdf$", re.I)
+_ARXIV_DOI = re.compile(r"10\.48550/arxiv\.(.+)", re.I)
+
+def _doi_of(token):
+    """The DOI one word of the search box stands for, or None."""
+    t = re.sub(r"^[(\[<\"']+", "", token)
+    if _DOI_ORG.match(t):
+        t = urllib.parse.unquote(re.split(r"[?#]", _DOI_ORG.sub("", t))[0])
+    elif re.match(r"https?://", t, re.I):
+        parts = urllib.parse.urlsplit(t)
+        m = re.search(r"(?:^|/)(10\.\d{4,9}/.+)", urllib.parse.unquote(parts.path))
+        if m:
+            t = _DOI_LINK_TAIL.sub("", m.group(1))
+            # bioRxiv and medRxiv put the version, and the view, after it:
+            # …/10.1101/2020.03.22.002386v3.full.pdf
+            if re.search(r"(?:^|\.)(?:bio|med)rxiv\.org$", parts.hostname or "", re.I):
+                t = re.sub(r"v\d+(?:\.[\w.-]+)?$", "", t)
+        else:
+            # PLOS keeps it in the query: …/article?id=10.1371/journal.pone.0123456
+            t = next((v for vals in urllib.parse.parse_qs(parts.query).values()
+                      for v in vals if _DOI_RE.fullmatch(v)), "")
+    t = t.rstrip(".\"'")
+    for close, open_ in ((")", "("), ("]", "["), (">", "<")):
+        while t.endswith(close) and t.count(close) > t.count(open_):
+            t = t[:-1]
+    return t if _DOI_RE.fullmatch(t) else None
+
+def dois_in_query(query):
+    """
+    The DOIs a search box holds, each once and in the order given, when it
+    holds nothing but DOIs: bare, after "doi:" or "DOI", as doi.org links or as
+    publisher links with the DOI in them, separated by spaces, commas or
+    semicolons. A box with anything else in it is an ordinary search: [].
+    """
+    q = re.sub(r"\bdoi\s*:?\s*(?=10\.\d)", "", query or "", flags=re.I)
+    # A comma or semicolon separates only where the next DOI begins, since
+    # old Wiley DOIs have semicolons inside them ("…3.0.CO;2-8").
+    q = re.sub(r"[,;]+(?=\s|$|https?://|(?:dx\.|www\.)?doi\.org/|10\.\d)", " ", q, flags=re.I)
+    dois, seen = [], set()
+    for token in q.split():
+        doi = _doi_of(token)
+        if not doi:
+            return []
+        if doi.lower() not in seen:
+            seen.add(doi.lower())
+            dois.append(doi)
+    return dois
+
+def doi_lookup(key, fn, dois):
+    """
+    The papers with these DOIs in one source, as (articles, total), asked by
+    that source's own DOI field; `fn` is the source's search function. Only a
+    record whose DOI is one of those asked is kept: PubMed's DOI field also
+    returns the other versions of a Cochrane review. Raises SourceCannotAnswer
+    for a source that has no DOIs to look up.
+    """
+    n = len(dois)
+    if key == "arxiv":
+        ids = [m.group(1) for m in map(_ARXIV_DOI.fullmatch, dois) if m]
+        if not ids:
+            raise SourceCannotAnswer("arXiv can look up only its own DOIs, "
+                                     "the ones beginning 10.48550/arXiv.")
+        arts = arxiv_by_ids(ids)
+        for a in arts:
+            m = re.search(r"/pdf/(.+?)(?:v\d+)?$", a.get("access_link") or "")
+            if m:
+                a["doi"] = f"10.48550/arXiv.{m.group(1)}"
+    elif key in ("pubmed", "cochrane", "guidelines"):
+        arts, _ = fn(" OR ".join(f'"{d}"[AID]' for d in dois), min(10 * n, 500), None, None)
+    elif key == "scopus":
+        arts, _ = fn(" OR ".join(f"DOI({{{d}}})" for d in dois), 2 * n, None, None)
+    elif key == "wos":
+        arts, _ = fn("DO=(" + " OR ".join(f'"{d}"' for d in dois) + ")",
+                     min(2 * n, MAX_DOIS), None, None)
+    else:
+        raise SourceCannotAnswer("Can't be searched by DOI.")
+    order = {d.lower(): i for i, d in enumerate(dois)}
+    arts = [a for a in arts if (a.get("doi") or "").strip().lower() in order]
+    arts.sort(key=lambda a: order[a["doi"].strip().lower()])
+    return arts, len(arts)
+
+def _crossref_year(msg):
+    for key in ("published-print", "published-online", "issued", "created"):
+        parts = (msg.get(key) or {}).get("date-parts") or [[]]
+        if parts and parts[0] and parts[0][0]:
+            return str(parts[0][0])
+    return ""
+
+def _jats_text(s):
+    """Plain text out of Crossref's JATS markup. A section's title becomes a
+    "Title:" label, except the bare "Abstract" heading."""
+    s = re.sub(r"<jats:title>\s*Abstract\s*</jats:title>", " ", s or "", flags=re.I)
+    s = re.sub(r"<jats:title>(.*?)</jats:title>", r" \1: ", s, flags=re.I | re.S)
+    s = re.sub(r"</?jats:(?:p|sec|list|list-item)\b[^>]*>", " ", s)
+    return html.unescape(" ".join(re.sub(r"<[^>]+>", "", s).split()))
+
+def _crossref_article(msg):
+    people = [((au.get("family") or "").strip(), (au.get("given") or "").strip(),
+               (au.get("name") or "").strip()) for au in msg.get("author") or []]
+    names = [f"{fam}, {given}" if fam and given else fam or name
+             for fam, given, name in people if fam or name]
+    short = [f"{fam}, {given[0]}." if fam and given else fam or name
+             for fam, given, name in people if fam or name][:3]
+    journal = ((msg.get("container-title") or [""])[0]
+               or ((msg.get("institution") or [{}])[0].get("name") or ""))
+    return _article(title=_jats_text((msg.get("title") or [""])[0]) or "No title",
+                    authors="; ".join(short) + (" et al." if len(names) > 3 else ""),
+                    author_list=names, year=_crossref_year(msg) or "n.d.",
+                    journal=journal, doi=msg.get("DOI"), abstract=_jats_text(msg.get("abstract")),
+                    source="Crossref",
+                    pub_types=["Preprint"] if msg.get("type") == "posted-content" else [])
+
+def crossref_records(dois, report=None):
+    """
+    Crossref's record of each DOI, as articles in the order given: what a DOI
+    search shows for the papers no searched database returned. The DOIs
+    Crossref has no record of are listed in report["unknown"], the ones it did
+    not answer for in report["failed"]. Raises, saying why, when it answered
+    for none of them.
+    """
+    ua = "MedSearch/1.0" + (f" (mailto:{_contact_email()})" if _contact_email() else "")
+    def one(doi):
+        return fetch_json(f"https://api.crossref.org/works/{urllib.parse.quote(doi)}",
+                          headers={"User-Agent": ua})
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+        answers = list(ex.map(one, dois))
+    arts, unknown, failed = [], [], []
+    for doi, (data, status) in zip(dois, answers):
+        msg = (data or {}).get("message") if status == 200 else None
+        if isinstance(msg, dict):
+            arts.append(_crossref_article(dict(msg, DOI=msg.get("DOI") or doi)))
+        elif status == 404:
+            unknown.append(doi)
+        else:
+            failed.append(doi)
+    if report is not None:
+        report["unknown"], report["failed"] = unknown, failed
+    if failed and not arts and not unknown:
+        raise RuntimeError("Crossref didn't respond. Check your connection and try again.")
+    # Crossref has no abstract for many papers; PubMed has most of them.
+    return enrich_access(fill_abstracts_from_pubmed(arts)), 0
+
+def _doi_missing_text(unknown, failed):
+    """What a DOI search says about the DOIs it found no paper for."""
+    def listed(ds):
+        return ds[0] if len(ds) == 1 else ", ".join(ds[:-1]) + " and " + ds[-1]
+    parts = []
+    if unknown:
+        it = "it" if len(unknown) == 1 else "them"
+        parts.append(f"Nothing was found for {listed(unknown)} in the databases searched, and "
+                     f"Crossref has no record of {it}: check {it} for "
+                     f"{'a typo' if len(unknown) == 1 else 'typos'}.")
+    if failed:
+        parts.append(f"Crossref did not answer for {listed(failed)}, so "
+                     f"{'it was' if len(failed) == 1 else 'they were'} not looked up there. "
+                     "Try again in a moment.")
+    return " ".join(parts)
 
 def _first_author(a):
     names = a.get("author_list") or [n for n in (a.get("authors") or "").split(";") if n.strip()]
@@ -2717,6 +2896,12 @@ def search_stream():
         return Response(_sse(obj), mimetype="text/event-stream")
     if not query:
         return one_event({"type": "error", "text": "Empty query"})
+    # A box holding only DOIs looks those papers up: each source by its DOI
+    # field, with no years, and Crossref for the ones no source returned.
+    dois = dois_in_query(query)
+    if len(dois) > MAX_DOIS:
+        return one_event({"type": "error", "text": f"Look up at most {MAX_DOIS} DOIs at a time. "
+                                                   f"This search has {len(dois)}."})
     if load_more and query != SESSION.get("query"):
         return one_event({"type": "error",
                           "text": "The search changed since these results loaded. Run it again first."})
@@ -2742,6 +2927,8 @@ def search_stream():
         SESSION["offsets"][key] = starts[key] + max_r
 
     def run_source(key, fn, takes_strict):
+        if dois:
+            return doi_lookup(key, fn, dois)
         kwargs = dict(sort=sort, offset=starts[key])
         if takes_strict:
             kwargs["strict"] = strict
@@ -2759,12 +2946,16 @@ def search_stream():
 
         # Initial padding comment defeats buffering in some webviews.
         yield ":" + (" " * 2048) + "\n\n"
+        if dois:
+            yield _sse({"type": "doi_lookup", "dois": dois})
 
         src_pool = concurrent.futures.ThreadPoolExecutor(max_workers=len(selected) + 1)
         ai_pool  = concurrent.futures.ThreadPoolExecutor(max_workers=8)
         pending  = {}          # future → ("mesh",) | ("src", key) | ("ol", idx)
-        finished = {}          # key → (results, total, error_text)
+        finished = {}          # key → (results, total, error_text, note)
         released = set()
+        registry = {}          # what Crossref said about the DOIs no source returned
+        asked_registry = False
         try:
             total_sources = len(selected)
             for i, (key, label, fn, takes_strict) in enumerate(selected, 1):
@@ -2772,12 +2963,12 @@ def search_stream():
                             "index": i, "total": total_sources})
                 if key in _KEY_REQUIRED and not (CONFIG.get(_KEY_REQUIRED[key][0]) or "").strip():
                     finished[key] = ([], 0, f"Add a {_KEY_REQUIRED[key][1]} API key in Settings "
-                                            "to search this source.")
+                                            "to search this source.", None)
                 else:
                     pending[src_pool.submit(run_source, key, fn, takes_strict)] = ("src", key)
 
             # MeSH hints only on a fresh search that includes a PubMed source
-            if not load_more and any(k in _PRIORITY_SOURCES for k, *_ in selected):
+            if not load_more and not dois and any(k in _PRIORITY_SOURCES for k, *_ in selected):
                 pending[src_pool.submit(get_mesh, query)] = ("mesh",)
 
             def release_ready():
@@ -2789,7 +2980,7 @@ def search_stream():
                             return          # later sources wait for this one
                         continue
                     released.add(key)
-                    res, total, err = finished[key]
+                    res, total, err, note = finished[key]
                     if err:
                         yield _sse({"type": "source_error", "source": label, "text": err})
                     fresh = []
@@ -2805,14 +2996,33 @@ def search_stream():
                     yield _sse({"type": "source_done", "source": label, "count": len(fresh),
                                 "total_pubmed": total if key == "pubmed" else 0,
                                 "running_count": len(all_results),
-                                "done_sources": len(released), "total_sources": total_sources})
+                                "done_sources": len(released), "total_sources": total_sources,
+                                **({"note": note} if note else {})})
                     if ai_on:
                         for a in fresh:
                             if a.get("abstract") and not a.get("oneliner"):
                                 fut = ai_pool.submit(ai_oneliner, a.get("title", ""), a["abstract"])
                                 pending[fut] = ("ol", a["_idx"])
 
+            def ask_registry():
+                """Once every ticked source has answered a DOI search, the
+                DOIs none of them returned go to Crossref, as one more source."""
+                nonlocal asked_registry, total_sources
+                if not dois or asked_registry or len(released) < len(selected):
+                    return
+                asked_registry = True
+                found = {(a.get("doi") or "").strip().lower() for a in all_results}
+                missing = [d for d in dois if d.lower() not in found]
+                if not missing:
+                    return
+                selected.append(("crossref", "Crossref", None, False))
+                total_sources += 1
+                yield _sse({"type": "source_start", "source": "Crossref", "index": total_sources,
+                            "total": total_sources, "done": len(released)})
+                pending[src_pool.submit(crossref_records, missing, registry)] = ("src", "crossref")
+
             yield from release_ready()
+            yield from ask_registry()
             while pending:
                 done, _ = concurrent.futures.wait(
                     list(pending), timeout=10, return_when=concurrent.futures.FIRST_COMPLETED)
@@ -2828,10 +3038,13 @@ def search_stream():
                     elif tag[0] == "src":
                         try:
                             res, total = fut.result()
-                            finished[tag[1]] = (res, total, None)
+                            finished[tag[1]] = (res, total, None, None)
+                        except SourceCannotAnswer as e:
+                            finished[tag[1]] = ([], 0, None, str(e))
                         except Exception as e:
-                            finished[tag[1]] = ([], 0, str(e) or "This source failed.")
+                            finished[tag[1]] = ([], 0, str(e) or "This source failed.", None)
                         yield from release_ready()
+                        yield from ask_registry()
                     else:
                         try: ol = fut.result()
                         except Exception: ol = None
@@ -2839,6 +3052,12 @@ def search_stream():
                             all_results[tag[1]]["oneliner"] = ol
                             yield _sse({"type": "oneliner", "idx": tag[1], "text": ol})
 
+            found = {(a.get("doi") or "").strip().lower() for a in all_results}
+            unknown = [d for d in registry.get("unknown", []) if d.lower() not in found]
+            failed = [d for d in registry.get("failed", []) if d.lower() not in found]
+            if unknown or failed:
+                yield _sse({"type": "doi_missing", "count": len(unknown) + len(failed),
+                            "text": _doi_missing_text(unknown, failed)})
             yield _sse({"type": "done", "count": len(all_results)})
         finally:
             # Also reached when the window stops the search mid-stream.

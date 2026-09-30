@@ -12,7 +12,7 @@ literature. It queries public and subscription literature sources on the user's
 behalf and does not redistribute their content; all article data belongs to its
 respective publishers and providers (including, among others, PubMed/NCBI,
 Cochrane, ClinicalTrials.gov, arXiv, Scopus/Elsevier, Web of Science/Clarivate,
-Unpaywall, and OpenAlex). Use of those services is subject to their own terms.
+Crossref, Unpaywall, and OpenAlex). Use of those services is subject to their own terms.
 
 This software builds on open-source components, including Flask, pywebview and
 PyObjC, each distributed under its own permissive license.
