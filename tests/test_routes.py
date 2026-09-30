@@ -1,8 +1,10 @@
 """The HTTP surface: the request guard, the search stream, settings, export,
 the assistant, and the PDF proxy's allowlist."""
 import json
+import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -428,6 +430,12 @@ def test_focus_reports_whether_there_is_a_window_to_show(client, auth, monkeypat
     assert client.post("/focus", headers=auth, base_url=BASE).json["ok"] is False
 
 
+# Open at login as a LaunchAgent is the Mac's; Windows' Run key is tested in
+# test_windows.py.
+_launch_agent = pytest.mark.skipif(sys.platform == "win32", reason="the LaunchAgent is macOS's")
+
+
+@_launch_agent
 def test_open_at_login_writes_and_removes_the_agent(tmp_path, monkeypatch):
     agent = tmp_path / "LaunchAgents" / "com.halbarad.medsearch.plist"
     monkeypatch.setattr(A, "_LOGIN_AGENT", agent)
@@ -440,12 +448,73 @@ def test_open_at_login_writes_and_removes_the_agent(tmp_path, monkeypatch):
     assert not agent.exists()
 
 
+@_launch_agent
 def test_open_at_login_without_a_launcher_runs_this_folder(tmp_path, monkeypatch):
     agent = tmp_path / "com.halbarad.medsearch.plist"
     monkeypatch.setattr(A, "_LOGIN_AGENT", agent)
     monkeypatch.setattr(A, "_launcher_bundle_id", lambda: "")
     A._set_open_at_login(True)
     assert str(A.APP_DIR_PATH / "app.py") in agent.read_text()
+
+
+def _installed_app(monkeypatch, exe="/Applications/MedSearch.app/Contents/MacOS/MedSearch"):
+    """This process as the installers' MedSearch: frozen, its own executable."""
+    monkeypatch.setattr(A.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(A.sys, "executable", exe)
+    return exe
+
+
+def test_the_installed_app_offers_open_at_login(monkeypatch):
+    _installed_app(monkeypatch)
+    assert A._open_at_login_supported() is (sys.platform in ("darwin", "win32"))
+
+
+@_launch_agent
+def test_open_at_login_without_a_launcher_starts_the_installed_app_itself(tmp_path, monkeypatch):
+    """The installers' MedSearch has no app.py to hand Python: it is the executable."""
+    exe = _installed_app(monkeypatch)
+    agent = tmp_path / "com.halbarad.medsearch.plist"
+    monkeypatch.setattr(A, "_LOGIN_AGENT", agent)
+    monkeypatch.setattr(A, "_launcher_bundle_id", lambda: "")
+    A._set_open_at_login(True)
+    text = agent.read_text()
+    assert f"<string>{exe}</string><string>--background</string>" in text
+    assert "app.py" not in text
+
+
+def _restart_script(monkeypatch, bundle_id=""):
+    """What _relaunch_and_exit hands the shell, with nothing started or ended."""
+    started = []
+    monkeypatch.setattr(A, "_launcher_bundle_id", lambda: bundle_id)
+    monkeypatch.setattr(A.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(A.os, "_exit", lambda _code: None)
+    monkeypatch.setattr(A.subprocess, "Popen", lambda cmd, **kw: started.append(cmd))
+    A._relaunch_and_exit()
+    assert len(started) == 1
+    return started[0][-1]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="the restart goes through /bin/sh")
+def test_a_restart_starts_the_installed_app_itself(monkeypatch):
+    exe = _installed_app(monkeypatch, "/Apps/Med Search.app/Contents/MacOS/MedSearch")
+    script = _restart_script(monkeypatch)
+    assert script.endswith(f"exec '{exe}' --relaunch")
+    assert "app.py" not in script
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="LaunchServices is macOS")
+def test_a_restart_goes_through_launchservices_when_it_can(monkeypatch):
+    _installed_app(monkeypatch)
+    assert _restart_script(monkeypatch, "com.halbarad.medsearch").endswith(
+        "open -b com.halbarad.medsearch")
+
+
+def test_the_installed_app_can_be_restarted(client, auth, monkeypatch):
+    _installed_app(monkeypatch)
+    ran = threading.Event()
+    monkeypatch.setattr(A, "_relaunch_and_exit", ran.set)
+    assert client.post("/app/restart", headers=auth, base_url=BASE).json["ok"] is True
+    assert ran.wait(2)
 
 
 def test_a_failing_login_item_still_saves_the_settings(client, auth, monkeypatch):
@@ -463,12 +532,17 @@ def test_a_failing_login_item_still_saves_the_settings(client, auth, monkeypatch
     assert A.CONFIG["unpaywall_email"] == "you@example.com"
 
 
+@_launch_agent
 def test_settings_reports_the_login_state_it_can_see(client, auth, tmp_path, monkeypatch):
     agent = tmp_path / "com.halbarad.medsearch.plist"
     monkeypatch.setattr(A, "_LOGIN_AGENT", agent)
     assert client.get("/settings", headers=auth, base_url=BASE).json["open_at_login"] is False
     agent.write_text("<plist/>")
     assert client.get("/settings", headers=auth, base_url=BASE).json["open_at_login"] is True
+
+
+# The Mac's launcher, and POSIX file permissions, which Windows does not have.
+_posix_mac = pytest.mark.skipif(sys.platform == "win32", reason="macOS and POSIX only")
 
 
 def _bundle(tmp_path, exec_text):
@@ -479,6 +553,7 @@ def _bundle(tmp_path, exec_text):
     return b
 
 
+@_posix_mac
 def test_an_old_launcher_is_rewritten_to_run_launcher_sh(tmp_path, monkeypatch):
     """git pull cannot reach inside MedSearch.app, so the app converts the
     launcher that started it — once."""
@@ -490,6 +565,7 @@ def test_an_old_launcher_is_rewritten_to_run_launcher_sh(tmp_path, monkeypatch):
     assert "launcher.sh" in after and str(A.APP_DIR_PATH) in after
 
 
+@_posix_mac
 def test_a_launcher_for_another_folder_is_left_alone(tmp_path, monkeypatch):
     b = _bundle(tmp_path, '#!/bin/bash\nexec python3 "/somewhere/else/app.py" "$@"\n')
     monkeypatch.setattr(A.sys, "platform", "darwin")
@@ -498,6 +574,7 @@ def test_a_launcher_for_another_folder_is_left_alone(tmp_path, monkeypatch):
     assert "/somewhere/else/app.py" in (b / "Contents" / "MacOS" / "MedSearch").read_text()
 
 
+@_posix_mac
 def test_the_launcher_icon_is_kept_in_step(tmp_path, monkeypatch):
     b = _bundle(tmp_path, '#!/bin/bash\nexec /bin/bash "/x/launcher.sh" "$@"\n')
     icon = b / "Contents" / "Resources" / "MedSearch.icns"
@@ -613,6 +690,7 @@ def test_removing_a_key_removes_it_from_the_keychain_too(tmp_path, monkeypatch):
     assert "wos_api_key" not in fake.items
 
 
+@_posix_mac
 def test_the_config_file_is_readable_only_by_its_owner(tmp_path, monkeypatch):
     _use(monkeypatch, _FakeKeychain())
     monkeypatch.setattr(A, "CONFIG_DIR", tmp_path)

@@ -19,6 +19,11 @@ and WebKit, not the page, says which site that frame is on, so a page elsewhere
 cannot plant a password. The script that fills the form checks the address again
 itself, since the page may have moved on while the Keychain was being read.
 
+ON WINDOWS the same sign-ins go to Credential Manager (wincred.py), one
+credential per domain, and the pages are Edge's (WebView2) rather than WebKit's:
+the rules above are the same, and WebView2, not the page, says which address
+sent a form, as WebKit does.
+
 THROUGH THE SECURITY FRAMEWORK, NOT /usr/bin/security. The API keys go through
 that tool (secrets_store.py), which takes the secret as a command-line argument,
 and on macOS any local user can read another's arguments with `ps`. A university
@@ -33,6 +38,9 @@ import json
 import os
 import sys
 import threading
+from urllib.parse import urlsplit
+
+import wincred
 
 SERVICE = "MedSearch sign-in"
 
@@ -125,8 +133,11 @@ CAPTURE = """
     if (ps.length !== 1 || !ps[0].value) return;
     var u = f.querySelector(%s);
     if (!u || !u.value.trim()) return;
-    window.webkit.messageHandlers.browserDelegate.postMessage(
-      { medsearchSignIn: { u: u.value, p: ps[0].value } });
+    var sent = { medsearchSignIn: { u: u.value, p: ps[0].value } };
+    if (window.webkit && window.webkit.messageHandlers)
+      window.webkit.messageHandlers.browserDelegate.postMessage(sent);   // macOS
+    else if (window.chrome && window.chrome.webview)
+      window.chrome.webview.postMessage(sent);                           // Windows
   }, true);
 })();
 """ % json.dumps(_USER)
@@ -225,7 +236,40 @@ class KeychainStore:
         return status in (0, S.errSecItemNotFound)
 
 
-STORE = KeychainStore()
+class CredentialStore:
+    """Windows: one credential per sign-in domain, named as the Keychain item
+    is, with the username as its user name, so Credential Manager shows whose."""
+
+    def available(self) -> bool:
+        if os.environ.get("MEDSEARCH_KEYCHAIN") == "0":
+            return False
+        return wincred.available()
+
+    @staticmethod
+    def _target(domain):
+        return KeychainStore._service(domain)
+
+    def load(self, domain):
+        if not self.available():
+            return None
+        status, user, password = wincred.read(self._target(domain))
+        if status != wincred.FOUND or not user or not password:
+            return None
+        return user, password
+
+    def save(self, domain, user, password, label) -> bool:
+        if not self.available():
+            return False
+        return wincred.write(self._target(domain), user, password,
+                             f"MedSearch — {label} sign-in")
+
+    def forget(self, domain) -> bool:
+        if not self.available():
+            return False
+        return wincred.delete(self._target(domain))
+
+
+STORE = CredentialStore() if sys.platform == "win32" else KeychainStore()
 
 
 def keep(domain, label, user, password, store=None) -> bool:
@@ -328,3 +372,96 @@ def install(institutions):
 
     BrowserView.BrowserDelegate = MedSearchSignInDelegate
     return page_loaded
+
+
+# ── the windows, on Windows ──────────────────────────────────────────────────
+def sent_from(source: str) -> tuple[str, str]:
+    """(protocol, host) of the address WebView2 says a message came from."""
+    parts = urlsplit(source or "")
+    return (parts.scheme or "").lower(), (parts.hostname or "").lower()
+
+
+def page_domain(source: str, institutions):
+    """The ticked library's sign-in domain for a page WebView2 has loaded at
+    `source`, or None: only https pages inside that domain are touched."""
+    protocol, host = sent_from(source)
+    if protocol != "https":
+        return None
+    hit = match(host, institutions)
+    return hit[0] if hit else None
+
+
+def windows_message(message_json: str, source: str, institutions):
+    """A WebView2 message: None if it is not a sign-in at all; otherwise what
+    to keep (as `take` gives it), or False when it must not be kept. Only a
+    window's top page reaches this (see install_windows)."""
+    try:
+        body = json.loads(message_json or "")
+    except Exception:
+        return None
+    if not (isinstance(body, dict) and "medsearchSignIn" in body):
+        return None
+    protocol, host = sent_from(source)
+    return take(body, True, protocol, host, institutions) or False
+
+
+def install_windows(institutions):
+    """The same, for Edge's windows (WebView2), through pywebview's class for
+    them. Returns (on_page, on_message) for windows pywebview does not build:
+    `on_page(core)` once a page has loaded, `on_message(core, args)` for what a
+    page sent, which answers True when the message was a sign-in.
+
+    WebView2 hands this object only the messages of a window's top page, never
+    a frame's, which is WebKit's "main frame" test done by Edge itself."""
+    from System import Action, String
+    from System.Threading.Tasks import Task, TaskScheduler
+    import webview.platforms.edgechromium as edge
+
+    base = edge.EdgeChrome
+    submitted = set()                      # windows whose form was already sent once
+
+    def on_page(core, uid=None):
+        domain = page_domain(str(core.Source or ""), institutions())
+        if domain is None:
+            return
+        core.ExecuteScriptAsync(CAPTURE)
+        # Credential Manager answers at once and never asks, so no thread.
+        saved = STORE.load(domain)
+        if not saved:
+            return
+        key = uid if uid is not None else id(core)
+
+        def done(task):
+            if str(task.Result or "") == "true":
+                submitted.add(key)
+        core.ExecuteScriptAsync(fill_script(saved[0], saved[1], domain, key not in submitted)) \
+            .ContinueWith(Action[Task[String]](done), TaskScheduler.FromCurrentSynchronizationContext())
+
+    def on_message(core, args):
+        got = windows_message(str(args.WebMessageAsJson or ""), str(args.Source or ""),
+                              institutions())
+        if got is None:
+            return False
+        if got:
+            threading.Thread(target=keep, args=got, daemon=True).start()
+        return True
+
+    class MedSearchSignInEdge(base):
+        def on_navigation_completed(self, sender, args):
+            super().on_navigation_completed(sender, args)
+            try:
+                on_page(sender.CoreWebView2, self.pywebview_window.uid)
+            except Exception as e:
+                print(f"  (sign-in fill skipped: {e})")
+
+        def on_script_notify(self, sender, args):
+            try:
+                if on_message(sender.CoreWebView2, args):
+                    return
+            except Exception as e:
+                print(f"  (sign-in not kept: {e})")
+                return
+            super().on_script_notify(sender, args)
+
+    edge.EdgeChrome = MedSearchSignInEdge
+    return on_page, on_message

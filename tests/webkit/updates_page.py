@@ -57,6 +57,13 @@ A._published_commit = published_commit
 A._github_file = github_file
 A.http_get = lambda *a, **k: (None, 0)
 A.CONFIG["onboarding_seen"] = True
+# This folder is a clone on a Mac, which would be offered the move to the
+# installed app; until the end, it is a development clone that is not, and no
+# Release is ever asked about.
+kind = {"now": "clone", "move": False}
+A._install_kind = lambda: kind["now"]
+A._move_possible = lambda: kind["move"]
+A._release_published = lambda version: True
 
 # NEVER the real update or restart here: the update resets this very folder to
 # GitHub's main, and a restart starts a real MedSearch. The update fails, as
@@ -64,6 +71,9 @@ A.CONFIG["onboarding_seen"] = True
 A.app.view_functions["update_apply"] = lambda: A.jsonify(
     {"ok": False, "message": "The update could not be downloaded (test)."})
 A.app.view_functions["app_restart"] = lambda: (A.jsonify({"ok": False}), 403)
+moved = []
+A.app.view_functions["update_move"] = lambda: (moved.append(1), A.jsonify(
+    {"ok": True, "restarting": True, "new_version": published["version"]}))[1]
 
 with socket.socket() as s:
     s.bind(("127.0.0.1", 0))
@@ -226,6 +236,25 @@ check("the button is ready again after each check", until(
     lambda: js("[document.getElementById('updateCheckBtn').disabled,"
                " document.getElementById('updateCheckBtn').textContent].join('|')")
     == "false|Check for updates"))
+
+# ── a Mac on a clone: the move to the installed app ─────────────────────────
+js("closeTopDialog(); closeTopDialog(); 1")
+published["version"] = "9.40"
+kind["move"] = True
+window_comes_back()
+check("a clone on a Mac is offered the move", until(lambda: is_open("updateOverlay")))
+check("as a regular app, with the version",
+      js("document.getElementById('updateTitle').textContent") == "MedSearch 9.40: now a regular app")
+check("saying future updates install themselves",
+      offered().startswith("Future updates install themselves."))
+check("with Later and Move to it", js(
+    "[...document.querySelectorAll('#updateActions button')].map(b => b.textContent).join('|')")
+    == "Later|Move to it")
+js("document.getElementById('updateNowBtn').click(); 1")
+check("Move to it asks the server to move", until(lambda: moved == [1]))
+check("and the window says it will reopen by itself", until(
+    lambda: js("document.getElementById('updateProgressText').textContent")
+    == "MedSearch will close and reopen by itself."))
 
 server.shutdown()
 print("ALL PASS" if not failed else f"{len(failed)} FAILED")

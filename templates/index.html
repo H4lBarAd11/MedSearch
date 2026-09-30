@@ -13,6 +13,7 @@
   window.MS = {
     token:              {{ token | tojson }},
     appVersion:         {{ app_version | tojson }},
+    onWindows:          {{ on_windows | tojson }},
     showOnboarding:     {{ 'true' if show_onboarding else 'false' }},
     autoQuery:          {{ auto_query | tojson }},
     autoSource:         {{ auto_source | tojson }},
@@ -388,7 +389,7 @@
       </div>
       <div class="settings-field" id="loginField" hidden>
         <label class="settings-check"><input type="checkbox" id="set_open_at_login"> Open at login</label>
-        <div class="settings-hint">MedSearch starts in the menu bar with its window closed, ready for a quick search.</div>
+        <div class="settings-hint">{% if on_windows %}MedSearch starts by the clock, in the notification area, with its window closed, ready for a quick search.{% else %}MedSearch starts in the menu bar with its window closed, ready for a quick search.{% endif %}</div>
       </div>
       <div class="settings-field">
         <label>Updates</label>

@@ -14,7 +14,7 @@
 """MedSearch's application icon: an open book in ivory line on the house sage,
 with a caramel magnifier resting on it (his choice, 20 Sep, option C).
 
-    .venv/bin/python render_icon.py          → icon.icns, icon_preview.png
+    .venv/bin/python render_icon.py          → icon.icns, icon.ico, icon_preview.png
 
 GENERATED, NOT DRAWN IN AN EDITOR. The icon is code for the same reason the
 README's banner is: an exported file is one nobody can change. The colours are
@@ -134,12 +134,29 @@ def icns(png: Path) -> Path:
     return out
 
 
+#: The sizes Windows asks an .ico for: the tray and small icons at every
+#: display scale, the Start menu, Explorer's views and the installer.
+ICO_SIZES = (16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
+
+
+def ico(png: Path) -> Path:
+    """icon.ico for Windows, each size resized from the 1024 px artwork, as the
+    .icns sizes are, rather than left to the reader to shrink."""
+    master = Image.open(png).convert("RGBA")
+    sizes = [master.resize((px, px), Image.LANCZOS) for px in ICO_SIZES]
+    out = ROOT / "icon.ico"
+    sizes[-1].save(out, format="ICO", sizes=[(px, px) for px in ICO_SIZES],
+                   append_images=sizes[:-1])
+    return out
+
+
 def main() -> None:
     art = draw(palette())
     preview = ROOT / "icon_preview.png"
     art.save(preview)
     out = icns(preview)
-    print(f"✓ {out.name} and {preview.name} ({OUT}px, {int(BODY * OUT)}px body)")
+    win = ico(preview)
+    print(f"✓ {out.name}, {win.name} and {preview.name} ({OUT}px, {int(BODY * OUT)}px body)")
 
 
 if __name__ == "__main__":

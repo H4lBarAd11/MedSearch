@@ -7,10 +7,11 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Build artifacts (py2app)
+# Build artifacts (PyInstaller); the installers' spec is kept
 build/
 dist/
 *.spec
+!packaging/MedSearch.spec
 *.egg-info/
 
 # The generated macOS launcher (colleagues build their own)
@@ -25,6 +26,9 @@ MedSearch.app/
 
 # macOS
 .DS_Store
+
+# Marks the development clone: never offered the move to the installed app
+.development
 
 # User exports (created at runtime)
 medsearch_exports/

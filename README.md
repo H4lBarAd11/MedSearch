@@ -107,10 +107,6 @@ browser instead. `MedSearch.command` does the same on macOS with the Terminal vi
 which is useful when something needs diagnosing. The menu bar item and the Desktop
 launcher are macOS-only.
 
-A self-contained macOS bundle, with Python inside, can be built with
-`python3 setup_main.py py2app`. It cannot update itself, so the git clone is the
-recommended install.
-
 ---
 
 ## API keys
@@ -200,7 +196,7 @@ MedSearch/
 ├── scripts/make-readme-art.py  draws docs/readme/banner.svg from the app's own style
 ├── render_icon.py            draws the app icon's artwork (icon.icns is built from it)
 ├── render_menubar_icon.py    draws the menu bar glyph's variants (menubar_icon.png)
-├── setup_main.py             optional self-contained bundle (py2app)
+├── packaging/                the installers: build spec, build scripts, Windows Setup
 ├── CHANGELOG.md              what each version changed (shown in the update prompt)
 └── VERSION                   what the update check compares
 ```

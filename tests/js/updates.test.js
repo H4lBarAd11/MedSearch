@@ -35,3 +35,15 @@ test("from Settings it says it is the latest, or that GitHub was out of reach", 
   assert.equal(updateVerdict(offline, true), "unreachable");
   assert.equal(updateVerdict(null, true), "unreachable");
 });
+
+// A Mac on a clone is offered the move to the installed app, as an update is:
+// by itself unless put off today, and always from Settings.
+const move = { ok: true, update_available: false, move: true, deferred: false };
+const movePutOff = { ok: true, update_available: false, move: true, deferred: true };
+
+test("the move to the installed app is offered as an update is", () => {
+  assert.equal(updateVerdict(move, false), "offer");
+  assert.equal(updateVerdict(move, true), "offer");
+  assert.equal(updateVerdict(movePutOff, false), null);
+  assert.equal(updateVerdict(movePutOff, true), "offer");
+});

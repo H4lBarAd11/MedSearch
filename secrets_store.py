@@ -26,15 +26,22 @@ changes. Only what /usr/bin/security itself reported is remembered; a key
 edited in Keychain Access while MedSearch is open is the one case that goes
 unnoticed, and restarting MedSearch settles it.
 
-IF IT IS NOT AVAILABLE (not macOS, or the Keychain refuses), the caller keeps
-the keys in the config file as before: MedSearch must still work, and the file
-is the same place they already were.
+ON WINDOWS, CREDENTIAL MANAGER (wincred.py) takes the Keychain's place: one
+credential per setting, "MedSearch/<setting>", under the same rules. It asks
+for no password, so the saved writes cost nothing there; they are skipped all
+the same, since the rules are one.
+
+IF IT IS NOT AVAILABLE (neither of the two, or the store refuses), the caller
+keeps the keys in the config file as before: MedSearch must still work, and the
+file is the same place they already were.
 """
 from __future__ import annotations
 
 import os
 import subprocess
 import sys
+
+import wincred
 
 SERVICE = "MedSearch"
 _SECURITY = "/usr/bin/security"
@@ -49,33 +56,82 @@ _MISSING = object()   # "this run has not been told", which is not the same as "
 _KNOWN: dict[str, str] = {}
 
 
+def _backend() -> str:
+    """Where the secrets go: "wincred" on Windows, "security" (the Keychain) elsewhere."""
+    return "wincred" if sys.platform == "win32" else "security"
+
+
 def available() -> bool:
     """False turns the whole thing off and leaves the config file in charge.
-    MEDSEARCH_KEYCHAIN=0 is how the test suite stays out of the real Keychain."""
+    MEDSEARCH_KEYCHAIN=0 is how the test suite stays out of the real Keychain
+    (and the real Credential Manager)."""
     if os.environ.get("MEDSEARCH_KEYCHAIN") == "0":
         return False
+    if _backend() == "wincred":
+        return wincred.available()
     return sys.platform == "darwin" and os.path.exists(_SECURITY)
 
 
-def get(name: str) -> str:
-    """The stored secret, or "" if there is none (or the Keychain said no)."""
-    if not available():
-        return ""
+def _target(name: str) -> str:
+    return f"{SERVICE}/{name}"
+
+
+def _read(name: str):
+    """(value, known): known is False when the store refused to answer."""
+    if _backend() == "wincred":
+        status, _user, value = wincred.read(_target(name))
+        if status == wincred.FOUND:
+            return value.strip(), True
+        return "", status == wincred.MISSING
     try:
         r = subprocess.run([_SECURITY, "find-generic-password", "-s", SERVICE,
                             "-a", name, "-w"],
                            capture_output=True, text=True, timeout=10)
     except Exception:
-        return ""
+        return "", False
     if r.returncode == 0:
-        value = r.stdout.strip()
+        return r.stdout.strip(), True
+    # "No such item" is an answer about the Keychain's contents; any other
+    # code is the Keychain refusing, which tells nothing.
+    return "", r.returncode == _NO_SUCH_ITEM
+
+
+def _write(name: str, value: str) -> bool:
+    if _backend() == "wincred":
+        return wincred.write(_target(name), name, value, "MedSearch API key")
+    try:
+        r = subprocess.run([_SECURITY, "add-generic-password", "-s", SERVICE,
+                            "-a", name, "-w", value, "-U",
+                            "-T", _SECURITY,               # readable without a prompt
+                            "-j", "MedSearch API key"],
+                           capture_output=True, text=True, timeout=10)
+    except Exception:
+        return False
+    return r.returncode == 0
+
+
+def _remove(name: str) -> bool:
+    """True once the item is gone, whether or not it was there."""
+    if _backend() == "wincred":
+        return wincred.delete(_target(name))
+    try:
+        r = subprocess.run([_SECURITY, "delete-generic-password", "-s", SERVICE, "-a", name],
+                           capture_output=True, text=True, timeout=10)
+    except Exception:
+        return False
+    # "no such item" is the state the caller asked for anyway.
+    return r.returncode in (0, _NO_SUCH_ITEM)
+
+
+def get(name: str) -> str:
+    """The stored secret, or "" if there is none (or the store said no)."""
+    if not available():
+        return ""
+    value, known = _read(name)
+    # A refusal teaches nothing, so nothing is remembered.
+    if known:
         _KNOWN[name] = value
-        return value
-    if r.returncode == _NO_SUCH_ITEM:
-        _KNOWN[name] = ""
-    # Any other code is the Keychain refusing, not telling us it is empty:
-    # nothing is learned, so nothing is remembered.
-    return ""
+    return value
 
 
 def set(name: str, value: str) -> bool:
@@ -86,15 +142,7 @@ def set(name: str, value: str) -> bool:
         return True                 # already there; writing would cost a password
     if not value:
         return delete(name)
-    try:
-        r = subprocess.run([_SECURITY, "add-generic-password", "-s", SERVICE,
-                            "-a", name, "-w", value, "-U",
-                            "-T", _SECURITY,               # readable without a prompt
-                            "-j", "MedSearch API key"],
-                           capture_output=True, text=True, timeout=10)
-    except Exception:
-        return False
-    if r.returncode == 0:
+    if _write(name, value):
         _KNOWN[name] = value
         return True
     return False
@@ -105,13 +153,7 @@ def delete(name: str) -> bool:
         return False
     if _KNOWN.get(name, _MISSING) == "":
         return True                 # nothing there to remove
-    try:
-        r = subprocess.run([_SECURITY, "delete-generic-password", "-s", SERVICE, "-a", name],
-                           capture_output=True, text=True, timeout=10)
-    except Exception:
-        return False
-    # "no such item" is the state the caller asked for anyway.
-    if r.returncode in (0, _NO_SUCH_ITEM):
+    if _remove(name):
         _KNOWN[name] = ""
         return True
     return False
