@@ -3,7 +3,8 @@
 """MedSearch's icon in the Windows notification area: statusbar.py's twin.
 
 THE MAC'S MENU, ITEM FOR ITEM (appmenu.py): quick search, recent searches, the
-default source, the window, Quit. Either mouse button opens it.
+default source, the window, Quit. Either mouse button opens it. Its quick search
+brings the window forward, ready to type, rather than a box of its own.
 
 CLOSING THE WINDOW HIDES IT (his choice, 30 Sep, as on the Mac). MedSearch stays
 by the clock, and the taskbar button goes with the window. With the PDF viewer
@@ -45,25 +46,9 @@ def menu_model(recents, current):
     return rows
 
 
-QUICK_BOX_WIDTH = 380     # the quick-search box's text column, at 100 %
-
-
-def quick_box_layout(scale, text_h, field_h, button_h, button_ws):
-    """Where the quick-search box's parts go, in the screen's own pixels:
-    (x, y, width, height) for the hint, the field and the two buttons (Search,
-    then Cancel, at the right), and the size of the box's inside."""
-    pad, gap = round(14 * scale), round(8 * scale)
-    width = round(QUICK_BOX_WIDTH * scale)
-    y = pad
-    hint = (pad, y, width, text_h)
-    y += text_h + gap
-    field = (pad, y, width, field_h)
-    y += field_h + round(16 * scale)
-    right = pad + width
-    cancel = (right - button_ws[1], y, button_ws[1], button_h)
-    search = (cancel[0] - gap - button_ws[0], y, button_ws[0], button_h)
-    return {"hint": hint, "field": field, "buttons": [search, cancel],
-            "client": (width + 2 * pad, y + button_h + pad)}
+# The page's search bar, focused and its words selected, as Ctrl+K does there.
+FOCUS_SEARCH_JS = ("(function () { var q = document.getElementById('searchInput');"
+                   " if (!q) return false; q.focus(); q.select(); return true; })()")
 
 
 # How a close was asked for: these must close, whatever the page has open.
@@ -173,6 +158,10 @@ class Tray:
             form.Show()
             form.Activate()
             try:
+                form.browser.webview.Focus()     # the keyboard to the page, not the frame
+            except Exception:
+                pass
+            try:
                 import ctypes
                 ctypes.windll.user32.SetForegroundWindow(form.Handle.ToInt64())
             except Exception:
@@ -190,65 +179,13 @@ class Tray:
         threading.Thread(target=lambda: self.window.evaluate_js(js), daemon=True).start()
 
     def quick_search(self):
-        """A small box of Windows' own: the search, and Search or Cancel.
-
-        LAID OUT AT THE SCREEN'S SCALE (seen in the first Windows walk, 30 Sep,
-        on a screen at 200 %): sized in plain pixels while Windows doubled the
-        text, the box came out narrow, its hint on three short lines and its
-        buttons cut off at the bottom. Every length here is multiplied by the
-        screen's scale, and the hint's height is measured, not guessed."""
-        wf = self._wf
-        from System.Drawing import Point, Size, SystemFonts
-        box = wf.Form()
-        box.Text = appmenu.QUICK_SEARCH_TITLE
-        box.FormBorderStyle = wf.FormBorderStyle.FixedDialog
-        box.MaximizeBox = box.MinimizeBox = False
-        box.ShowInTaskbar = False
-        box.StartPosition = wf.FormStartPosition.CenterScreen
-        box.TopMost = True
-        box.AutoScaleMode = getattr(wf.AutoScaleMode, 'None')   # this code does the scaling
-        font = SystemFonts.MessageBoxFont
-        box.Font = font
-        try:
-            scale = box.DeviceDpi / 96.0
-        except Exception:
-            g = box.CreateGraphics()
-            scale = g.DpiX / 96.0
-            g.Dispose()
-
-        hint = wf.Label()
-        hint.Text = appmenu.quick_search_hint(self.get_source())
-        field = wf.TextBox()
-        field.Font = font
-        search, cancel = wf.Button(), wf.Button()
-        search.Text, search.DialogResult = "Search", wf.DialogResult.OK
-        cancel.Text, cancel.DialogResult = "Cancel", wf.DialogResult.Cancel
-
-        width = round(QUICK_BOX_WIDTH * scale)
-        text_h = wf.TextRenderer.MeasureText(hint.Text, font, Size(width, 0),
-                                             wf.TextFormatFlags.WordBreak).Height
-        button_h = max(round(28 * scale), font.Height + round(12 * scale))
-        button_ws = [max(round(88 * scale),
-                         wf.TextRenderer.MeasureText(b.Text, font).Width + round(24 * scale))
-                     for b in (search, cancel)]
-        layout = quick_box_layout(scale, text_h, field.PreferredHeight, button_h, button_ws)
-
-        for control, (x, y, w, h) in ((hint, layout["hint"]), (field, layout["field"]),
-                                      (search, layout["buttons"][0]),
-                                      (cancel, layout["buttons"][1])):
-            control.Location = Point(x, y)
-            control.Size = Size(w, h)
-            box.Controls.Add(control)
-        box.ClientSize = Size(*layout["client"])
-        box.AcceptButton, box.CancelButton = search, cancel
-        box.ActiveControl = field
-        try:
-            if box.ShowDialog() == wf.DialogResult.OK:
-                query = str(field.Text or "").strip()
-                if query:
-                    self.run(query)
-        finally:
-            box.Dispose()
+        """The MedSearch window, brought forward with the cursor in its search
+        bar (his choice, 30 Sep). Windows' own box came out narrow and dated at
+        200 %; the window is MedSearch's own look and always fits. The Mac keeps
+        its small box (statusbar.quick_search)."""
+        self.show()
+        threading.Thread(target=lambda: self.window.evaluate_js(FOCUS_SEARCH_JS),
+                         daemon=True).start()
 
     # ── closing the window hides it; quitting still quits ──────────────────
     def closing(self):
