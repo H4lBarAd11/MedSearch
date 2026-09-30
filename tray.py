@@ -222,7 +222,9 @@ class Tray:
         open (and hides it instead), anything else lets it close. Any other close
         is decided off the GUI thread, which evaluate_js needs free."""
         if self.quitting:
+            print("  window closed: MedSearch is quitting")
             return True
+        print("  window closed: hiding it by the clock (a dialog closes first)")
         threading.Thread(target=self._close_dialog_or_hide, daemon=True).start()
         return False
 
@@ -233,11 +235,14 @@ class Tray:
     def _form_closing(self, sender, args):
         """After pywebview's own handler, which asked `closing`: Windows ending
         the session, Task Manager and Quit are let through whatever it said."""
-        if str(args.CloseReason) in _LET_THROUGH:
+        reason = str(args.CloseReason)
+        print(f"  close asked by {reason}; {'letting it through' if reason in _LET_THROUGH else 'kept'}")
+        if reason in _LET_THROUGH:
             self.quitting = True
             args.Cancel = False
 
     def quit(self):
+        print("  Quit chosen in the tray menu")
         self.quitting = True
         if self.notify is not None:
             self.notify.Visible = False          # or a ghost icon stays by the clock
