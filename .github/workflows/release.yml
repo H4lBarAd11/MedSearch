@@ -177,6 +177,7 @@ jobs:
             [DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr d, int x, int y, int w, int h,
                                                              IntPtr s, int sx, int sy, uint op);
             public struct RECT { public int Left, Top, Right, Bottom; }
+            [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
             [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
             public static IntPtr Screen(int x, int y, int w, int h) {
               IntPtr screen = GetDC(IntPtr.Zero), mem = CreateCompatibleDC(screen);
@@ -204,6 +205,7 @@ jobs:
           $env:USERPROFILE = $h
           $env:MEDSEARCH_KEYCHAIN = "0"
           $app = Start-Process "$dir\MedSearch.exe" -PassThru
+          $null = $app.Handle        # or PowerShell cannot tell its exit code later
           foreach ($t in 1, 2, 3) {
             Start-Sleep 1; try { Shot "windows-splash-$($t)s" } catch { Write-Warning "no screenshot: $_" }
           }
@@ -238,22 +240,31 @@ jobs:
             throw "MedSearch's window reaches past the screen"
           }
 
-          # Closing the window hides it by the clock: MedSearch goes on running
-          # (the first Windows walk, 30 Sep: it ended instead).
-          # On a first start the welcome dialog is open, and a close closes it
-          # first (as Escape does); the next close hides the window.
-          [void]$w.CloseMainWindow()
-          Start-Sleep 3
-          $shown = Get-Process MedSearch -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "MedSearch" }
-          if ($shown) { Write-Host "the first close closed a dialog"; [void]$w.CloseMainWindow() }
-          Start-Sleep 6
-          $alive = [bool](Get-Process -Id $w.Id -ErrorAction SilentlyContinue)
+          # The close button hides the window by the clock and MedSearch goes on
+          # running. It is the window menu's Close (SC_CLOSE), which Windows
+          # reports as the user's; a bare WM_CLOSE is Task Manager's, below.
+          $hwnd = $w.MainWindowHandle
+          function CloseButton { [void][Grab]::PostMessage($hwnd, 0x0112, [IntPtr]0xF060, [IntPtr]::Zero) }
+          function Shown { [bool](Get-Process MedSearch -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "MedSearch" }) }
+          CloseButton; Start-Sleep 3
+          if (Shown) { Write-Host "the first close closed a dialog (the welcome)"; CloseButton; Start-Sleep 3 }
+          $alive = -not $app.HasExited
+          $hidden = -not (Shown)
+          Write-Host "after the close button: running $alive, hidden $hidden"
+
+          # Task Manager's End task (and Windows shutting down, and Setup
+          # closing MedSearch for an update) quits it, cleanly.
+          [void][Grab]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+          $ended = $app.WaitForExit(20000)
+          $code = if ($ended) { $app.ExitCode } else { "still running" }
+          Write-Host "after End task: exit code $code"
+
           Write-Host "---- medsearch.log"
           Get-Content "$h\.medsearch\medsearch.log" -Encoding utf8 -ErrorAction SilentlyContinue | Write-Host
-          if (-not $alive) { throw "Closing the window ended MedSearch instead of hiding it" }
-          $still = [bool](Get-Process MedSearch -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "MedSearch" })
-          if ($still) { throw "Closing the window left it on screen" }
-          Write-Host "closing the window hid it; MedSearch runs on"
+          if (-not $alive) { throw "The close button ended MedSearch instead of hiding it" }
+          if (-not $hidden) { throw "The close button left the window on screen" }
+          if ($code -ne 0) { throw "End task did not end MedSearch cleanly: $code" }
+          Write-Host "the close button hid it; End task ended it cleanly"
 
           Get-Process MedSearch -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep 2

@@ -85,15 +85,23 @@ def _tray(answer=False):
     return t
 
 
-def test_closing_hides_the_window_and_is_decided_off_the_gui_thread(monkeypatch):
+def _started_threads(monkeypatch):
     started = []
 
     class _Thread:
         def __init__(self, target, daemon=None): self.target = target
         def start(self): started.append(self.target)
     monkeypatch.setattr(T.threading, "Thread", _Thread)
+    return started
+
+
+def test_the_close_button_hides_the_window_and_is_decided_off_the_gui_thread(monkeypatch):
+    started = _started_threads(monkeypatch)
     t = _tray()
-    assert t.closing() is False                 # refused: it is hidden instead
+    assert t.closing() is False                 # kept; what instead is decided next
+    args = types.SimpleNamespace(CloseReason="UserClosing", Cancel=True)
+    t._form_closing(None, args)
+    assert args.Cancel is True and t.quitting is False
     assert t.window.asked == []                 # not asked on the GUI thread
     monkeypatch.undo()                          # the page is asked on a real thread
     started[0]()
@@ -107,21 +115,19 @@ def test_closing_with_a_dialog_open_closes_only_the_dialog():
 
 
 @pytest.mark.parametrize("reason", ["WindowsShutDown", "TaskManagerClosing", "ApplicationExitCall"])
-def test_windows_ending_the_session_is_never_held_up(reason):
-    """pywebview's handler has already asked `closing`, which said no; a close
-    Windows itself asks for must go through all the same."""
+def test_windows_ending_the_session_is_never_held_up(monkeypatch, reason):
+    """pywebview's handler has already asked `closing`, which kept the window; a
+    close Windows itself asks for must go through all the same, and the page
+    is not asked anything: asked while MedSearch ends, the question reached a
+    .NET already shutting down and the quit crashed (the release build, 30 Sep)."""
+    started = _started_threads(monkeypatch)
     t = _tray()
+    assert t.closing() is False
     args = types.SimpleNamespace(CloseReason=reason, Cancel=True)
     t._form_closing(None, args)
     assert args.Cancel is False and t.quitting is True
-    assert t.closing() is True                   # and nothing is asked any more
-
-
-def test_a_click_on_the_close_button_is_not_let_through():
-    t = _tray()
-    args = types.SimpleNamespace(CloseReason="UserClosing", Cancel=True)
-    t._form_closing(None, args)
-    assert args.Cancel is True and t.quitting is False
+    assert started == [] and t.window.asked == []
+    assert t.closing() is True                   # and nothing is kept any more
 
 
 def test_the_menu_items_do_what_they_say():
