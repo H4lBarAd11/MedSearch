@@ -77,7 +77,7 @@ def banner(c: dict, icon: Path) -> str:
         'with AI summaries, a PDF reader and a research assistant</text>'
         f'<line x1="356" y1="292" x2="1188" y2="292" stroke="{c["border"]}" stroke-width="2"/>'
         f'<text x="356" y="324" font-size="19" font-weight="400" fill="{c["text3"]}">'
-        'Riccardo Nevoso · a personal project · macOS desktop app'
+        'Riccardo Nevoso · a personal project · for macOS and Windows'
         f'<tspan fill="{c["yellow"]}" font-weight="500">   ·   Apache-2.0</tspan></text>'
     )
     return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" '
