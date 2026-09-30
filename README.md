@@ -2,11 +2,11 @@
   <img src="docs/readme/banner.svg" alt="MedSearch — the medical literature, seven sources at once, with AI summaries, a PDF reader and a research assistant" width="100%">
 </p>
 
-MedSearch is a desktop application for searching the medical and scientific literature. One
-question goes to PubMed, Cochrane, ClinicalTrials.gov, arXiv, Scopus, Web of Science and a
-clinical-guidelines source at the same time; the answers come back as one list, with the
-duplicates removed, the free full text found where it exists, and retracted papers marked
-before anyone quotes them.
+MedSearch is a desktop application for macOS and Windows, for searching the medical and
+scientific literature. One question goes to PubMed, Cochrane, ClinicalTrials.gov, arXiv,
+Scopus, Web of Science and a clinical-guidelines source at the same time; the answers come
+back as one list, with the duplicates removed, the free full text found where it exists,
+and retracted papers marked before anyone quotes them.
 
 It is a personal project by [Riccardo Nevoso](https://github.com/H4lBarAd11), built for
 the way clinicians and researchers actually search: one window instead of a dozen browser
@@ -17,9 +17,12 @@ tabs.
 > been published. The AI summaries, the synthesis and the assistant are aids to reading, and
 > they can be wrong: check the paper before relying on anything they say.
 
-<p align="center">
-  <img src="docs/readme/screenshot.png" alt="MedSearch showing PubMed results for 'awake craniotomy glioma'" width="100%">
-</p>
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="docs/readme/screenshot-mac.png" alt="MedSearch on macOS, in dark mode, showing the results for 'awake craniotomy' from all seven sources"><br><sub>macOS</sub></td>
+    <td align="center" width="50%"><img src="docs/readme/screenshot-windows.png" alt="MedSearch on Windows 11, in light mode, showing the results for the same search"><br><sub>Windows</sub></td>
+  </tr>
+</table>
 
 ---
 
@@ -84,11 +87,6 @@ answer works: searching, the PDF reader and the AI never need it. Allow it only 
 articles from an address on a hospital or university intranet.
 
 ## Install (Windows)
-
-> [!NOTE]
-> **New in 1.31.** The Windows version is built and checked automatically with every
-> release, but has not yet been used day to day. If something doesn't work, please
-> [open an issue](https://github.com/H4lBarAd11/MedSearch/issues).
 
 For Windows 10 and 11, 64-bit. Nothing else is needed, and no administrator rights.
 
