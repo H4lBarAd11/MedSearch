@@ -4669,6 +4669,7 @@ if __name__ == "__main__":
                           **icon)
         except TypeError:
             webview.start(_start_statusbar)
+        print("  the window loop has ended: MedSearch is quitting")
     except ImportError:
         import webbrowser
         print(f"\n  🔬  MedSearch {LOCAL_VERSION}  —  starting…")

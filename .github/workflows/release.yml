@@ -238,6 +238,23 @@ jobs:
             throw "MedSearch's window reaches past the screen"
           }
 
+          # Closing the window hides it by the clock: MedSearch goes on running
+          # (the first Windows walk, 30 Sep: it ended instead).
+          # On a first start the welcome dialog is open, and a close closes it
+          # first (as Escape does); the next close hides the window.
+          [void]$w.CloseMainWindow()
+          Start-Sleep 3
+          $shown = Get-Process MedSearch -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "MedSearch" }
+          if ($shown) { Write-Host "the first close closed a dialog"; [void]$w.CloseMainWindow() }
+          Start-Sleep 6
+          $alive = [bool](Get-Process -Id $w.Id -ErrorAction SilentlyContinue)
+          Write-Host "---- medsearch.log"
+          Get-Content "$h\.medsearch\medsearch.log" -Encoding utf8 -ErrorAction SilentlyContinue | Write-Host
+          if (-not $alive) { throw "Closing the window ended MedSearch instead of hiding it" }
+          $still = [bool](Get-Process MedSearch -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -eq "MedSearch" })
+          if ($still) { throw "Closing the window left it on screen" }
+          Write-Host "closing the window hid it; MedSearch runs on"
+
           Get-Process MedSearch -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep 2
           Start-Process "$dir\unins000.exe" -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES'
