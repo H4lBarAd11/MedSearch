@@ -219,6 +219,22 @@ jobs:
           if ($ping.version -ne $V) { throw "MedSearch answered '$($ping.version)', not $V" }
           Write-Host "running $($ping.version)"
 
+          # A real search, through the installed app: PubMed must answer.
+          $token = (Get-Content "$h\.medsearch\server_token" -Raw).Trim()
+          $found = $null
+          foreach ($try in 1, 2, 3) {
+            try {
+              $sr = Invoke-WebRequest "http://127.0.0.1:$port/search_stream" -Method Post -UseBasicParsing `
+                      -ContentType 'application/json' -Headers @{ 'X-MedSearch-Token' = $token } -TimeoutSec 90 `
+                      -Body '{"query": "glioma", "sources": ["pubmed"], "max_results": 3}'
+              $found = [regex]::Match($sr.Content, '"type": "done", "count": (\d+)').Groups[1].Value
+              if ([int]$found -gt 0) { break }
+            } catch { Write-Host "search try ${try}: $_" }
+            Start-Sleep 5
+          }
+          Write-Host "a PubMed search found: $found"
+          if (-not ([int]$found -gt 0)) { throw "A PubMed search through MedSearch found nothing" }
+
           # The window comes once the page is ready and the splash has handed
           # over, which a cold machine can take a while to reach.
           $w = $null

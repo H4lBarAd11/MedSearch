@@ -605,3 +605,65 @@ def test_windows_sign_ins_load_the_bridge_to_net_first(monkeypatch):
         for n in names:
             sys.modules.pop(n, None)
         sys.modules.update(saved)
+
+
+# ── the searches' certificates on Windows ────────────────────────────────────
+def _test_root(tmp_path):
+    """A throwaway root certificate that no system list holds, standing in for
+    the roots a fresh Windows is missing."""
+    openssl = shutil.which("openssl")
+    if not openssl:
+        pytest.skip("openssl is not installed")
+    pem = tmp_path / "root.pem"
+    r = subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                        "-keyout", str(tmp_path / "key.pem"), "-out", str(pem), "-days", "1",
+                        "-subj", "/CN=MedSearch test root"], capture_output=True, timeout=60)
+    if r.returncode != 0:
+        pytest.skip("openssl could not make a test certificate")
+    return str(pem)
+
+
+def _roots(context):
+    return {dict(x[0] for x in c["subject"]).get("commonName") for c in context.get_ca_certs()}
+
+
+def test_windows_adds_the_public_roots_to_its_own(monkeypatch, tmp_path):
+    """The first Windows walk: every source failed, because a fresh Windows had
+    not stored their roots (GoDaddy R1 for PubMed, Certainly R1 for arXiv,
+    GlobalSign for Cochrane) and Python never asks Windows Update for them."""
+    import ssl
+    pem = _test_root(tmp_path)
+    assert "MedSearch test root" not in _roots(ssl.create_default_context())
+    monkeypatch.setitem(sys.modules, "certifi", types.SimpleNamespace(where=lambda: pem))
+    monkeypatch.setattr(A, "sys", types.SimpleNamespace(platform="win32"))
+    installed = []
+    monkeypatch.setattr(A.urllib.request, "install_opener", installed.append)
+    A._add_the_public_roots_on_windows()
+    [opener] = installed
+    [https] = [h for h in opener.handlers if isinstance(h, A.urllib.request.HTTPSHandler)]
+    roots = _roots(https._context)
+    assert "MedSearch test root" in roots                     # certifi's are added
+    assert roots - {"MedSearch test root"}                    # and the system's kept
+    assert https._context.verify_mode == ssl.CERT_REQUIRED
+
+
+def test_elsewhere_the_system_list_is_left_alone(monkeypatch):
+    installed = []
+    monkeypatch.setattr(A.urllib.request, "install_opener", installed.append)
+    monkeypatch.setattr(A, "sys", types.SimpleNamespace(platform="darwin"))
+    A._add_the_public_roots_on_windows()
+    assert installed == []
+
+
+def test_without_certifi_windows_still_starts(monkeypatch):
+    installed = []
+    monkeypatch.setattr(A.urllib.request, "install_opener", installed.append)
+    monkeypatch.setattr(A, "sys", types.SimpleNamespace(platform="win32"))
+    monkeypatch.setitem(sys.modules, "certifi", None)          # import fails
+    A._add_the_public_roots_on_windows()
+    assert installed == []
+
+
+def test_the_windows_build_carries_certifi():
+    reqs = (Path(A.__file__).parent / "requirements.txt").read_text(encoding="utf-8")
+    assert 'certifi; sys_platform == "win32"' in reqs
