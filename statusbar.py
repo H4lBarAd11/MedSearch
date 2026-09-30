@@ -46,7 +46,6 @@ thread for its answer.
 """
 import datetime
 import inspect
-import json
 import threading
 
 import objc
@@ -55,25 +54,18 @@ from AppKit import (NSAlert, NSAlertFirstButtonReturn, NSApp, NSImage, NSMenu,
 from Foundation import NSMakeRect, NSObject, NSSize
 from PyObjCTools import AppHelper
 
+import appmenu
+
 # NSApplicationActivationPolicy: Regular shows a Dock icon, Accessory does not.
 _REGULAR, _ACCESSORY = 0, 1
 
-# The sources a quick search can target (key, label), in the order the menu lists them.
-SOURCES = [
-    ("pubmed",         "PubMed"),
-    ("guidelines",     "Guidelines"),
-    ("cochrane",       "Cochrane"),
-    ("clinicaltrials", "ClinicalTrials.gov"),
-    ("arxiv",          "arXiv"),
-    ("scopus",         "Scopus"),
-    ("wos",            "Web of Science"),
-    ("all",            "All sources"),
-]
-_LABELS = dict(SOURCES)
-_RECENTS_SHOWN = 6
+# The menu's system-independent parts, shared with the Windows tray (tray.py).
+SOURCES = appmenu.SOURCES
+_LABELS = appmenu.LABELS
+_RECENTS_SHOWN = appmenu.RECENTS_SHOWN
 _CHECK_EVERY = 3.0     # seconds between "is the item still on the bar?"
 _REBUILD_LIMIT = 10    # after this many, stop fighting whatever is removing it
-_PAGE_ANSWER_WAIT = 1.0  # seconds a close waits for the page to say it closed a dialog
+_PAGE_ANSWER_WAIT = appmenu.PAGE_ANSWER_WAIT
 
 _host = None   # the one StatusBar; module-level so nothing collects it
 
@@ -384,7 +376,7 @@ class StatusBar:
             sub = NSMenu.alloc().init()
             sub.setAutoenablesItems_(False)
             for q in recents:
-                self._add(sub, q if len(q) <= 60 else q[:57] + "…", "recent:", q)
+                self._add(sub, appmenu.short(q), "recent:", q)
             self._add(menu, "Recent searches").setSubmenu_(sub)
 
         sub = NSMenu.alloc().init()
@@ -460,7 +452,7 @@ class StatusBar:
         """Show the window and run the search in it, as the page's own Search does."""
         self.show()
         src = source or self.get_source()
-        js = f"runSearchWithSource({json.dumps(query)}, {json.dumps(src)}, 0)"
+        js = appmenu.search_js(query, src)
         threading.Thread(target=lambda: self.window.evaluate_js(js), daemon=True).start()
 
     def set_source(self, key):
@@ -469,10 +461,8 @@ class StatusBar:
     def quick_search(self):
         NSApp.activateIgnoringOtherApps_(True)
         alert = NSAlert.alloc().init()
-        alert.setMessageText_("MedSearch quick search")
-        alert.setInformativeText_(
-            f"Search {_LABELS.get(self.get_source(), 'PubMed')} "
-            "(change the source under Default source in this menu).")
+        alert.setMessageText_(appmenu.QUICK_SEARCH_TITLE)
+        alert.setInformativeText_(appmenu.quick_search_hint(self.get_source()))
         alert.addButtonWithTitle_("Search")
         alert.addButtonWithTitle_("Cancel")
         field = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 320, 24))
@@ -510,22 +500,8 @@ class StatusBar:
         closes only that, as Escape does (`closeTopDialog` in app.js).
 
         The page is asked rather than tracked from here: only the page knows what is
-        open. An answer that is not a plain yes (no answer within
-        `_PAGE_ANSWER_WAIT`, a blank or reloading page, an error) counts as nothing
-        open, so the window can always be closed."""
-        answer = []
-
-        def ask():
-            try:
-                answer.append(self.window.evaluate_js(
-                    "typeof closeTopDialog === 'function' && closeTopDialog() === true"))
-            except Exception:
-                pass
-
-        t = threading.Thread(target=ask, daemon=True)
-        t.start()
-        t.join(_PAGE_ANSWER_WAIT)
-        if not (answer and answer[0] is True):
+        open (appmenu.page_closed_a_dialog, shared with the Windows tray)."""
+        if not appmenu.page_closed_a_dialog(self.window, _PAGE_ANSWER_WAIT):
             AppHelper.callAfter(self.hide)
 
 

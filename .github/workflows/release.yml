@@ -1,0 +1,241 @@
+# MedSearch — build both installers, check them, and publish them as a Release.
+# Copyright 2026 Riccardo Nevoso. Licensed under the Apache License, Version 2.0.
+#
+# A push to main that changes VERSION publishes Release v<VERSION> (his choice,
+# 30 Sep): the tests on both systems, the Mac's universal .dmg and Windows'
+# Setup, each installed and started once, and only then the Release. Installed
+# copies of MedSearch are offered a version once its Release exists.
+#
+# Run by hand (Actions ▸ Release ▸ Run workflow, or `gh workflow run release.yml`)
+# it builds and checks without publishing, unless "publish" is ticked.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the Release (otherwise build and check only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  # The Python inside both apps. python.org's for the Mac: its builds hold
+  # Intel and Apple silicon code and run from macOS 11 (Homebrew's need the
+  # macOS they were built on).
+  PYTHON_SERIES: "3.13"
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python from python.org
+        run: |
+          set -euo pipefail
+          for v in $(curl -fsSL https://www.python.org/ftp/python/ \
+                     | grep -oE "href=\"${PYTHON_SERIES//./\\.}\.[0-9]+/\"" \
+                     | grep -oE "${PYTHON_SERIES//./\\.}\.[0-9]+" | sort -t. -k3,3nr); do
+            if curl -fsSLo python.pkg "https://www.python.org/ftp/python/$v/python-$v-macos11.pkg"; then
+              echo "Python $v"
+              break
+            fi
+          done
+          test -s python.pkg
+          sudo installer -pkg python.pkg -target / >/dev/null
+          "/Library/Frameworks/Python.framework/Versions/$PYTHON_SERIES/bin/python$PYTHON_SERIES" \
+            -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Dependencies
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet -r requirements-dev.txt pyinstaller pillow
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: Build the app and the .dmg (Intel and Apple silicon)
+        env:
+          MEDSEARCH_TARGET_ARCH: universal2
+          PYTHON: python
+        run: packaging/build-mac.sh
+
+      - name: Every part runs on Intel and Apple silicon, from macOS 12
+        run: python packaging/check_mac_app.py dist/MedSearch.app --archs x86_64 arm64 --min-macos 12.0
+
+      - name: Install from the .dmg and start it
+        run: |
+          set -euo pipefail
+          V=$(tr -d '[:space:]' < VERSION)
+          mkdir -p shots
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/dmg" "dist/MedSearch-$V-mac.dmg"
+          ditto "$RUNNER_TEMP/dmg/MedSearch.app" /Applications/MedSearch.app
+          hdiutil detach "$RUNNER_TEMP/dmg"
+          H="$RUNNER_TEMP/home"; mkdir -p "$H"
+          open --env HOME="$H" --env MEDSEARCH_KEYCHAIN=0 /Applications/MedSearch.app
+          sleep 2; screencapture -x shots/mac-splash.png || true
+          for i in $(seq 90); do [ -s "$H/.medsearch/server_port" ] && break; sleep 1; done
+          PORT=$(cat "$H/.medsearch/server_port")
+          for i in $(seq 30); do curl -fs "http://127.0.0.1:$PORT/ping" > ping.json && break; sleep 1; done
+          python -c "import json,sys; v=json.load(open('ping.json'))['version']; print('running', v); sys.exit(v != '$V')"
+          sleep 5; screencapture -x shots/mac-window.png || true
+          osascript -e 'tell application id "com.halbarad.medsearch" to quit' || true
+
+      - name: Start it as an Intel Mac would (Rosetta)
+        run: |
+          set -euo pipefail
+          if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "::warning::No Rosetta on this runner: the Intel code was checked, not run."
+            exit 0
+          fi
+          V=$(tr -d '[:space:]' < VERSION)
+          H="$RUNNER_TEMP/home-intel"; mkdir -p "$H"
+          HOME="$H" MEDSEARCH_KEYCHAIN=0 arch -x86_64 /Applications/MedSearch.app/Contents/MacOS/MedSearch \
+            --background > intel.log 2>&1 &
+          APP=$!
+          for i in $(seq 90); do [ -s "$H/.medsearch/server_port" ] && break; sleep 1; done
+          PORT=$(cat "$H/.medsearch/server_port")
+          for i in $(seq 30); do curl -fs "http://127.0.0.1:$PORT/ping" > ping.json && break; sleep 1; done
+          kill "$APP" || true
+          python -c "import json,sys; v=json.load(open('ping.json'))['version']; print('Intel:', v); sys.exit(v != '$V')"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-mac
+          path: dist/MedSearch-*-mac.dmg
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-mac
+          path: shots/
+          if-no-files-found: ignore
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_SERIES }}
+          architecture: x64
+
+      - name: Dependencies
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet -r requirements-dev.txt pyinstaller pillow
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $have = (Get-Command iscc.exe -ErrorAction SilentlyContinue) -or
+                  (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")
+          if (-not $have) { choco install innosetup -y --no-progress }
+
+      - name: Build MedSearch.exe and Setup
+        shell: pwsh
+        run: ./packaging/build-windows.ps1 -Python python
+
+      - name: Install quietly, start it, uninstall it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $V = (Get-Content VERSION -Raw).Trim()
+          New-Item -ItemType Directory -Force shots | Out-Null
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          function Shot($name) {
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save("shots\$name.png")
+          }
+
+          $setup = Start-Process "dist\MedSearch-$V-Setup.exe" -Wait -PassThru `
+                     -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          if ($setup.ExitCode -ne 0) { throw "Setup exited with $($setup.ExitCode)" }
+          $dir = "$env:LOCALAPPDATA\Programs\MedSearch"
+          if (-not (Test-Path "$dir\MedSearch.exe")) { throw "MedSearch.exe was not installed" }
+
+          $h = "$env:RUNNER_TEMP\home"
+          New-Item -ItemType Directory -Force $h | Out-Null
+          $env:USERPROFILE = $h
+          $env:MEDSEARCH_KEYCHAIN = "0"
+          $app = Start-Process "$dir\MedSearch.exe" -PassThru
+          Start-Sleep 2; try { Shot "windows-splash" } catch { Write-Warning "no screenshot: $_" }
+          $portFile = "$h\.medsearch\server_port"
+          for ($i = 0; $i -lt 90 -and -not (Test-Path $portFile); $i++) { Start-Sleep 1 }
+          $port = (Get-Content $portFile -Raw).Trim()
+          $ping = $null
+          for ($i = 0; $i -lt 30 -and -not $ping; $i++) {
+            try { $ping = Invoke-RestMethod "http://127.0.0.1:$port/ping" } catch { Start-Sleep 1 }
+          }
+          Start-Sleep 5; try { Shot "windows-window" } catch { Write-Warning "no screenshot: $_" }
+          if ($ping.version -ne $V) { throw "MedSearch answered '$($ping.version)', not $V" }
+          Write-Host "running $($ping.version)"
+
+          Get-Process MedSearch -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep 2
+          Start-Process "$dir\unins000.exe" -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES'
+          if (Test-Path "$dir\MedSearch.exe") { throw "Uninstalling left MedSearch.exe behind" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-windows
+          path: dist/MedSearch-*-Setup.exe
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-windows
+          path: shots/
+          if-no-files-found: ignore
+
+  release:
+    needs: [mac, windows]
+    if: ${{ github.event_name == 'push' || inputs.publish }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish Release v<VERSION>
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          V=$(tr -d '[:space:]' < VERSION)
+          if gh release view "v$V" > /dev/null 2>&1; then
+            echo "v$V is already published: nothing to do."
+            exit 0
+          fi
+          # The version's own entry in CHANGELOG.md, as the update prompt shows it.
+          awk -v head="## $V" '$0 == head { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "MedSearch $V." > notes.md
+          gh release create "v$V" --target "$GITHUB_SHA" --title "MedSearch $V" --notes-file notes.md \
+            "dist/MedSearch-$V-mac.dmg" "dist/MedSearch-$V-Setup.exe"

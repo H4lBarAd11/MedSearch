@@ -16,6 +16,7 @@ from pathlib import Path
 _HOME = tempfile.mkdtemp(prefix="medsearch-tests-")
 atexit.register(shutil.rmtree, _HOME, ignore_errors=True)
 os.environ["HOME"] = _HOME
+os.environ["USERPROFILE"] = _HOME       # where Windows' Python finds the home folder
 # The suite never touches the real Keychain: the keys-in-the-Keychain path is
 # exercised with a fake store instead (test_routes.py).
 os.environ["MEDSEARCH_KEYCHAIN"] = "0"

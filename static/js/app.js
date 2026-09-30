@@ -139,7 +139,7 @@ let _lastUpdateCheck = 0;
 // window speaks only to offer an update that was not put off today.
 function updateVerdict(data, manual) {
   if (!data || !data.ok) return manual ? 'unreachable' : null;
-  if (!data.update_available) return manual ? 'latest' : null;
+  if (!data.update_available && !data.move) return manual ? 'latest' : null;
   return (manual || !data.deferred) ? 'offer' : null;
 }
 
@@ -186,22 +186,30 @@ function showUpdateOffer(data) {
   document.getElementById('updateTitle').textContent = 'Update available';
   document.getElementById('updateProgress').style.display = 'none';
   actions.style.display = 'flex';
-  actions.innerHTML = '<button class="btn-secondary" onclick="closeUpdate()">Later</button>'
-    + (data.can_apply ? '<button class="btn-primary" id="updateNowBtn" onclick="applyUpdate()">Update now</button>' : '');
   // What the new version changes, when it says so.
   const notes = (data.changes || []).length
     ? `<ul class="update-changes">${data.changes.map(c => `<li>${escHtml(c)}</li>`).join('')}</ul>`
     : '';
+  if (data.move) {
+    // A Mac running from a clone: the installed app takes over from here (his choice, 30 Sep).
+    document.getElementById('updateTitle').textContent = `MedSearch ${data.remote}: now a regular app`;
+    actions.innerHTML = '<button class="btn-secondary" onclick="closeUpdate()">Later</button>'
+      + '<button class="btn-primary" id="updateNowBtn" onclick="applyUpdate(\'/update/move\')">Move to it</button>';
+    text.innerHTML = `Future updates install themselves.${notes}`;
+    _updateOffered = data.remote;
+    openOverlay('updateOverlay');
+    return;
+  }
+  actions.innerHTML = '<button class="btn-secondary" onclick="closeUpdate()">Later</button>'
+    + (data.can_apply ? '<button class="btn-primary" id="updateNowBtn" onclick="applyUpdate()">Update now</button>' : '');
   if (data.can_apply) {
     text.innerHTML = `A new version of MedSearch is available.<br><br>
       <span class="ver">${escHtml(data.local)}</span> → <span class="ver">${escHtml(data.remote)}</span>
       ${notes}`;
   } else {
-    // Not a git checkout (e.g. a frozen .app) — can't auto-apply. Point
-    // them at the source install, which DOES auto-update.
-    text.innerHTML = `A new version (<span class="ver">${escHtml(data.remote)}</span>) is available, but this copy can't auto-update.${notes}<br><br>
-      To get automatic updates, run MedSearch from a clone of the GitHub repo
-      (double-click <span class="mono">MedSearch.command</span>) instead of the packaged app.`;
+    // Neither installed nor a git clone: it can't replace itself.
+    text.innerHTML = `A new version (<span class="ver">${escHtml(data.remote)}</span>) is available, but this copy can't update itself.${notes}<br><br>
+      Download it from <span class="mono">github.com/H4lBarAd11/MedSearch</span>.`;
   }
   _updateOffered = data.remote;
   openOverlay('updateOverlay');
@@ -233,19 +241,26 @@ function closeUpdate() {
 
 // A failed update keeps the offer, so closing its message puts it off for the
 // day as Later does, instead of it coming back each time the window does.
-function applyUpdate() {
+// An installed MedSearch (and a clone moving to it) is replaced and reopened
+// by itself once the server answers: the window then only says so, and goes.
+function applyUpdate(route) {
   const offered = _updateOffered;
   _updateOffered = null;
   document.getElementById('updateActions').style.display = 'none';
   document.getElementById('updateProgress').style.display = 'flex';
   document.getElementById('updateProgressText').textContent = 'Downloading update…';
 
-  fetch('/update/apply', {method: 'POST'})
+  fetch(route || '/update/apply', {method: 'POST'})
     .then(r => r.json())
     .then(data => {
       const prog = document.getElementById('updateProgress');
       const title = document.getElementById('updateTitle');
       const text = document.getElementById('updateText');
+      if (data.ok && data.restarting) {
+        document.getElementById('updateProgressText').textContent =
+          'MedSearch will close and reopen by itself.';
+        return;
+      }
       if (data.ok) {
         prog.style.display = 'none';
         if (data.unchanged) {
@@ -2242,7 +2257,7 @@ function renderProxyRows() {
         ${hasUrl ? `<div class="proxy-remember">
           <label class="settings-check"><input type="checkbox" ${p.remember ? 'checked' : ''}
                  onchange="institutionProxies[${i}].remember = this.checked"> Remember sign-in</label>
-          <div class="settings-hint">Kept in your Keychain; filled only on ${escHtml(signinDomain(p.url))}</div>
+          <div class="settings-hint">Kept in ${MS.onWindows ? 'Windows Credential Manager' : 'your Keychain'}; filled only on ${escHtml(signinDomain(p.url))}</div>
         </div>` : ''}
       </div>`;
   }).join('');

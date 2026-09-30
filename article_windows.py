@@ -26,6 +26,13 @@ then opened in the Mac's PDF app (Preview), anything else is shown in the
 Finder, never opened on its own. A download that fails says so in a dialog on
 that window, and leaves no half a file behind.
 
+ON WINDOWS (install_windows) the same, in Edge's terms (WebView2): a new tab
+gets a window MedSearch builds on the article window's own Edge environment and
+hands back, so the page stays its opener and the sign-in is shared; if that
+cannot be built, Edge's own popup window takes over, which keeps both too. A
+file goes to Downloads; a PDF opens in the PC's PDF app, anything else is shown
+in Explorer.
+
 ONLY ARTICLE WINDOWS. MedSearch's own window keeps pywebview's behaviour: its
 plain DOI and PubMed links are meant to open in the browser.
 
@@ -40,6 +47,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 #: The first bytes of every PDF.
@@ -327,3 +335,191 @@ def install(is_article, on_page=None, downloads=None, reveal=None,
             attach(download)
 
     BrowserView.BrowserDelegate = MedSearchArticleDelegate
+
+
+# ── on Windows ───────────────────────────────────────────────────────────────
+def interrupted_because(reason: str) -> str:
+    """WebView2's reason a download stopped, in words: "NetworkFailed" gives
+    "Network failed." (its names are the only account it gives)."""
+    words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", (reason or "").strip()).lower()
+    return (words[:1].upper() + words[1:] + ".") if words else "It stopped for no given reason."
+
+
+def install_windows(is_article, on_page=None, on_message=None, downloads=None,
+                    reveal=None, open_file=None, fail=None) -> None:
+    """install() for Edge's windows (WebView2), through pywebview's class for
+    them. `on_page(core)` and `on_message(core, args)` are the library sign-in's
+    (signins.install_windows) for the windows MedSearch builds itself; the rest
+    are as install()'s, replaceable for the tests."""
+    import subprocess
+
+    import clr
+    clr.AddReference("System.Windows.Forms")
+    clr.AddReference("System.Drawing")
+    import System.Windows.Forms as WinForms
+    from System.Drawing import Size
+    import webview.platforms.edgechromium as edge
+    from Microsoft.Web.WebView2.Core import (CoreWebView2DownloadState,
+                                             CoreWebView2ProcessFailedKind)
+    from Microsoft.Web.WebView2.WinForms import WebView2
+
+    base = edge.EdgeChrome
+    folder = Path(downloads) if downloads else Path.home() / "Downloads"
+    reveal = reveal or (lambda p: subprocess.Popen(["explorer", f"/select,{p}"]))
+    open_file = open_file or (lambda p: os.startfile(str(p)))
+
+    def tell(form, reason):
+        WinForms.MessageBox.Show(form, reason, "The file couldn't be downloaded",
+                                 WinForms.MessageBoxButtons.OK, WinForms.MessageBoxIcon.Warning)
+    fail = fail or tell
+    keep = set()                      # downloads in flight, and their handlers
+    windows = set()                   # MedSearch's own windows for a page's new tab
+
+    def download(args, form):
+        """Into Downloads under a name of its own, with no Edge download bubble:
+        MedSearch opens it, shows it, or says why it failed."""
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            path = free_path(folder, safe_name(Path(str(args.ResultFilePath or "")).name))
+        except Exception as e:
+            print(f"  (download not saved: {e})")
+            args.Cancel = True
+            return
+        args.ResultFilePath = str(path)
+        args.Handled = True
+        op = args.DownloadOperation
+
+        def changed(sender, _):
+            state = op.State
+            if state == CoreWebView2DownloadState.InProgress:
+                return
+            keep.discard(held)
+            if state == CoreWebView2DownloadState.Completed:
+                done, pdf = finished(path)
+                try:
+                    (open_file if pdf else reveal)(done)
+                except Exception as e:
+                    print(f"  (download saved to {done}, not opened: {e})")
+                return
+            # What arrived before it broke off is not a file anyone can open.
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            reason = interrupted_because(str(op.InterruptReason))
+            print(f"  (download failed: {reason})")
+            try:
+                fail(form, reason)
+            except Exception:
+                pass
+        held = (op, changed)
+        keep.add(held)
+        op.StateChanged += changed
+
+    def new_tab(core, args, form):
+        """What a page's new tab or window becomes (see the module's docstring)."""
+        url = str(args.Uri or "")
+        if loads_in_place(url):
+            # Only the page may open what it built, so it is asked to go there.
+            args.Handled = True
+            core.ExecuteScriptAsync("location.assign(%s)" % json.dumps(url))
+            return
+        own_window(core, args, form)
+
+    def own_window(opener, args, opener_form):
+        """A window on the opener's own Edge environment, handed back as the new
+        tab: Edge then loads it as the page meant, with the page as its opener.
+        Anything failing leaves the request unhandled, and Edge's own popup
+        window shows the page instead."""
+        deferral = args.GetDeferral()
+        form = WinForms.Form()
+        form.Text = "MedSearch — Article"
+        scale = _dpi_scale(opener_form)
+        form.Size = Size(int(1100 * scale), int(860 * scale))
+        form.MinimumSize = Size(int(800 * scale), int(600 * scale))
+        form.StartPosition = WinForms.FormStartPosition.WindowsDefaultLocation
+        if opener_form is not None and opener_form.Icon is not None:
+            form.Icon = opener_form.Icon
+        web = WebView2()
+        web.Dock = WinForms.DockStyle.Fill
+        form.Controls.Add(web)
+        held = (form, web)
+        windows.add(held)
+
+        def ready(sender, e):
+            try:
+                if not e.IsSuccess:
+                    raise RuntimeError(str(e.InitializationException))
+                core = web.CoreWebView2
+                wire(core, form)
+                args.NewWindow = core
+                args.Handled = True
+            except Exception as err:
+                print(f"  (a new tab's window could not be built: {err})")
+                form.Close()
+            finally:
+                deferral.Complete()
+
+        def closed(sender, e):
+            windows.discard(held)
+            web.Dispose()
+        web.CoreWebView2InitializationCompleted += ready
+        form.FormClosed += closed
+        form.Show()
+        web.EnsureCoreWebView2Async(opener.Environment)
+
+    def wire(core, form):
+        """The pages of a window MedSearch built itself: new tabs and files as
+        in any article window, the page may close its window, a crashed page is
+        loaded again, and the library sign-in is kept and filled."""
+        core.NewWindowRequested += lambda s, a: new_tab(s, a, form)
+        core.DownloadStarting += lambda s, a: download(a, form)
+        core.WindowCloseRequested += lambda s, a: form.Close()
+
+        def failed(s, a):
+            if a.ProcessFailedKind == CoreWebView2ProcessFailedKind.RenderProcessExited:
+                s.Reload()
+        core.ProcessFailed += failed
+        if on_page is not None:
+            core.NavigationCompleted += lambda s, a: _quietly(on_page, s)
+        if on_message is not None:
+            core.WebMessageReceived += lambda s, a: _quietly(on_message, s, a)
+
+    class MedSearchArticleEdge(base):
+        def on_navigation_start(self, sender, args):
+            if not is_article(self.pywebview_window):
+                current = str(sender.Source) if sender.Source is not None else ""
+                target = str(args.Uri or "")
+                if not stays_on_page(current, target):
+                    print(f"  (MedSearch's window stays on its page, not {target[:40]})")
+                    args.Cancel = True
+                    return
+            super().on_navigation_start(sender, args)
+
+        def on_new_window_request(self, sender, args):
+            if not is_article(self.pywebview_window):
+                return super().on_new_window_request(sender, args)
+            new_tab(sender, args, self.form)
+
+        def on_download_starting(self, sender, args):
+            if not is_article(self.pywebview_window):
+                return super().on_download_starting(sender, args)
+            download(args, self.form)
+
+    edge.EdgeChrome = MedSearchArticleEdge
+
+
+def _dpi_scale(form) -> float:
+    """Logical to physical pixels for the monitor `form` is on (1.0 if unknown)."""
+    try:
+        import ctypes
+        return ctypes.windll.user32.GetDpiForWindow(form.Handle.ToInt64()) / 96 or 1.0
+    except Exception:
+        return 1.0
+
+
+def _quietly(fn, *args):
+    try:
+        fn(*args)
+    except Exception as e:
+        print(f"  (sign-in skipped: {e})")

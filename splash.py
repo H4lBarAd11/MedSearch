@@ -112,6 +112,70 @@ def path_length(path) -> float:
     return total
 
 
+def flatten(path, steps: int = 64) -> list:
+    """A path as points along it, each curve in `steps` straight pieces: what a
+    renderer without curves of its own draws (splash_win.py)."""
+    pts, here = [], (0.0, 0.0)
+    for step in path:
+        if step[0] == "M":
+            here = step[1:]
+            pts.append(here)
+        elif step[0] == "L":
+            here = step[1:]
+            pts.append(here)
+        else:
+            cx, cy, x, y = step[1:]
+            for i in range(1, steps + 1):
+                t = i / steps
+                pts.append(((1 - t) ** 2 * here[0] + 2 * (1 - t) * t * cx + t * t * x,
+                            (1 - t) ** 2 * here[1] + 2 * (1 - t) * t * cy + t * t * y))
+            here = (x, y)
+    return pts
+
+
+def prefix(pts: list, drawn: float) -> list:
+    """The first `drawn` share (0..1) of a line through `pts`, by length: the
+    part of a stroke the pen has drawn, as Core Animation's strokeEnd shows it."""
+    if drawn >= 1.0 or len(pts) < 2:
+        return list(pts)
+    if drawn <= 0.0:
+        return pts[:1]
+    lengths = [math.dist(a, b) for a, b in zip(pts, pts[1:])]
+    left = drawn * sum(lengths)
+    out = [pts[0]]
+    for (a, b), n in zip(zip(pts, pts[1:]), lengths):
+        if left >= n:
+            out.append(b)
+            left -= n
+            continue
+        f = left / n if n else 0.0
+        out.append((a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f))
+        break
+    return out
+
+
+def bezier_ease(x1: float, y1: float, x2: float, y2: float):
+    """The timing curve Core Animation builds from these control points, as a
+    function of time (0..1) for the renderers that have none."""
+    def at(t, a, b):
+        return 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t * t * b + t ** 3
+
+    def ease(x: float) -> float:
+        if x <= 0.0:
+            return 0.0
+        if x >= 1.0:
+            return 1.0
+        lo, hi = 0.0, 1.0
+        for _ in range(40):                     # the curve's x is increasing: halve
+            mid = (lo + hi) / 2
+            if at(mid, x1, x2) < x:
+                lo = mid
+            else:
+                hi = mid
+        return at((lo + hi) / 2, y1, y2)
+    return ease
+
+
 def bounds():
     """(left, top, right, bottom) of the drawing, lines and halo included."""
     xs, ys = [], []
