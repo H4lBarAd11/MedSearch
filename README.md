@@ -79,10 +79,12 @@ what lets it update itself. If you move that folder, run `Create Desktop App.com
 
 ## Updates
 
-When MedSearch opens, it compares its `VERSION` with the one on GitHub. If GitHub's is
-newer it offers **Update now**, which downloads the new version, installs any new
-dependencies and restarts the app. Nothing else needs doing: the launcher and the menu bar
-item are part of what updates.
+When MedSearch opens, and each time its window comes back, it compares its `VERSION` with
+the one on GitHub, which it reads within a minute of a push. If GitHub's is newer it offers
+**Update now**, which downloads the new version, installs any new dependencies and restarts
+the app. Nothing else needs doing: the launcher and the menu bar item are part of what
+updates. **Later** puts the offer off until the next day, and *Settings ▸ Check for
+updates* asks at any time.
 
 A new version is offered only when `VERSION` goes up, so a change meant to reach other
 Macs is released by raising it — with its lines added to [`CHANGELOG.md`](CHANGELOG.md),

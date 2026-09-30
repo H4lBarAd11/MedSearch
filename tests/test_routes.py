@@ -1,11 +1,16 @@
 """The HTTP surface: the request guard, the search stream, settings, export,
 the assistant, and the PDF proxy's allowlist."""
 import json
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
 import app as A
 from conftest import BASE, article, sse_events
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 # ── Request guard ───────────────────────────────────────────────────────────
@@ -759,27 +764,158 @@ def test_a_version_with_nothing_written_about_it_invents_nothing():
 def test_the_update_check_reports_what_changed(client, auth, monkeypatch):
     calls = []
 
-    def fake_get(url, timeout=8):
-        calls.append(url)
-        return ("9.9\n" if url.endswith("VERSION") else CHANGELOG.replace("1.5", "9.9")), 200
-    monkeypatch.setattr(A, "http_get", fake_get)
+    def fake_file(name):
+        calls.append(name)
+        return "9.9\n" if name == "VERSION" else CHANGELOG.replace("1.5", "9.9")
+    monkeypatch.setattr(A, "_github_file", fake_file)
     r = client.get("/update/check", headers=auth, base_url=BASE).json
     assert r["update_available"] is True
     assert r["changes"] == ["Keys in the Keychain.", "A monthly limit for the AI."]
-    assert any(c.endswith("CHANGELOG.md") for c in calls)
+    assert "CHANGELOG.md" in calls
 
 
 def test_no_changelog_is_fetched_when_there_is_nothing_to_update(client, auth, monkeypatch):
-    """The check runs at every launch: it must not fetch what it cannot use."""
+    """The check runs every time the window comes back: it must not fetch what it
+    cannot use."""
     calls = []
 
-    def fake_get(url, timeout=8):
-        calls.append(url)
-        return A.get_local_version(), 200
-    monkeypatch.setattr(A, "http_get", fake_get)
+    def fake_file(name):
+        calls.append(name)
+        return A.get_local_version()
+    monkeypatch.setattr(A, "_github_file", fake_file)
     r = client.get("/update/check", headers=auth, base_url=BASE).json
     assert r["update_available"] is False and r["changes"] == []
-    assert not any(c.endswith("CHANGELOG.md") for c in calls)
+    assert calls == ["VERSION"]
+
+
+class _GitHub:
+    """GitHub's API, faked at urlopen: answers 200 with an ETag, and 304 to a
+    request that sends that ETag back, or refuses everything with `refuse`."""
+    def __init__(self, text="9.9", refuse=None):
+        self.text, self.refuse, self.requests = text, refuse, []
+
+    def __call__(self, req, timeout=None):
+        self.requests.append(req)
+        if self.refuse is not None:
+            raise self.refuse
+        if req.get_header("If-none-match") == '"v1"':
+            raise A.urllib.error.HTTPError(req.full_url, 304, "Not Modified", {}, None)
+        text = self.text
+
+        class Answer:
+            headers = {"ETag": '"v1"'}
+            def read(self): return text.encode()
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        return Answer()
+
+
+def test_the_version_is_read_through_githubs_api_not_the_five_minute_cache(monkeypatch):
+    github = _GitHub()
+    monkeypatch.setattr(A.urllib.request, "urlopen", github)
+    monkeypatch.setattr(A, "_GITHUB_SEEN", {})
+    monkeypatch.setattr(A, "http_get", lambda *a, **k: pytest.fail("raw copy fetched"))
+    assert A._github_file("VERSION") == "9.9"
+    [req] = github.requests
+    assert req.full_url.startswith("https://api.github.com/repos/H4lBarAd11/MedSearch/contents/VERSION")
+
+
+def test_a_second_check_asks_only_whether_it_changed(monkeypatch):
+    """A "not modified" answer does not count against GitHub's 60 calls an hour."""
+    github = _GitHub()
+    monkeypatch.setattr(A.urllib.request, "urlopen", github)
+    monkeypatch.setattr(A, "_GITHUB_SEEN", {})
+    assert A._github_file("VERSION") == "9.9"
+    assert A._github_file("VERSION") == "9.9"
+    assert github.requests[1].get_header("If-none-match") == '"v1"'
+
+
+def test_when_the_api_refuses_the_raw_copy_is_used(monkeypatch):
+    refused = A.urllib.error.HTTPError("https://api.github.com", 403, "rate limit", {}, None)
+    monkeypatch.setattr(A.urllib.request, "urlopen", _GitHub(refuse=refused))
+    monkeypatch.setattr(A, "_GITHUB_SEEN", {})
+    raw = []
+    monkeypatch.setattr(A, "http_get", lambda url, timeout=None: (raw.append(url), ("9.8", 200))[1])
+    assert A._github_file("VERSION") == "9.8"
+    assert raw == ["https://raw.githubusercontent.com/H4lBarAd11/MedSearch/main/VERSION"]
+
+
+def test_when_github_cannot_be_reached_nothing_else_is_tried(monkeypatch):
+    """Offline, a second address would only add a second wait."""
+    unreachable = A.urllib.error.URLError("no route to host")
+    monkeypatch.setattr(A.urllib.request, "urlopen", _GitHub(refuse=unreachable))
+    monkeypatch.setattr(A, "_GITHUB_SEEN", {})
+    monkeypatch.setattr(A, "http_get", lambda *a, **k: pytest.fail("raw copy fetched"))
+    assert A._github_file("VERSION") is None
+
+
+def _published(monkeypatch, version):
+    monkeypatch.setattr(A, "_github_file",
+                        lambda name: version if name == "VERSION" else "")
+
+
+def test_later_puts_the_offer_off_for_the_rest_of_the_day(client, auth, monkeypatch):
+    monkeypatch.setitem(A.CONFIG, "update_later", None)
+    monkeypatch.setattr(A, "save_config", lambda cfg: None)
+    _published(monkeypatch, "9.9")
+    r = client.get("/update/check", headers=auth, base_url=BASE).json
+    assert r["update_available"] is True and r["deferred"] is False
+
+    r = client.post("/update/later", json={"version": "9.9"}, headers=auth, base_url=BASE)
+    assert r.status_code == 200
+    r = client.get("/update/check", headers=auth, base_url=BASE).json
+    assert r["update_available"] is True and r["deferred"] is True
+
+
+def test_the_offer_comes_back_the_next_day(client, auth, monkeypatch):
+    monkeypatch.setitem(A.CONFIG, "update_later", {"version": "9.9", "day": "2026-09-30"})
+    monkeypatch.setattr(A, "_today", lambda: "2026-10-01")
+    _published(monkeypatch, "9.9")
+    r = client.get("/update/check", headers=auth, base_url=BASE).json
+    assert r["deferred"] is False
+
+
+def test_a_newer_version_than_the_one_put_off_is_offered_at_once(client, auth, monkeypatch):
+    monkeypatch.setitem(A.CONFIG, "update_later", {"version": "9.9", "day": A._today()})
+    _published(monkeypatch, "9.10")
+    r = client.get("/update/check", headers=auth, base_url=BASE).json
+    assert r["update_available"] is True and r["deferred"] is False
+
+
+def test_later_is_kept_across_a_restart(client, auth, monkeypatch):
+    saved = []
+    monkeypatch.setitem(A.CONFIG, "update_later", None)
+    monkeypatch.setattr(A, "save_config", lambda cfg: saved.append(dict(cfg)))
+    client.post("/update/later", json={"version": "9.9"}, headers=auth, base_url=BASE)
+    assert saved[-1]["update_later"] == {"version": "9.9", "day": A._today()}
+
+
+def test_later_without_a_version_is_refused(client, auth, monkeypatch):
+    monkeypatch.setitem(A.CONFIG, "update_later", None)
+    monkeypatch.setattr(A, "save_config", lambda cfg: pytest.fail("saved"))
+    r = client.post("/update/later", json={}, headers=auth, base_url=BASE)
+    assert r.status_code == 400
+    assert A.CONFIG["update_later"] is None
+
+
+def _webkit():
+    if sys.platform != "darwin":
+        return False
+    try:
+        import WebKit  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _webkit(), reason="needs macOS WebKit")
+def test_the_update_check_in_a_real_page():
+    """Launch, Later, the window coming back, and Settings ▸ Check for updates,
+    in the real page (tests/webkit/updates_page.py), without a window."""
+    r = subprocess.run([sys.executable, "-B", str(ROOT / "tests" / "webkit" / "updates_page.py")],
+                       capture_output=True, text=True, timeout=120, cwd=ROOT)
+    assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
+    assert "ALL PASS" in r.stdout
 
 
 def test_the_mirror_that_worked_moves_to_the_front(monkeypatch):

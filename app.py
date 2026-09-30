@@ -116,6 +116,9 @@ DEFAULTS = {
     # The databases ticked in the top bar's Databases panel, which MedSearch
     # starts with. Only the user's own ticks change it (POST /sources).
     "search_sources": ["pubmed"],
+    # The update offer put off with "Later": {"version", "day"}. That version is
+    # offered again from the next day, or when asked for in Settings.
+    "update_later": None,
     # A monthly ceiling in USD for what the AI features may spend. 0 = no
     # ceiling. The hard limit belongs in the Anthropic console; this one is
     # here so the spending is visible and stops before it surprises anyone.
@@ -275,6 +278,8 @@ NATIONAL_GUIDELINE_BODIES = {
 VERSION_FILE    = RESOURCE_DIR / "VERSION"
 # Raw GitHub URL for the VERSION file on the main branch
 GITHUB_RAW_VERSION = "https://raw.githubusercontent.com/H4lBarAd11/MedSearch/main/VERSION"
+# The same files through GitHub's API, which is fresher (see _github_file)
+GITHUB_API_CONTENTS = "https://api.github.com/repos/H4lBarAd11/MedSearch/contents/"
 
 def get_local_version():
     try:
@@ -2486,7 +2491,49 @@ def pending_search():
 # ── Auto-update routes ─────────────────────────────────────────────────────
 
 CHANGELOG_FILE = "CHANGELOG.md"
-GITHUB_RAW_CHANGELOG = GITHUB_RAW_VERSION.rsplit("/", 1)[0] + "/" + CHANGELOG_FILE
+
+# The ETag and text of GitHub's last answer for each file (see _github_file).
+_GITHUB_SEEN = {}
+
+def _github_file(name):
+    """A file of the published MedSearch as GitHub has it now, or None.
+
+    raw.githubusercontent.com goes on serving a file for five minutes after a
+    push, so a new version stayed invisible that long. GitHub's API is at most a
+    minute behind, but it allows 60 calls an hour per internet address, and a
+    hospital's Macs share one. An answer of "not modified" costs nothing, so the
+    ETag of the last answer is sent back, and most checks are free. When the API
+    refuses anyway, the raw copy is used; when GitHub cannot be reached at all,
+    there is nothing to fall back to."""
+    seen = _GITHUB_SEEN.get(name)
+    headers = {"User-Agent": "MedSearch/1.0 (academic literature search)",
+               "Accept": "application/vnd.github.raw"}
+    if seen:
+        headers["If-None-Match"] = seen[0]
+    req = urllib.request.Request(f"{GITHUB_API_CONTENTS}{name}?ref=main", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            text = r.read().decode("utf-8", errors="replace")
+            if r.headers.get("ETag"):
+                _GITHUB_SEEN[name] = (r.headers["ETag"], text)
+            return text
+    except urllib.error.HTTPError as e:
+        if e.code == 304 and seen:
+            return seen[1]
+    except Exception:
+        return None
+    body, _ = http_get(GITHUB_RAW_VERSION.rsplit("/", 1)[0] + "/" + name, timeout=8)
+    return body
+
+def _today():
+    return datetime.now().strftime("%Y-%m-%d")
+
+def _update_deferred(version):
+    """Whether "Later" was pressed today on the offer of this version. A newer
+    version than the one put off is offered at once."""
+    later = CONFIG.get("update_later")
+    return (isinstance(later, dict) and later.get("version") == version
+            and later.get("day") == _today())
 
 
 def changelog_entry(text, version):
@@ -2507,7 +2554,7 @@ def changelog_entry(text, version):
 def update_check():
     """Compare local VERSION with the one on GitHub. No git needed for the check."""
     local = get_local_version()
-    body, status = http_get(GITHUB_RAW_VERSION, timeout=8)
+    body = _github_file("VERSION")
     if not body:
         return jsonify({"ok": False, "reason": "offline",
                         "local": local})
@@ -2516,8 +2563,7 @@ def update_check():
     # What the new version changes, read from the same place it is published.
     changes = []
     if update_available:
-        notes, _ = http_get(GITHUB_RAW_CHANGELOG, timeout=8)
-        changes = changelog_entry(notes, remote)
+        changes = changelog_entry(_github_file(CHANGELOG_FILE), remote)
     # Is this a git checkout? (update can only be applied if so)
     is_git = (APP_DIR_PATH / ".git").exists()
     return jsonify({
@@ -2527,7 +2573,20 @@ def update_check():
         "update_available": update_available,
         "can_apply": is_git,
         "changes": changes,
+        # Put off today: the window does not offer it by itself (Settings does).
+        "deferred": update_available and _update_deferred(remote),
     })
+
+@app.route("/update/later", methods=["POST"])
+def update_later():
+    """The update offer was put off: not offered again by itself until tomorrow,
+    even across a restart."""
+    version = str(_json_body().get("version") or "").strip()
+    if not re.fullmatch(r"[\w.\- ]{1,20}", version):
+        return jsonify({"ok": False, "message": "No version was sent."}), 400
+    CONFIG["update_later"] = {"version": version, "day": _today()}
+    save_config(CONFIG)
+    return jsonify({"ok": True})
 
 def _requirements_digest():
     try:
