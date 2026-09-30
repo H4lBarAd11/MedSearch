@@ -4251,10 +4251,11 @@ def _screen_fit(size, minimum, available, margin=24):
     return fitted, (min(minimum[0], fitted[0]), min(minimum[1], fitted[1]))
 
 def _work_area():
-    """Windows: the main screen's room without the taskbar, in pywebview's
-    logical pixels. None elsewhere: macOS keeps a new window on its screen by
-    itself, which Windows does not (seen on the build machine, 30 Sep: the
-    window opened wider than a 1024 px screen, its close button off the edge)."""
+    """Windows: (left, top, width, height) of the main screen's room without the
+    taskbar, in pywebview's logical pixels. None elsewhere: macOS keeps a new
+    window on its screen by itself, which Windows does not (seen on the build
+    machine, 30 Sep: the window opened wider than a 1024 px screen, its close
+    button off the edge)."""
     if sys.platform != "win32":
         return None
     try:
@@ -4268,13 +4269,23 @@ def _work_area():
             scale = (ctypes.windll.user32.GetDpiForSystem() or 96) / 96
         except Exception:
             scale = 1.0
-        return ((rect.right - rect.left) / scale, (rect.bottom - rect.top) / scale)
+        return (rect.left / scale, rect.top / scale,
+                (rect.right - rect.left) / scale, (rect.bottom - rect.top) / scale)
     except Exception:
         return None
 
 def _window_size(size, minimum):
-    """The size and minimum size a new window opens with, fitted to the screen."""
-    return _screen_fit(size, minimum, _work_area())
+    """(size, minimum size, where) a new window opens with: fitted to the
+    screen, and on Windows centred in it. pywebview asks Windows to centre it
+    only once the window exists, which Windows no longer heeds, so it opened
+    where Windows puts new windows (seen on the build machine, 30 Sep: at 88,
+    then 137 px, past the right edge). Where is None when the system decides."""
+    area = _work_area()
+    if not area:
+        return size, minimum, None
+    size, minimum = _screen_fit(size, minimum, area[2:])
+    return size, minimum, (int(area[0] + (area[2] - size[0]) / 2),
+                           int(area[1] + (area[3] - size[1]) / 2))
 
 def _write_private(path, text):
     """Write a file only this user can read (the token file)."""
@@ -4385,11 +4396,12 @@ if __name__ == "__main__":
         def _open_article_window(url, title=None):
             if not url or not str(url).lower().startswith(("http://", "https://")):
                 raise ValueError("bad url")
-            (width, height), minimum = _window_size((1100, 860), (800, 600))
+            (width, height), minimum, where = _window_size((1100, 860), (800, 600))
             webview.create_window(
                 title or "MedSearch — Article",
                 url,
                 width=width, height=height,
+                x=where and where[0], y=where and where[1],
                 min_size=minimum,
             )
 
@@ -4506,11 +4518,12 @@ if __name__ == "__main__":
         t = threading.Thread(target=run_server, daemon=True)
         t.start()
         print(f"\n  🔬  MedSearch {LOCAL_VERSION}  —  native window on {URL}\n")
-        (_width, _height), _minimum = _window_size((1280, 860), (940, 640))
+        (_width, _height), _minimum, _where = _window_size((1280, 860), (940, 640))
         _MAIN_WINDOW = webview.create_window(
             "MedSearch",
             URL,
             width=_width, height=_height,
+            x=_where and _where[0], y=_where and _where[1],
             min_size=_minimum,
             js_api=api,
             hidden=_args.background or _SPLASH is not None,

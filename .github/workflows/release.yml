@@ -176,6 +176,8 @@ jobs:
             [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
             [DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr d, int x, int y, int w, int h,
                                                              IntPtr s, int sx, int sy, uint op);
+            public struct RECT { public int Left, Top, Right, Bottom; }
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
             public static IntPtr Screen(int x, int y, int w, int h) {
               IntPtr screen = GetDC(IntPtr.Zero), mem = CreateCompatibleDC(screen);
               IntPtr bmp = CreateCompatibleBitmap(screen, w, h), old = SelectObject(mem, bmp);
@@ -215,6 +217,17 @@ jobs:
           Start-Sleep 5; try { Shot "windows-window" } catch { Write-Warning "no screenshot: $_" }
           if ($ping.version -ne $V) { throw "MedSearch answered '$($ping.version)', not $V" }
           Write-Host "running $($ping.version)"
+
+          # The window must open inside the screen: Windows does not keep it there.
+          $w = Get-Process MedSearch | Where-Object { $_.MainWindowTitle -eq "MedSearch" } | Select-Object -First 1
+          $r = New-Object Grab+RECT
+          [void][Grab]::GetWindowRect($w.MainWindowHandle, [ref]$r)
+          $area = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+          Write-Host "window: $($r.Left),$($r.Top) to $($r.Right),$($r.Bottom); work area: $area"
+          # 8 px: a window's frame reaches that far past what is drawn of it.
+          if ($r.Left -lt $area.Left - 8 -or $r.Right -gt $area.Right + 8 -or $r.Bottom -gt $area.Bottom + 8) {
+            throw "MedSearch's window reaches past the screen"
+          }
 
           Get-Process MedSearch -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep 2

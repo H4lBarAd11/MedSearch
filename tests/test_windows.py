@@ -464,11 +464,18 @@ def test_a_big_screen_changes_nothing():
     assert A._screen_fit((1280, 860), (940, 640), (2560, 1400)) == ((1280, 860), (940, 640))
 
 
-def test_where_the_screen_is_unknown_nothing_changes(monkeypatch):
+def test_where_the_screen_is_unknown_the_system_places_the_window(monkeypatch):
     monkeypatch.setattr(A, "_work_area", lambda: None)
-    assert A._window_size((1280, 860), (940, 640)) == ((1280, 860), (940, 640))
-    monkeypatch.setattr(A, "_work_area", lambda: (1024, 728))
-    assert A._window_size((1280, 860), (940, 640)) == ((1000, 704), (940, 640))
+    assert A._window_size((1280, 860), (940, 640)) == ((1280, 860), (940, 640), None)
+
+
+def test_on_windows_the_window_is_fitted_and_centred_in_the_work_area(monkeypatch):
+    """pywebview's own centring comes too late for Windows, which then put the
+    window where it puts new ones: at 88 and at 137 px, past the right edge."""
+    monkeypatch.setattr(A, "_work_area", lambda: (0, 0, 1024, 728))
+    assert A._window_size((1280, 860), (940, 640)) == ((1000, 704), (940, 640), (12, 12))
+    monkeypatch.setattr(A, "_work_area", lambda: (0, 48, 1920, 1032))     # taskbar at the top
+    assert A._window_size((1280, 860), (940, 640)) == ((1280, 860), (940, 640), (320, 134))
 
 
 def test_macos_keeps_windows_on_screen_by_itself(monkeypatch):
