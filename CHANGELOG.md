@@ -4,6 +4,13 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 1.31
+
+- MedSearch is now an app to download and install on a Mac (Intel or Apple silicon, macOS 12 and later): no Python, no git, no Terminal. It is on the Releases page on GitHub.
+- New: MedSearch for Windows 10 and 11, with its own installer. It is built and checked with every release but not yet used day to day, so reports of anything that doesn't work are welcome.
+- The installed app updates itself: Update now downloads the new version, puts it in place and reopens, in a few seconds.
+- A Mac that runs MedSearch from a git folder is offered Move to it: MedSearch goes into Applications, and the Desktop icon and Open at login open it from then on. Settings, keys, history and saved searches stay as they are.
+
 ## 1.30
 
 - Search by DOI: paste a DOI, a doi.org link or a link to the article, or several DOIs at once, and each ticked database looks those papers up. Years and Strict don't apply. A paper none of the ticked databases has is shown from Crossref, and a DOI nobody knows is reported, so it can be checked for a typo. ClinicalTrials.gov says it can't be searched by DOI; arXiv looks up its own DOIs.
