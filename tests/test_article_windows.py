@@ -27,6 +27,22 @@ def test_a_suggested_name_is_only_ever_a_plain_name(suggested, name):
     assert W.safe_name(suggested) == name
 
 
+@pytest.mark.parametrize("suggested,name", [
+    ("what?<really>*.pdf", "whatreally.pdf"),
+    ("a|b.pdf", "ab.pdf"),
+    ("report. ", "report"),
+    ("...", "download"),
+])
+def test_on_windows_a_name_holds_nothing_windows_forbids(monkeypatch, suggested, name):
+    monkeypatch.setattr(W.os, "name", "nt")
+    assert W.safe_name(suggested) == name
+
+
+def test_elsewhere_those_characters_are_left_as_they_are(monkeypatch):
+    monkeypatch.setattr(W.os, "name", "posix")
+    assert W.safe_name("what?.pdf") == "what?.pdf"
+
+
 def test_a_download_never_replaces_a_file_already_there(tmp_path):
     assert W.free_path(tmp_path, "paper.pdf") == tmp_path / "paper.pdf"
     (tmp_path / "paper.pdf").write_bytes(b"x")
@@ -102,6 +118,6 @@ def test_a_real_page_keeps_its_tabs_and_files_in_medsearch():
 
 
 def test_medsearch_installs_it_for_article_windows_only():
-    app = (ROOT / "app.py").read_text()
+    app = (ROOT / "app.py").read_text(encoding="utf-8")
     assert "article_windows.install(lambda w: w is not _MAIN_WINDOW, on_page=_signin_page)" in app
 

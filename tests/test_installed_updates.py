@@ -222,7 +222,7 @@ def test_windows_setup_runs_quietly_and_reopens_medsearch():
     cmd = A._setup_command(r"C:\Temp\MedSearch-1.31-Setup.exe")
     assert cmd[0].endswith("Setup.exe")
     assert {"/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RELAUNCH=1"} <= set(cmd)
-    iss = (Path(A.__file__).parent / "packaging" / "MedSearch.iss").read_text()
+    iss = (Path(A.__file__).parent / "packaging" / "MedSearch.iss").read_text(encoding="utf-8")
     assert "{param:RELAUNCH|0}" in iss and "Check: Relaunching" in iss
 
 

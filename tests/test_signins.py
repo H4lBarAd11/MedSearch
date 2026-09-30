@@ -16,7 +16,7 @@ import signins as S
 from conftest import BASE
 
 ROOT = Path(__file__).resolve().parent.parent
-CASES = json.loads((ROOT / "tests" / "signin_domains.json").read_text())
+CASES = json.loads((ROOT / "tests" / "signin_domains.json").read_text(encoding="utf-8"))
 
 UNITN = {"id": "unitn", "label": "UniTN", "url": "https://ezp.biblio.unitn.it",
          "remember_signin": True}

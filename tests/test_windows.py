@@ -434,10 +434,10 @@ def test_the_page_speaks_of_the_mac_elsewhere(client, monkeypatch):
 
 def test_the_installer_ships_what_windows_needs():
     root = Path(__file__).resolve().parent.parent
-    spec = (root / "packaging" / "MedSearch.spec").read_text()
+    spec = (root / "packaging" / "MedSearch.spec").read_text(encoding="utf-8")
     for needed in ('"tray"', '"splash_win"', "icon.ico"):
         assert needed in spec
-    iss = (root / "packaging" / "MedSearch.iss").read_text()
+    iss = (root / "packaging" / "MedSearch.iss").read_text(encoding="utf-8")
     assert "PrivilegesRequired=lowest" in iss                # no administrator
     assert 'Tasks: desktopicon' in iss and "Flags: unchecked" not in iss   # ticked (his choice)
     assert "RegDeleteValue(HKCU, RunKey, 'MedSearch')" in iss and A._RUN_VALUE == "MedSearch"
