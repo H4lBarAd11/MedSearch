@@ -144,6 +144,31 @@ def test_the_menu_items_do_what_they_say():
     assert done == ["search", ("run", "glioma"), ("source", "wos"), "show", "quit"]
 
 
+def _inside(r, client):
+    x, y, w, h = r
+    return x >= 0 and y >= 0 and x + w <= client[0] and y + h <= client[1]
+
+
+def _overlap(a, b):
+    return not (a[0] + a[2] <= b[0] or b[0] + b[2] <= a[0] or a[1] + a[3] <= b[1] or b[1] + b[3] <= a[1])
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.25, 1.5, 2.0])
+def test_the_quick_search_box_holds_all_of_itself_at_any_scale(scale):
+    """The first Windows walk, at 200 %: the box came out narrow and cut its
+    buttons off. Measured text at that scale must fit, and nothing overlaps."""
+    text_h = round(3 * 16 * scale)                    # a hint over three lines
+    lay = T.quick_box_layout(scale, text_h, round(23 * scale), round(28 * scale),
+                             [round(88 * scale), round(88 * scale)])
+    parts = [lay["hint"], lay["field"], *lay["buttons"]]
+    assert all(_inside(r, lay["client"]) for r in parts)
+    assert not any(_overlap(a, b) for i, a in enumerate(parts) for b in parts[i + 1:])
+    search, cancel = lay["buttons"]
+    assert search[0] < cancel[0] and cancel[0] + cancel[2] == lay["field"][0] + lay["field"][2]
+    assert lay["hint"][2] == round(T.QUICK_BOX_WIDTH * scale)          # as wide as the scale
+    assert search[1] > lay["field"][1] + lay["field"][3]               # below the field
+
+
 def test_a_search_from_the_tray_runs_in_the_page():
     assert appmenu.search_js('he said "no"', "pubmed") == \
         'runSearchWithSource("he said \\"no\\"", "pubmed", 0)'

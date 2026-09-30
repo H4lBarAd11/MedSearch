@@ -45,6 +45,27 @@ def menu_model(recents, current):
     return rows
 
 
+QUICK_BOX_WIDTH = 380     # the quick-search box's text column, at 100 %
+
+
+def quick_box_layout(scale, text_h, field_h, button_h, button_ws):
+    """Where the quick-search box's parts go, in the screen's own pixels:
+    (x, y, width, height) for the hint, the field and the two buttons (Search,
+    then Cancel, at the right), and the size of the box's inside."""
+    pad, gap = round(14 * scale), round(8 * scale)
+    width = round(QUICK_BOX_WIDTH * scale)
+    y = pad
+    hint = (pad, y, width, text_h)
+    y += text_h + gap
+    field = (pad, y, width, field_h)
+    y += field_h + round(16 * scale)
+    right = pad + width
+    cancel = (right - button_ws[1], y, button_ws[1], button_h)
+    search = (cancel[0] - gap - button_ws[0], y, button_ws[0], button_h)
+    return {"hint": hint, "field": field, "buttons": [search, cancel],
+            "client": (width + 2 * pad, y + button_h + pad)}
+
+
 # How a close was asked for: these must close, whatever the page has open.
 _LET_THROUGH = ("WindowsShutDown", "TaskManagerClosing", "ApplicationExitCall")
 
@@ -169,43 +190,56 @@ class Tray:
         threading.Thread(target=lambda: self.window.evaluate_js(js), daemon=True).start()
 
     def quick_search(self):
-        """A small box of Windows' own: the search, and Search or Cancel."""
+        """A small box of Windows' own: the search, and Search or Cancel.
+
+        LAID OUT AT THE SCREEN'S SCALE (seen in the first Windows walk, 30 Sep,
+        on a screen at 200 %): sized in plain pixels while Windows doubled the
+        text, the box came out narrow, its hint on three short lines and its
+        buttons cut off at the bottom. Every length here is multiplied by the
+        screen's scale, and the hint's height is measured, not guessed."""
         wf = self._wf
-        from System.Drawing import Size, SystemFonts
+        from System.Drawing import Point, Size, SystemFonts
         box = wf.Form()
         box.Text = appmenu.QUICK_SEARCH_TITLE
         box.FormBorderStyle = wf.FormBorderStyle.FixedDialog
         box.MaximizeBox = box.MinimizeBox = False
+        box.ShowInTaskbar = False
         box.StartPosition = wf.FormStartPosition.CenterScreen
         box.TopMost = True
-        box.Font = SystemFonts.MessageBoxFont
-        box.AutoScaleMode = wf.AutoScaleMode.Font
-        box.AutoSize = True
-        box.AutoSizeMode = wf.AutoSizeMode.GrowAndShrink
-        box.Padding = wf.Padding(12)
+        box.AutoScaleMode = getattr(wf.AutoScaleMode, 'None')   # this code does the scaling
+        font = SystemFonts.MessageBoxFont
+        box.Font = font
+        try:
+            scale = box.DeviceDpi / 96.0
+        except Exception:
+            g = box.CreateGraphics()
+            scale = g.DpiX / 96.0
+            g.Dispose()
 
-        column = wf.FlowLayoutPanel()
-        column.FlowDirection = wf.FlowDirection.TopDown
-        column.AutoSize = True
-        column.WrapContents = False
         hint = wf.Label()
         hint.Text = appmenu.quick_search_hint(self.get_source())
-        hint.AutoSize = True
-        hint.MaximumSize = Size(360, 0)
         field = wf.TextBox()
-        field.Width = 360
-        buttons = wf.FlowLayoutPanel()
-        buttons.FlowDirection = wf.FlowDirection.RightToLeft
-        buttons.AutoSize = True
-        buttons.Width = 360
+        field.Font = font
         search, cancel = wf.Button(), wf.Button()
         search.Text, search.DialogResult = "Search", wf.DialogResult.OK
         cancel.Text, cancel.DialogResult = "Cancel", wf.DialogResult.Cancel
-        buttons.Controls.Add(cancel)
-        buttons.Controls.Add(search)
-        for c in (hint, field, buttons):
-            column.Controls.Add(c)
-        box.Controls.Add(column)
+
+        width = round(QUICK_BOX_WIDTH * scale)
+        text_h = wf.TextRenderer.MeasureText(hint.Text, font, Size(width, 0),
+                                             wf.TextFormatFlags.WordBreak).Height
+        button_h = max(round(28 * scale), font.Height + round(12 * scale))
+        button_ws = [max(round(88 * scale),
+                         wf.TextRenderer.MeasureText(b.Text, font).Width + round(24 * scale))
+                     for b in (search, cancel)]
+        layout = quick_box_layout(scale, text_h, field.PreferredHeight, button_h, button_ws)
+
+        for control, (x, y, w, h) in ((hint, layout["hint"]), (field, layout["field"]),
+                                      (search, layout["buttons"][0]),
+                                      (cancel, layout["buttons"][1])):
+            control.Location = Point(x, y)
+            control.Size = Size(w, h)
+            box.Controls.Add(control)
+        box.ClientSize = Size(*layout["client"])
         box.AcceptButton, box.CancelButton = search, cancel
         box.ActiveControl = field
         try:
