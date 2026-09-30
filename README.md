@@ -29,6 +29,10 @@ tabs.
 single deduplicated list. Each source reports on its own, so one that fails (a missing key,
 an off-campus Scopus) says so in a dialog and the others' results still arrive.
 
+**Search by DOI.** Paste a DOI, a doi.org link or a link to the article, or several DOIs at
+once, and each ticked source looks those papers up by DOI. Years and Strict don't apply. A
+paper none of them has is shown from Crossref, and a DOI that nobody knows is reported.
+
 **Guidelines.** A *Guidelines* source finds national and society guidelines indexed in
 PubMed, and the *Guidelines* panel opens a country's official body directly (SNLG, NICE,
 ECRI, AWMF, HAS and others) with the search already filled in where the site allows it.

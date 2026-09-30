@@ -25,6 +25,7 @@ const ONBOARD_CONTENT = {
           'Type your topic in the bar at the top and press <strong>Search</strong>.',
           'Click the <strong>sources</strong> button beside Search to tick the databases you want (PubMed, Cochrane and others are free).',
           'Keep <strong>Strict</strong> on for focused results; turn it off to search more broadly.',
+          'To find a paper you already know, paste its <strong>DOI</strong>, a doi.org link or the article\'s link (several DOIs work too).',
         ],
       },
       {
@@ -60,6 +61,7 @@ const ONBOARD_CONTENT = {
           'Scrivi l\'argomento nella barra in alto e premi <strong>Search</strong>.',
           'Clicca il pulsante delle <strong>fonti</strong> accanto a Search per scegliere i database (PubMed, Cochrane e altri sono gratuiti).',
           'Tieni <strong>Strict</strong> attivo per risultati mirati; disattivalo per cercare in modo più ampio.',
+          'Per trovare un articolo che conosci già, incolla il suo <strong>DOI</strong>, un link doi.org o il link dell\'articolo (anche più DOI insieme).',
         ],
       },
       {
@@ -721,6 +723,8 @@ if (_strictEl) {
 // ── Search (progressive streaming) ─────────────────────────────────────────
 let searchAbortController = null;
 const erroredSources = new Map();   // source → error text, for this search (don't clobber the message)
+let doiLookup  = 0;      // how many DOIs this search looks up (0: an ordinary search)
+let doiMissing = null;   // {count, text}: the DOIs nothing was found for
 
 function runSearch(isLoadMore) {
   // Defensive: if called as an event handler (e.g. btn.onclick = runSearch),
@@ -740,6 +744,8 @@ function runSearch(isLoadMore) {
   if (!isLoadMore) {
     allArticles = [];
     erroredSources.clear();   // fresh error tracking per search
+    doiLookup = 0;
+    doiMissing = null;
     closeSynthesis();
     resetAssistantSuggestions();   // refresh suggestions for the new search
   }
@@ -1006,11 +1012,17 @@ function handleSearchEvent(ev) {
       (mesh.length ? '<div class="mesh-box"><span class="mesh-label">MeSH terms</span>' +
                      mesh.map(tag).join('') + '</div>' : '');
   }
+  else if (ev.type === 'doi_lookup') {
+    doiLookup = ev.dois.length;
+  }
   else if (ev.type === 'source_start') {
     // All sources start together; the count of finished ones is the progress.
+    // (Crossref starts last, in a DOI search, once the others have answered.)
     const n = ev.total;
-    setStatus('searching', `Searching ${n} source${n === 1 ? '' : 's'}…`);
-    document.getElementById('searchProgress').textContent = `· 0 of ${n} sources done`;
+    setStatus('searching', doiLookup
+      ? `Looking up ${doiLookup} DOI${doiLookup === 1 ? '' : 's'} in ${n} source${n === 1 ? '' : 's'}…`
+      : `Searching ${n} source${n === 1 ? '' : 's'}…`);
+    document.getElementById('searchProgress').textContent = `· ${ev.done || 0} of ${n} sources done`;
     addSourcePlaceholder(ev.source);
   }
   else if (ev.type === 'article') {
@@ -1023,7 +1035,7 @@ function handleSearchEvent(ev) {
   else if (ev.type === 'source_done') {
     // Don't clobber an error message that source_error already displayed
     if (!erroredSources.has(ev.source)) {
-      finalizeSourceGroup(ev.source, ev.count);
+      finalizeSourceGroup(ev.source, ev.count, null, ev.note);
     }
     setRunningCount(ev.running_count);
     if (ev.total_sources) {
@@ -1035,6 +1047,9 @@ function handleSearchEvent(ev) {
   else if (ev.type === 'source_error') {
     erroredSources.set(ev.source, ev.text);
     finalizeSourceGroup(ev.source, 0, ev.text);
+  }
+  else if (ev.type === 'doi_missing') {
+    doiMissing = {count: ev.count, text: ev.text};
   }
   else if (ev.type === 'done') {
     setRunningCount(ev.count);
@@ -1120,8 +1135,9 @@ function patchOneliner(idx, text) {
   slot.style.animation = 'fadeInUp 0.25s ease';
 }
 
-// When a source finishes: turn spinner into a count, handle empty/error
-function finalizeSourceGroup(source, count, errorText) {
+// When a source finishes: turn spinner into a count, handle empty/error.
+// A note says why a source had nothing to give (e.g. it has no DOIs).
+function finalizeSourceGroup(source, count, errorText, note) {
   const id   = 'grp_' + source.replace(/\W/g,'');
   const grp  = document.getElementById(id);
   if (!grp) return;
@@ -1135,7 +1151,7 @@ function finalizeSourceGroup(source, count, errorText) {
   }
   if (spin) spin.outerHTML = `<span class="source-count">${count}</span>`;
   if (count === 0 && body) {
-    body.innerHTML = `<div class="source-empty">No results from this source.</div>`;
+    body.innerHTML = `<div class="source-empty">${escHtml(note || 'No results from this source.')}</div>`;
   }
 }
 
@@ -1161,12 +1177,8 @@ function finishSearch(query, isLoadMore) {
 
   // Partial failure shows both: the inline note stays in each failed source's
   // group, and one dialog names them all so the gap isn't missed.
-  if (erroredSources.size) {
-    const lines = [...erroredSources].map(([src, text]) => `${src}: ${text}`);
-    const title = erroredSources.size === 1 ? `${[...erroredSources.keys()][0]} returned no results`
-                                            : `${erroredSources.size} sources returned no results`;
-    fail(lines.join('\n\n') + (n ? `\n\nThe other sources' results are shown.` : ''), title);
-  }
+  const problems = searchProblems(erroredSources, doiMissing, n);
+  if (problems) fail(problems.text, problems.title);
 
   applyResultFilters();
 
@@ -1183,7 +1195,7 @@ function finishSearch(query, isLoadMore) {
       <div class="empty-state">
         <div class="empty-icon"><svg class="ico" aria-hidden="true"><use href="#i-search"/></svg></div>
         <div class="empty-title">No results found</div>
-        <div class="empty-sub">Try different keywords or expand the date range.</div>
+        <div class="empty-sub">${doiLookup ? 'Check the DOI for a typo.' : 'Try different keywords or expand the date range.'}</div>
       </div>`;
   }
 
@@ -1191,7 +1203,8 @@ function finishSearch(query, isLoadMore) {
   // (sources exhausted), or when there are no results at all.
   const addedSomething = !isLoadMore || (n > (window._countBeforeLoadMore || 0));
   window._countBeforeLoadMore = n;   // remember for the next pass
-  if (n > 0 && addedSomething) {
+  // A DOI search has found all there is to find.
+  if (n > 0 && addedSomething && !doiLookup) {
     const perSource = parseInt(document.getElementById('maxResults').value) || 10;
     const groups = document.getElementById('sourceGroups');
     const wrap = document.createElement('div');
@@ -1204,6 +1217,20 @@ function finishSearch(query, isLoadMore) {
     // Exhausted: let the user know there's nothing more.
     showToast('No more results to load.', 'green');
   }
+}
+
+// The one dialog at the end of a search, or null: every source that failed,
+// and the DOIs nothing was found for.
+function searchProblems(errored, missing, n) {
+  const lines = [...errored].map(([src, text]) => `${src}: ${text}`);
+  if (missing) lines.push(missing.text);
+  if (!lines.length) return null;
+  const title = errored.size === 1 ? `${[...errored.keys()][0]} returned no results`
+              : errored.size       ? `${errored.size} sources returned no results`
+              : missing.count === 1 ? 'DOI not found' : `${missing.count} DOIs not found`;
+  const shown = !n ? '' : errored.size ? `\n\nThe other sources' results are shown.`
+                                       : '\n\nThe papers that were found are shown.';
+  return {title, text: lines.join('\n\n') + shown};
 }
 
 // "Find more": re-run the same search, asking each source for the next batch,
