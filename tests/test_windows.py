@@ -144,29 +144,25 @@ def test_the_menu_items_do_what_they_say():
     assert done == ["search", ("run", "glioma"), ("source", "wos"), "show", "quit"]
 
 
-def _inside(r, client):
-    x, y, w, h = r
-    return x >= 0 and y >= 0 and x + w <= client[0] and y + h <= client[1]
+def test_the_quick_search_brings_the_window_ready_to_type(monkeypatch):
+    """His choice after the first Windows walk: no box of its own (narrow and
+    dated at 200 %); the window comes forward with the cursor in its search bar."""
+    t = _tray(answer=True)
+    shown = []
+    t.show = lambda: shown.append(1)
+    t.quick_search()
+    for _ in range(100):
+        if t.window.asked:
+            break
+        __import__("time").sleep(0.01)
+    assert shown == [1]
+    assert t.window.asked == [T.FOCUS_SEARCH_JS]
+    assert "getElementById('searchInput')" in T.FOCUS_SEARCH_JS and "focus()" in T.FOCUS_SEARCH_JS
 
 
-def _overlap(a, b):
-    return not (a[0] + a[2] <= b[0] or b[0] + b[2] <= a[0] or a[1] + a[3] <= b[1] or b[1] + b[3] <= a[1])
-
-
-@pytest.mark.parametrize("scale", [1.0, 1.25, 1.5, 2.0])
-def test_the_quick_search_box_holds_all_of_itself_at_any_scale(scale):
-    """The first Windows walk, at 200 %: the box came out narrow and cut its
-    buttons off. Measured text at that scale must fit, and nothing overlaps."""
-    text_h = round(3 * 16 * scale)                    # a hint over three lines
-    lay = T.quick_box_layout(scale, text_h, round(23 * scale), round(28 * scale),
-                             [round(88 * scale), round(88 * scale)])
-    parts = [lay["hint"], lay["field"], *lay["buttons"]]
-    assert all(_inside(r, lay["client"]) for r in parts)
-    assert not any(_overlap(a, b) for i, a in enumerate(parts) for b in parts[i + 1:])
-    search, cancel = lay["buttons"]
-    assert search[0] < cancel[0] and cancel[0] + cancel[2] == lay["field"][0] + lay["field"][2]
-    assert lay["hint"][2] == round(T.QUICK_BOX_WIDTH * scale)          # as wide as the scale
-    assert search[1] > lay["field"][1] + lay["field"][3]               # below the field
+def test_the_page_has_the_search_bar_the_tray_focuses():
+    page = (Path(A.__file__).parent / "templates" / "index.html").read_text(encoding="utf-8")
+    assert 'id="searchInput"' in page
 
 
 def test_a_search_from_the_tray_runs_in_the_page():
