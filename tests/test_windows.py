@@ -7,6 +7,7 @@ page shows. The Windows build runs this file too; the calls into Windows itself
 are seen working in a Windows machine, not here.
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -416,6 +417,21 @@ def test_a_second_launch_brings_the_window_back_through_the_tray(client, auth, m
     monkeypatch.setattr(A, "_MAIN_WINDOW", object())
     assert client.post("/focus", headers=auth, base_url=BASE).json["ok"] is True
     assert shown == [1]
+
+
+def test_a_console_without_emoji_never_stops_medsearch(tmp_path):
+    """The first Windows build ended at its start message: its console's code
+    page (cp1252) has no 🔬, and print() raised before the server was up. A
+    Python of its own, with such a console and a scratch home, imports MedSearch
+    and prints the same way."""
+    env = dict(os.environ, PYTHONIOENCODING="cp1252", HOME=str(tmp_path),
+               USERPROFILE=str(tmp_path), MEDSEARCH_KEYCHAIN="0")
+    code = ("import app; "
+            "print(f'\\n  🔬  MedSearch {app.LOCAL_VERSION}  —  native window → ok')")
+    r = subprocess.run([sys.executable, "-B", "-c", code], cwd=Path(A.__file__).parent,
+                       env=env, capture_output=True, timeout=60)
+    assert r.returncode == 0, r.stderr.decode("cp1252", "replace")[-800:]
+    assert b"MedSearch" in r.stdout
 
 
 def test_the_page_speaks_of_windows_on_windows(client, monkeypatch):

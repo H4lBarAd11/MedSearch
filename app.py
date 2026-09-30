@@ -31,6 +31,19 @@ from pathlib import Path
 from xml.sax.saxutils import escape as escape_xml
 from flask import Flask, render_template, request, Response, jsonify, stream_with_context
 
+def _safe_console():
+    """What MedSearch prints must never stop it. On Windows its output can go to
+    a console whose code page has no emoji or arrows (cp1252), and one print of
+    the start message then ended MedSearch before its server was up (seen in the
+    first Windows build, 30 Sep). A character the console cannot show becomes ?."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+
+_safe_console()
+
 import article_windows
 import secrets_store
 import signins
