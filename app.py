@@ -24,7 +24,7 @@ Server-Sent Events (SSE).
 
 import sys, os, json, re, time, threading, urllib.parse, urllib.request
 import urllib.error, xml.etree.ElementTree as ET
-import concurrent.futures, hashlib, hmac, secrets, subprocess
+import concurrent.futures, hashlib, hmac, secrets, ssl, subprocess
 from datetime import datetime
 from pathlib import Path
 from xml.sax.saxutils import escape as escape_xml
@@ -332,6 +332,32 @@ def get_quartile(j):
 # ══════════════════════════════════════════════════════════════════════════════
 #  HTTP HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _trust_the_macs_certificates():
+    """Every outside call goes through urllib, which checks a server against
+    Python's own list of certificates. Python from python.org comes WITHOUT that
+    list until its "Install Certificates" step is run, which a first install
+    easily misses: then every source "didn't respond" and the update check reads
+    as offline, while the window (WebKit, with the Mac's list) works as usual.
+    So when Python's list is empty, the Mac's root certificates are used instead.
+    Apple's and Homebrew's Pythons have a list and are left alone."""
+    if sys.platform != "darwin":
+        return
+    ctx = ssl.create_default_context()
+    if ctx.cert_store_stats()["x509_ca"]:
+        return
+    try:
+        roots = subprocess.run(
+            ["/usr/bin/security", "find-certificate", "-a", "-p",
+             "/System/Library/Keychains/SystemRootCertificates.keychain"],
+            capture_output=True, text=True, timeout=10).stdout
+        ctx.load_verify_locations(cadata=roots)
+    except Exception:
+        return
+    urllib.request.install_opener(
+        urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx)))
+
+_trust_the_macs_certificates()
 
 class _RateLimiter:
     """Spaces calls to one service evenly across threads."""

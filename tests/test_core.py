@@ -35,6 +35,31 @@ def test_a_release_sorts_above_every_beta():
     assert A._version_tuple("Beta 7") > A._version_tuple("Beta 6")
 
 
+# ── HTTPS certificates ──────────────────────────────────────────────────────
+
+def _opener_installed_by_the_fallback(monkeypatch):
+    installed = []
+    monkeypatch.setattr(A.urllib.request, "install_opener", installed.append)
+    A._trust_the_macs_certificates()
+    return installed
+
+
+def test_a_python_without_certificates_trusts_the_macs_instead(monkeypatch):
+    # python.org's Python before "Install Certificates": the list is empty.
+    monkeypatch.setenv("SSL_CERT_FILE", "/nonexistent")
+    monkeypatch.setenv("SSL_CERT_DIR", "/nonexistent")
+    assert not A.ssl.create_default_context().cert_store_stats()["x509_ca"]
+    [opener] = _opener_installed_by_the_fallback(monkeypatch)
+    [https] = [h for h in opener.handlers if isinstance(h, A.urllib.request.HTTPSHandler)]
+    assert https._context.cert_store_stats()["x509_ca"] > 50
+    assert https._context.verify_mode == A.ssl.CERT_REQUIRED
+
+
+def test_a_python_with_certificates_is_left_alone(monkeypatch):
+    assert A.ssl.create_default_context().cert_store_stats()["x509_ca"]
+    assert _opener_installed_by_the_fallback(monkeypatch) == []
+
+
 # ── PubMed query building ───────────────────────────────────────────────────
 
 def test_strict_tags_every_word_title_abstract_and_ands_them():
