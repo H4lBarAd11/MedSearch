@@ -449,6 +449,33 @@ def test_a_windowed_app_with_no_console_gets_one_that_takes_anything(tmp_path):
     assert r.stdout.endswith(b"survived")
 
 
+def test_a_first_window_fits_a_small_screen():
+    """The build machine's 1024 x 768 screen: 1280 wide put the close button off it."""
+    size, minimum = A._screen_fit((1280, 860), (940, 640), (1024, 728))
+    assert size == (1000, 704) and minimum == (940, 640)
+
+
+def test_its_minimum_gives_way_on_a_smaller_screen_still():
+    size, minimum = A._screen_fit((1280, 860), (940, 640), (800, 560))
+    assert size == (776, 536) and minimum == (776, 536)
+
+
+def test_a_big_screen_changes_nothing():
+    assert A._screen_fit((1280, 860), (940, 640), (2560, 1400)) == ((1280, 860), (940, 640))
+
+
+def test_where_the_screen_is_unknown_nothing_changes(monkeypatch):
+    monkeypatch.setattr(A, "_work_area", lambda: None)
+    assert A._window_size((1280, 860), (940, 640)) == ((1280, 860), (940, 640))
+    monkeypatch.setattr(A, "_work_area", lambda: (1024, 728))
+    assert A._window_size((1280, 860), (940, 640)) == ((1000, 704), (940, 640))
+
+
+def test_macos_keeps_windows_on_screen_by_itself(monkeypatch):
+    monkeypatch.setattr(A, "sys", types.SimpleNamespace(platform="darwin"))
+    assert A._work_area() is None
+
+
 def test_the_page_speaks_of_windows_on_windows(client, monkeypatch):
     _on_windows(monkeypatch)
     page = client.get("/", base_url=BASE).get_data(as_text=True)

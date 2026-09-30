@@ -161,10 +161,13 @@ jobs:
           $V = (Get-Content VERSION -Raw).Trim()
           New-Item -ItemType Directory -Force shots | Out-Null
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          # CaptureBlt: without it a screen copy leaves out see-through
+          # (layered) windows, and the splash is one.
           function Shot($name) {
             $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
             $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
-            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $mode = [System.Drawing.CopyPixelOperation]::SourceCopy -bor [System.Drawing.CopyPixelOperation]::CaptureBlt
+            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size, $mode)
             $bmp.Save("shots\$name.png")
           }
 
@@ -179,7 +182,9 @@ jobs:
           $env:USERPROFILE = $h
           $env:MEDSEARCH_KEYCHAIN = "0"
           $app = Start-Process "$dir\MedSearch.exe" -PassThru
-          Start-Sleep 2; try { Shot "windows-splash" } catch { Write-Warning "no screenshot: $_" }
+          foreach ($t in 1, 2, 3) {
+            Start-Sleep 1; try { Shot "windows-splash-$($t)s" } catch { Write-Warning "no screenshot: $_" }
+          }
           $portFile = "$h\.medsearch\server_port"
           for ($i = 0; $i -lt 90 -and -not (Test-Path $portFile); $i++) { Start-Sleep 1 }
           $port = (Get-Content $portFile -Raw).Trim()

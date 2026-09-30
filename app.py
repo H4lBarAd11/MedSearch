@@ -4239,6 +4239,43 @@ def _maintain_launcher(bundle_id, upgrade_stub):
     except Exception as e:
         print(f"  (couldn't update the launcher: {e})")
 
+def _screen_fit(size, minimum, available, margin=24):
+    """A window no larger than the room there is: `available` is (width, height)
+    of the screen without the taskbar, in the window's own units, and a margin
+    is left around it. The minimum size gives way too, or it would hold the
+    window past the screen's edge."""
+    if not available:
+        return size, minimum
+    room = (max(int(available[0]) - margin, 1), max(int(available[1]) - margin, 1))
+    fitted = (min(size[0], room[0]), min(size[1], room[1]))
+    return fitted, (min(minimum[0], fitted[0]), min(minimum[1], fitted[1]))
+
+def _work_area():
+    """Windows: the main screen's room without the taskbar, in pywebview's
+    logical pixels. None elsewhere: macOS keeps a new window on its screen by
+    itself, which Windows does not (seen on the build machine, 30 Sep: the
+    window opened wider than a 1024 px screen, its close button off the edge)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        rect = wintypes.RECT()
+        if not ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(rect), 0):
+            return None                           # SPI_GETWORKAREA refused
+        try:
+            # 96 for a process not yet DPI-aware, whose RECT is already logical.
+            scale = (ctypes.windll.user32.GetDpiForSystem() or 96) / 96
+        except Exception:
+            scale = 1.0
+        return ((rect.right - rect.left) / scale, (rect.bottom - rect.top) / scale)
+    except Exception:
+        return None
+
+def _window_size(size, minimum):
+    """The size and minimum size a new window opens with, fitted to the screen."""
+    return _screen_fit(size, minimum, _work_area())
+
 def _write_private(path, text):
     """Write a file only this user can read (the token file)."""
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -4348,11 +4385,12 @@ if __name__ == "__main__":
         def _open_article_window(url, title=None):
             if not url or not str(url).lower().startswith(("http://", "https://")):
                 raise ValueError("bad url")
+            (width, height), minimum = _window_size((1100, 860), (800, 600))
             webview.create_window(
                 title or "MedSearch — Article",
                 url,
-                width=1100, height=860,
-                min_size=(800, 600),
+                width=width, height=height,
+                min_size=minimum,
             )
 
         class Api:
@@ -4468,11 +4506,12 @@ if __name__ == "__main__":
         t = threading.Thread(target=run_server, daemon=True)
         t.start()
         print(f"\n  🔬  MedSearch {LOCAL_VERSION}  —  native window on {URL}\n")
+        (_width, _height), _minimum = _window_size((1280, 860), (940, 640))
         _MAIN_WINDOW = webview.create_window(
             "MedSearch",
             URL,
-            width=1280, height=860,
-            min_size=(940, 640),
+            width=_width, height=_height,
+            min_size=_minimum,
             js_api=api,
             hidden=_args.background or _SPLASH is not None,
         )

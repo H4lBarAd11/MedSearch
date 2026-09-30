@@ -440,8 +440,13 @@ def install_windows(is_article, on_page=None, on_message=None, downloads=None,
         form = WinForms.Form()
         form.Text = "MedSearch — Article"
         scale = _dpi_scale(opener_form)
-        form.Size = Size(int(1100 * scale), int(860 * scale))
-        form.MinimumSize = Size(int(800 * scale), int(600 * scale))
+        # No larger than the screen it opens on (Windows does not keep it there).
+        area = WinForms.Screen.FromControl(opener_form).WorkingArea if opener_form else None
+        width, height = int(1100 * scale), int(860 * scale)
+        if area is not None:
+            width, height = min(width, area.Width - 24), min(height, area.Height - 24)
+        form.Size = Size(width, height)
+        form.MinimumSize = Size(min(int(800 * scale), width), min(int(600 * scale), height))
         form.StartPosition = WinForms.FormStartPosition.WindowsDefaultLocation
         if opener_form is not None and opener_form.Icon is not None:
             form.Icon = opener_form.Icon
