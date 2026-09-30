@@ -30,11 +30,11 @@ INSTITUTIONS = [{"label": "UniTN", "url": "https://ezp.biblio.unitn.it", "rememb
 
 
 # ── the menu ─────────────────────────────────────────────────────────────────
-def test_the_tray_menu_is_the_mac_menu_item_for_item():
+def test_the_tray_menu_is_the_mac_menu_without_open_window():
     rows = T.menu_model(["glioma", "x" * 80], "cochrane")
     labels = [r if r is None else r[0] for r in rows]
     assert labels == ["Search MedSearch…", None, "Recent searches", "Default source",
-                      None, "Open MedSearch window", None, "Quit MedSearch"]
+                      None, "Quit MedSearch"]
     recents = rows[2][1]
     assert [r[0] for r in recents] == ["glioma", "x" * 57 + "…"]
     assert recents[1][1:3] == ("recent", "x" * 80)          # the whole query is run
@@ -52,8 +52,10 @@ def test_the_tray_menu_shows_six_recent_searches_at_most():
     assert [r[2] for r in rows[2][1]] == [f"q{i}" for i in range(6)]
 
 
-def test_the_mac_menu_lists_the_same_items():
-    """Built by statusbar.fill from the same appmenu: the two cannot drift."""
+def test_the_mac_menu_lists_the_same_items_and_open_window():
+    """Built by statusbar.fill from the same appmenu: the two cannot drift. The
+    Mac's "Open MedSearch window" is left out on Windows (his choice, 30 Sep):
+    the quick search there already brings the window forward."""
     AppKit = pytest.importorskip("AppKit", reason="the menu bar item is macOS only")
     import statusbar as SB
     host = types.SimpleNamespace(recent_searches=lambda: ["glioma"],
@@ -64,7 +66,9 @@ def test_the_mac_menu_lists_the_same_items():
     mac = [None if menu.itemAtIndex_(i).isSeparatorItem() else str(menu.itemAtIndex_(i).title())
            for i in range(menu.numberOfItems())]
     windows = [r if r is None else r[0] for r in T.menu_model(["glioma"], "pubmed")]
-    assert mac == windows
+    at = mac.index("Open MedSearch window")
+    assert mac[at - 1] is None
+    assert mac[:at - 1] + mac[at + 1:] == windows
 
 
 # ── closing the window, and quitting ─────────────────────────────────────────
@@ -135,13 +139,12 @@ def test_the_menu_items_do_what_they_say():
     done = []
     t.quick_search = lambda: done.append("search")
     t.run = lambda q: done.append(("run", q))
-    t.show = lambda: done.append("show")
     t.quit = lambda: done.append("quit")
     t.save_source = lambda k: done.append(("source", k))
     for action, value in (("search", None), ("recent", "glioma"), ("source", "wos"),
-                          ("open", None), ("quit", None)):
+                          ("quit", None)):
         t._do(action, value)
-    assert done == ["search", ("run", "glioma"), ("source", "wos"), "show", "quit"]
+    assert done == ["search", ("run", "glioma"), ("source", "wos"), "quit"]
 
 
 def test_the_quick_search_brings_the_window_ready_to_type(monkeypatch):

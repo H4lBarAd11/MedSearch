@@ -2,9 +2,10 @@
 # Copyright 2026 Riccardo Nevoso. Licensed under the Apache License, Version 2.0.
 """MedSearch's icon in the Windows notification area: statusbar.py's twin.
 
-THE MAC'S MENU, ITEM FOR ITEM (appmenu.py): quick search, recent searches, the
-default source, the window, Quit. Either mouse button opens it. Its quick search
-brings the window forward, ready to type, rather than a box of its own.
+THE MAC'S MENU (appmenu.py): quick search, recent searches, the default source,
+Quit. Either mouse button opens it. Its quick search brings the window forward,
+ready to type, rather than a box of its own, so the Mac's "Open MedSearch window"
+would do the same thing twice and is left out (his choice, 30 Sep).
 
 CLOSING THE WINDOW HIDES IT (his choice, 30 Sep, as on the Mac). MedSearch stays
 by the clock, and the taskbar button goes with the window. With the PDF viewer
@@ -17,7 +18,7 @@ than a line drawing, and it stays while the window is in front, as Windows apps'
 icons do.
 
 WINFORMS, WHICH pywebview ALREADY RUNS MEDSEARCH'S WINDOWS ON: no new
-dependency, and the menu and the quick-search box are Windows' own. Everything
+dependency, and the menu is Windows' own. Everything
 that touches them runs on pywebview's GUI thread, reached through the main
 window; the page is driven from another thread, because evaluate_js waits on
 the GUI thread for its answer.
@@ -41,8 +42,7 @@ def menu_model(recents, current):
                      [(appmenu.short(q), "recent", q, False) for q in recents]))
     rows.append(("Default source",
                  [(label, "source", key, key == current) for key, label in appmenu.SOURCES]))
-    rows += [None, ("Open MedSearch window", "open", None, False),
-             None, ("Quit MedSearch", "quit", None, False)]
+    rows += [None, ("Quit MedSearch", "quit", None, False)]
     return rows
 
 
@@ -142,8 +142,6 @@ class Tray:
             self.run(str(value))
         elif action == "source":
             self.save_source(str(value))
-        elif action == "open":
-            self.show()
         elif action == "quit":
             self.quit()
 
