@@ -14,14 +14,10 @@ dist/
 !packaging/MedSearch.spec
 *.egg-info/
 
-# The generated macOS launcher (colleagues build their own)
-MedSearch.app/
-
 # Icon previews written by the render_*.py scripts
 *_preview.png
 
 # Runtime logs
-.medsearch_app.log
 *.log
 
 # macOS
@@ -30,12 +26,6 @@ MedSearch.app/
 # Editor and Claude Code settings: local permissions, never published
 .idea/
 .claude/
-
-# Marks the development clone: never offered the move to the installed app
-.development
-
-# User exports (created at runtime)
-medsearch_exports/
 
 # Test cache
 .pytest_cache/

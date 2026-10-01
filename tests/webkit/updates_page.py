@@ -57,23 +57,23 @@ A._published_commit = published_commit
 A._github_file = github_file
 A.http_get = lambda *a, **k: (None, 0)
 A.CONFIG["onboarding_seen"] = True
-# This folder is a clone on a Mac, which would be offered the move to the
-# installed app; until the end, it is a development clone that is not, and no
-# Release is ever asked about.
-kind = {"now": "clone", "move": False}
-A._install_kind = lambda: kind["now"]
-A._move_possible = lambda: kind["move"]
+# This runs as the installed Mac app, whose every Release is up.
+A._install_kind = lambda: "mac_app"
 A._release_published = lambda version: True
 
-# NEVER the real update or restart here: the update resets this very folder to
-# GitHub's main, and a restart starts a real MedSearch. The update fails, as
-# one can; a restart is refused.
-A.app.view_functions["update_apply"] = lambda: A.jsonify(
-    {"ok": False, "message": "The update could not be downloaded (test)."})
-A.app.view_functions["app_restart"] = lambda: (A.jsonify({"ok": False}), 403)
-moved = []
-A.app.view_functions["update_move"] = lambda: (moved.append(1), A.jsonify(
-    {"ok": True, "restarting": True, "new_version": published["version"]}))[1]
+# NEVER the real update here: it downloads a Release and replaces an app. The
+# update fails, as one can, until the end, when it goes through.
+update = {"works": False, "asked": 0}
+
+
+def update_apply():
+    update["asked"] += 1
+    if not update["works"]:
+        return A.jsonify({"ok": False, "message": "The update could not be downloaded (test)."})
+    return A.jsonify({"ok": True, "restarting": True, "new_version": published["version"]})
+
+
+A.app.view_functions["update_apply"] = update_apply
 
 with socket.socket() as s:
     s.bind(("127.0.0.1", 0))
@@ -237,21 +237,18 @@ check("the button is ready again after each check", until(
                " document.getElementById('updateCheckBtn').textContent].join('|')")
     == "false|Check for updates"))
 
-# ── a Mac on a clone: the move to the installed app ─────────────────────────
+# ── Update now ──────────────────────────────────────────────────────────────
 js("closeTopDialog(); closeTopDialog(); 1")
 published["version"] = "9.40"
-kind["move"] = True
+update["works"] = True
 window_comes_back()
-check("a clone on a Mac is offered the move", until(lambda: is_open("updateOverlay")))
-check("as a regular app, with the version",
-      js("document.getElementById('updateTitle').textContent") == "MedSearch 9.40: now a regular app")
-check("saying future updates install themselves",
-      offered().startswith("Future updates install themselves."))
-check("with Later and Move to it", js(
+check("a newer version is offered again", until(lambda: is_open("updateOverlay")))
+check("with Later and Update now", js(
     "[...document.querySelectorAll('#updateActions button')].map(b => b.textContent).join('|')")
-    == "Later|Move to it")
+    == "Later|Update now")
+before = update["asked"]
 js("document.getElementById('updateNowBtn').click(); 1")
-check("Move to it asks the server to move", until(lambda: moved == [1]))
+check("Update now asks the server to update", until(lambda: update["asked"] == before + 1))
 check("and the window says it will reopen by itself", until(
     lambda: js("document.getElementById('updateProgressText').textContent")
     == "MedSearch will close and reopen by itself."))

@@ -1,4 +1,4 @@
-"""Updates for the installers' MedSearch, and a clone Mac's move to it.
+"""Updates for the installers' MedSearch.
 
 Nothing here reaches GitHub or touches an installed MedSearch: the Release is
 faked, and every file the updates move lives in a temporary folder. The Mac's
@@ -32,9 +32,8 @@ def _published(monkeypatch, version, released=True):
     return asked
 
 
-def _kind(monkeypatch, kind, development=False, system="darwin"):
+def _kind(monkeypatch, kind, system="darwin"):
     monkeypatch.setattr(A, "_install_kind", lambda: kind)
-    monkeypatch.setattr(A, "_development_clone", lambda: development)
     monkeypatch.setattr(A, "sys", types.SimpleNamespace(platform=system, executable=sys.executable))
 
 
@@ -47,7 +46,7 @@ def test_an_installed_app_is_offered_a_version_once_its_installer_is_up(client, 
     _kind(monkeypatch, "mac_app")
     asked = _published(monkeypatch, "9.9")
     r = _check(client, auth)
-    assert (r["kind"], r["update_available"], r["can_apply"], r["move"]) == ("mac_app", True, True, False)
+    assert (r["kind"], r["update_available"], r["can_apply"]) == ("mac_app", True, True)
     assert r["changes"] == ["Something new."] and asked == ["9.9"]
 
 
@@ -65,64 +64,27 @@ def test_an_installed_app_does_not_ask_about_a_release_it_already_runs(client, a
     assert asked == []
 
 
-def test_a_clone_mac_is_offered_the_move_even_without_a_newer_version(client, auth, monkeypatch):
-    """The iMac takes the last git update to 1.31 before it knows of the move;
-    it must still be offered the move to 1.31's installed app."""
-    _kind(monkeypatch, "clone")
-    _published(monkeypatch, A.get_local_version())
-    r = _check(client, auth)
-    assert r["move"] is True and r["update_available"] is False
-
-
-def test_the_move_waits_for_the_installer(client, auth, monkeypatch):
-    _kind(monkeypatch, "clone")
-    _published(monkeypatch, "9.9", released=False)
-    r = _check(client, auth)
-    assert r["move"] is False and r["update_available"] is True     # git, as before
-
-
-def test_the_development_clone_is_never_offered_the_move(client, auth, monkeypatch):
-    _kind(monkeypatch, "clone", development=True)
-    asked = _published(monkeypatch, "9.9")
-    r = _check(client, auth)
-    assert r["move"] is False and r["update_available"] is True and asked == []
-
-
-def test_a_clone_on_windows_keeps_git(client, auth, monkeypatch):
-    _kind(monkeypatch, "clone", system="win32")
-    _published(monkeypatch, "9.9")
-    assert _check(client, auth)["move"] is False
-
-
-def test_the_development_clone_is_marked_by_a_file(monkeypatch, tmp_path):
-    monkeypatch.setattr(A, "APP_DIR_PATH", tmp_path)
-    assert A._development_clone() is False
-    (tmp_path / ".development").touch()
-    assert A._development_clone() is True
-
-
-def test_a_move_put_off_today_is_not_offered_by_itself(client, auth, monkeypatch):
-    _kind(monkeypatch, "clone")
+def test_an_update_put_off_today_is_not_offered_by_itself(client, auth, monkeypatch):
+    _kind(monkeypatch, "mac_app")
     _published(monkeypatch, "9.9")
     A.CONFIG["update_later"] = {"version": "9.9", "day": A._today()}
     assert _check(client, auth)["deferred"] is True
 
 
-def test_a_copy_that_is_neither_says_it_cannot_update(client, auth, monkeypatch):
-    _kind(monkeypatch, "copy")
-    _published(monkeypatch, "9.9")
-    assert _check(client, auth)["can_apply"] is False
+def test_run_from_source_it_says_it_cannot_update_itself(client, auth, monkeypatch):
+    """The code's folder belongs to whoever keeps it: no git, no Release."""
+    _kind(monkeypatch, "source")
+    asked = _published(monkeypatch, "9.9")
+    r = _check(client, auth)
+    assert r["update_available"] is True and r["can_apply"] is False and asked == []
     r = client.post("/update/apply", headers=auth, base_url=BASE).json
     assert r["ok"] is False and "can't update itself" in r["message"]
 
 
-def test_what_kind_of_install_this_is(monkeypatch, tmp_path):
-    monkeypatch.setattr(A, "APP_DIR_PATH", tmp_path)
-    assert A._install_kind() == "copy"
-    (tmp_path / ".git").mkdir()
-    assert A._install_kind() == "clone"
+def test_what_kind_of_install_this_is(monkeypatch):
+    assert A._install_kind() == "source"
     monkeypatch.setattr(A.sys, "frozen", True, raising=False)
-    assert A._install_kind() == {"darwin": "mac_app", "win32": "windows_app"}.get(sys.platform, "copy")
+    assert A._install_kind() == {"darwin": "mac_app", "win32": "windows_app"}.get(sys.platform, "source")
 
 
 # ── the Release ──────────────────────────────────────────────────────────────
@@ -383,117 +345,3 @@ def test_update_now_on_windows_downloads_setup_and_hands_over_to_it(client, auth
     url, dest = fetched[0]
     assert url.endswith("/v9.9/MedSearch-9.9-Setup.exe") and dest.name == "MedSearch-9.9-Setup.exe"
     assert no_leaving == [("windows", dest)]
-
-
-# ── a clone Mac's move ───────────────────────────────────────────────────────
-def test_the_move_is_refused_where_it_does_not_apply(client, auth, monkeypatch, no_leaving):
-    _kind(monkeypatch, "clone", development=True)
-    r = client.post("/update/move", headers=auth, base_url=BASE)
-    assert r.status_code == 400 and no_leaving == []
-
-
-def test_the_move_goes_to_the_users_applications_when_the_shared_one_is_closed(monkeypatch, tmp_path):
-    monkeypatch.setattr(A.Path, "home", lambda: tmp_path)
-    monkeypatch.setattr(A.os, "access", lambda p, mode: Path(p) != Path("/Applications"))
-    assert A._move_target() == tmp_path / "Applications" / "MedSearch.app"
-
-
-def test_the_move_leaves_another_app_of_the_same_name_alone(monkeypatch, tmp_path):
-    monkeypatch.setattr(A.Path, "home", lambda: tmp_path)
-    monkeypatch.setattr(A.os, "access", lambda p, mode: False)
-    other = tmp_path / "Applications" / "MedSearch.app" / "Contents"
-    other.mkdir(parents=True)
-    with open(other / "Info.plist", "wb") as fh:
-        plistlib.dump({"CFBundleIdentifier": "com.example.medsearch"}, fh)
-    with pytest.raises(A.UpdateRefused, match="another app of the same name"):
-        A._move_target()
-
-
-@pytest.mark.parametrize("found", [A.APP_ID, "com.halbarad.medsearch.launcher",
-                                   "com.riccardonevoso.medsearch.launcher"])
-def test_the_move_replaces_medsearch_and_its_old_launchers(monkeypatch, tmp_path, found):
-    monkeypatch.setattr(A.Path, "home", lambda: tmp_path)
-    monkeypatch.setattr(A.os, "access", lambda p, mode: False)
-    there = tmp_path / "Applications" / "MedSearch.app" / "Contents"
-    there.mkdir(parents=True)
-    with open(there / "Info.plist", "wb") as fh:
-        plistlib.dump({"CFBundleIdentifier": found}, fh)
-    assert A._move_target() == tmp_path / "Applications" / "MedSearch.app"
-
-
-def test_the_desktop_icon_and_the_login_item_open_the_installed_app(monkeypatch, tmp_path):
-    desktop = tmp_path / "Desktop" / "MedSearch.app"
-    (desktop / "Contents" / "MacOS").mkdir(parents=True)
-    (desktop / "Contents" / "MacOS" / "MedSearch").write_text("old stub")
-    target = tmp_path / "Applications" / "MedSearch.app"
-    monkeypatch.setattr(A, "_bundle_path_for",
-                        lambda bid: desktop if bid == "com.halbarad.medsearch.launcher" else None)
-    agent = tmp_path / "com.halbarad.medsearch.plist"
-    agent.write_text("<plist/>")
-    monkeypatch.setattr(A, "_LOGIN_AGENT", agent)
-    A._point_launchers_at(target)
-    stub = (desktop / "Contents" / "MacOS" / "MedSearch").read_text()
-    assert f'exec /usr/bin/open -a "{target}"' in stub
-    assert os.access(desktop / "Contents" / "MacOS" / "MedSearch", os.X_OK)
-    text = agent.read_text()
-    assert f"<string>-b</string><string>{A.APP_ID}</string>" in text and "launcher" not in text
-
-
-def test_a_launcher_that_is_the_target_is_left_to_be_replaced(monkeypatch, tmp_path):
-    target = tmp_path / "Applications" / "MedSearch.app"
-    (target / "Contents" / "MacOS").mkdir(parents=True)
-    (target / "Contents" / "MacOS" / "MedSearch").write_text("old stub")
-    monkeypatch.setattr(A, "_bundle_path_for", lambda bid: target)
-    monkeypatch.setattr(A, "_LOGIN_AGENT", tmp_path / "none.plist")
-    A._point_launchers_at(target)
-    assert (target / "Contents" / "MacOS" / "MedSearch").read_text() == "old stub"
-
-
-def test_move_to_it_installs_points_the_launchers_and_restarts(client, auth, monkeypatch,
-                                                               tmp_path, no_leaving):
-    _kind(monkeypatch, "clone")
-    _published(monkeypatch, "9.9")
-    target = tmp_path / "Applications" / "MedSearch.app"
-    monkeypatch.setattr(A, "_move_target", lambda: target)
-    monkeypatch.setattr(A, "_download", lambda url, dest: Path(dest).write_bytes(b"dmg"))
-    monkeypatch.setattr(A, "_stage_mac_app", lambda dmg, folder, v: folder / ".MedSearch-update.app")
-    pointed = []
-    monkeypatch.setattr(A, "_point_launchers_at", pointed.append)
-    r = client.post("/update/move", headers=auth, base_url=BASE).json
-    assert r["restarting"] is True
-    assert pointed == [target]
-    assert no_leaving == [("mac", target.parent / ".MedSearch-update.app", target)]
-
-
-def test_a_failed_move_changes_nothing(client, auth, monkeypatch, tmp_path, no_leaving):
-    _kind(monkeypatch, "clone")
-    _published(monkeypatch, "9.9")
-    monkeypatch.setattr(A, "_move_target", lambda: tmp_path / "MedSearch.app")
-
-    def fails(url, dest):
-        raise A.UpdateRefused("The update couldn't be downloaded from GitHub (test).")
-    monkeypatch.setattr(A, "_download", fails)
-    pointed = []
-    monkeypatch.setattr(A, "_point_launchers_at", pointed.append)
-    r = client.post("/update/move", headers=auth, base_url=BASE).json
-    assert r["ok"] is False and "couldn't be downloaded" in r["message"]
-    assert pointed == [] and no_leaving == []
-
-
-def test_a_move_whose_download_fails_its_check_changes_nothing(client, auth, monkeypatch,
-                                                               tmp_path, no_leaving):
-    """The Desktop icon is pointed at the installed app only once that app is
-    there to open: a damaged download must leave the clone's icon as it was."""
-    _kind(monkeypatch, "clone")
-    _published(monkeypatch, "9.9")
-    monkeypatch.setattr(A, "_move_target", lambda: tmp_path / "MedSearch.app")
-    monkeypatch.setattr(A, "_download", lambda url, dest: Path(dest).write_bytes(b"dmg"))
-
-    def damaged(dmg, folder, version):
-        raise A.UpdateRefused("The downloaded update is damaged, so it was not installed.")
-    monkeypatch.setattr(A, "_stage_mac_app", damaged)
-    pointed = []
-    monkeypatch.setattr(A, "_point_launchers_at", pointed.append)
-    r = client.post("/update/move", headers=auth, base_url=BASE).json
-    assert r["ok"] is False and "damaged" in r["message"]
-    assert pointed == [] and no_leaving == []
