@@ -108,11 +108,6 @@ the new version's installers are published. **Later** puts the offer off until t
 day, and *Settings ▸ Check for updates* asks at any time. The prompt shows what the new
 version changes, from [`CHANGELOG.md`](CHANGELOG.md).
 
-A Mac that runs MedSearch from a git clone (the way it was installed before 1.31) is
-offered **Move to it** instead: MedSearch is installed into Applications, and the Desktop
-icon and *Open at login* open the installed app from then on. Settings, keys, history and
-saved searches stay as they are.
-
 A new version is released by raising `VERSION`, with its lines added to `CHANGELOG.md`, and
 pushing: GitHub then tests both installers, installs and starts each, and publishes them
 as a release.
@@ -127,11 +122,9 @@ python3 app.py
 ```
 
 This works on macOS, Windows and Linux; without the native-window library it opens in the
-browser instead. On a Mac, double-clicking **`Create Desktop App.command`** once sets up the
-environment and puts a launcher on the Desktop that runs this folder with no Terminal, and
-**`MedSearch.command`** runs it with the Terminal visible, which helps when something needs
-diagnosing. A clone updates itself with git. A clone holding a file named `.development`
-is never offered the move to the installed app.
+browser instead. Run this way, MedSearch does not update itself: `git pull` brings the new
+code. While the installed MedSearch is open, a start from source hands over to it and
+exits, so quit that one first.
 
 The installers are built with `packaging/build-mac.sh` and `packaging/build-windows.ps1`
 (PyInstaller, and Inno Setup on Windows).
@@ -222,9 +215,6 @@ MedSearch/
 ├── secrets_store.py          the keys: Keychain, or Credential Manager (wincred.py)
 ├── signins.py                library sign-ins, remembered and filled in
 ├── article_windows.py        article windows' new tabs and downloads
-├── launcher.sh               how a clone's Desktop app starts MedSearch
-├── Create Desktop App.command  a clone's one-time macOS setup
-├── MedSearch.command         the same start, with the Terminal visible
 ├── templates/index.html      the page
 ├── static/css, static/js     its style and behaviour
 ├── static/fonts, vendor/     DM Sans (OFL) and PDF.js, bundled so it works offline

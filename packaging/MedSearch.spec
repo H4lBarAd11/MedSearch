@@ -3,16 +3,15 @@
 """The app the installers carry: Python, Flask, pywebview and MedSearch's own
 files in one MedSearch.app, so a user needs neither Python nor git.
 
-BUILT, NOT RUN FROM A CLONE. A MedSearch started from a git clone (launcher.sh)
-keeps working as before, for development. This is what the Releases hold.
+BUILT, NOT RUN FROM SOURCE. `python3 app.py` in a clone of the code is for
+development; this is what the Releases hold.
 
 ONE FOLDER, NOT ONE FILE. PyInstaller's one-file mode unpacks itself into a
 temporary folder on every start, which costs seconds and leaves the app's
 files somewhere new each time. The folder mode starts at once.
 
-THE IDENTIFIER IS com.halbarad.medsearch, which app.py already counts as its
-own (_LAUNCHER_IDS): a restart and Open at login go through it, so they come
-back as this MedSearch.
+THE IDENTIFIER IS com.halbarad.medsearch, app.py's APP_ID: Open at login goes
+through it, so it comes back as this MedSearch.
 
 ON WINDOWS the same spec makes dist/MedSearch/MedSearch.exe, which the Setup
 program (MedSearch.iss) installs.

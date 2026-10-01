@@ -430,14 +430,14 @@ def test_settings_reports_the_windows_login_state(client, auth, monkeypatch, reg
     assert client.get("/settings", headers=auth, base_url=BASE).json["open_at_login"] is True
 
 
-def test_a_clone_on_windows_restarts_without_a_console_window(monkeypatch, tmp_path):
+def test_run_from_source_on_windows_it_starts_without_a_console_window(monkeypatch, tmp_path):
     (tmp_path / "python.exe").write_text("")
     (tmp_path / "pythonw.exe").write_text("")
     monkeypatch.setattr(A.sys, "executable", str(tmp_path / "python.exe"))
     monkeypatch.setattr(A.os, "name", "nt")
-    assert A._self_command("--relaunch")[0] == str(tmp_path / "pythonw.exe")
+    assert A._self_command("--background")[0] == str(tmp_path / "pythonw.exe")
     (tmp_path / "pythonw.exe").unlink()             # a Python without one: the plain one
-    assert A._self_command("--relaunch")[0] == str(tmp_path / "python.exe")
+    assert A._self_command("--background")[0] == str(tmp_path / "python.exe")
 
 
 def test_a_second_launch_brings_the_window_back_through_the_tray(client, auth, monkeypatch):
@@ -509,7 +509,7 @@ def test_the_installed_app_writes_its_messages_to_a_log(monkeypatch, tmp_path):
     assert logging.getLogger("werkzeug").level == logging.WARNING
 
 
-def test_a_clone_run_from_a_terminal_keeps_its_console(monkeypatch, tmp_path):
+def test_run_from_source_in_a_terminal_it_keeps_its_console(monkeypatch, tmp_path):
     log = _log_into(monkeypatch, tmp_path, frozen=False)
     assert not log.exists()
 

@@ -512,9 +512,9 @@ def _fourcc(code):
 def _answer_reopen(target):
     """Opening MedSearch while it is already running brings the window back.
 
-    A SECOND LAUNCH NEVER REACHES launcher.sh (seen 21 Sep). The running process
-    lives inside MedSearch.app, so LaunchServices knows it as that app — lsappinfo
-    lists it under the launcher's bundle id — and opening the app again from
+    A SECOND LAUNCH STARTS NOTHING (seen 21 Sep). The running process lives
+    inside MedSearch.app, so LaunchServices knows it as that app — lsappinfo
+    lists it under the app's bundle id — and opening the app again from
     Spotlight, Launchpad or Finder does not start anything: macOS sends the running
     copy a "reopen" Apple event and considers the job done. The /focus handoff in
     app.py is only reached by a start that bypasses LaunchServices (a terminal).

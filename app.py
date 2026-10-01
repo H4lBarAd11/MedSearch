@@ -98,24 +98,13 @@ import article_windows
 import secrets_store
 import signins
 
-# ── resolve paths so app.py works as a script AND as a frozen build ──────────
-# Two freezing tools put bundled data files (templates/, VERSION) in different
-# places:
-#   • PyInstaller → a temp dir exposed as sys._MEIPASS
-#   • py2app      → <Bundle>.app/Contents/Resources (sys.executable is in
-#                   Contents/MacOS, so Resources is ../Resources)
-# When run from source they sit next to this file. RESOURCE_DIR points at
-# whichever actually holds the assets.
-if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-    # PyInstaller
+# ── resolve paths so app.py works as a script AND as the installers' build ───
+# PyInstaller puts the bundled data files (templates/, VERSION) in the folder
+# it exposes as sys._MEIPASS; run from source they sit next to this file.
+# RESOURCE_DIR points at whichever holds them.
+if getattr(sys, "frozen", False):
     RESOURCE_DIR = Path(sys._MEIPASS)
     APP_DIR_PATH = Path(sys.executable).parent.resolve()
-elif getattr(sys, "frozen", False):
-    # py2app: resources live in Contents/Resources, beside Contents/MacOS
-    _exe_dir = Path(sys.executable).resolve().parent          # Contents/MacOS
-    _res = _exe_dir.parent / "Resources"                       # Contents/Resources
-    RESOURCE_DIR = _res if (_res / "templates").exists() else _exe_dir
-    APP_DIR_PATH = _exe_dir
 else:
     RESOURCE_DIR = Path(__file__).parent.resolve()
     APP_DIR_PATH = RESOURCE_DIR
@@ -136,19 +125,17 @@ app = Flask(__name__, template_folder=str(BASE_DIR / "templates"),
 # can find this copy and hand it its request instead of starting another.
 APP_TOKEN = secrets.token_urlsafe(24)
 
-# The installed launcher (MedSearch.app), when MedSearch was started through it:
-# macOS names it in __CFBundleIdentifier. Used to restart, or to open at login,
-# THROUGH the launcher, so MedSearch keeps its own name and icon. Launchers
-# built before the rename carry the old identifier and are still ours.
-_LAUNCHER_IDS = ("com.halbarad.medsearch", "com.riccardonevoso.medsearch")
+# The installed MedSearch.app, when macOS started MedSearch as that app: it
+# names it in __CFBundleIdentifier. Open at login then goes THROUGH the app, so
+# MedSearch keeps its own name and icon.
+APP_ID = "com.halbarad.medsearch"
 
-def _launcher_bundle_id():
-    bid = os.environ.get("__CFBundleIdentifier", "")
-    return bid if bid.startswith(_LAUNCHER_IDS) else ""
+def _app_bundle_id():
+    return APP_ID if os.environ.get("__CFBundleIdentifier", "") == APP_ID else ""
 _OPEN_PATHS = ("/", "/ping")
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  CONFIG  (shared with medsearch.py logic)
+#  CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
 
 CONFIG_DIR  = Path.home() / ".medsearch"
@@ -167,8 +154,6 @@ DEFAULTS = {
     # Optional institutional proxy (EZProxy / OpenAthens). Paywalled-but-
     # subscribed papers can be opened through the user's library login.
     # institution_proxies: list of {"label","url"}; active_proxy: index into it.
-    # institution_proxy (legacy single string) is migrated into the list on load.
-    "institution_proxy": "",
     "institution_proxies": [],
     "active_proxy":     0,
     # Selected national guideline body (country code, e.g. "it"). Used by the
@@ -193,12 +178,6 @@ DEFAULTS = {
     "scihub_mirrors":    ["https://sci-hub.ru", "https://sci-hub.st", "https://sci-hub.ee"],
 }
 
-# Legacy mirror configurations we silently migrate to the current defaults
-# (old saved configs would otherwise keep pointing at the dead sci-hub.se).
-_LEGACY_BROKEN_MIRRORS = [
-    ["https://sci-hub.se", "https://sci-hub.st", "https://sci-hub.ru"],
-]
-
 # The settings that are secrets. They live in the macOS Keychain when it is
 # available (secrets_store.py); the config file then holds everything else.
 # unpaywall_email is deliberately not one: it is an address, shown in full in
@@ -221,21 +200,6 @@ def load_config():
         try:
             saved = json.loads(CONFIG_FILE.read_text())
             cfg.update(saved)
-            # Migrate any config that still has the dead-mirror-first order
-            if cfg.get("scihub_mirrors") in _LEGACY_BROKEN_MIRRORS:
-                cfg["scihub_mirrors"] = list(DEFAULTS["scihub_mirrors"])
-                migrated = True
-            # Migrate a legacy single institution_proxy into the new list form.
-            # If it matches UniTN's known proxy, tag it with that id so it lands
-            # in the predefined UniTN slot instead of appearing as a custom dup.
-            legacy_proxy = (cfg.get("institution_proxy") or "").strip()
-            if legacy_proxy and not cfg.get("institution_proxies"):
-                if "biblio.unitn.it" in legacy_proxy:
-                    cfg["institution_proxies"] = [{"id": "unitn", "label": "UniTN", "url": legacy_proxy}]
-                else:
-                    cfg["institution_proxies"] = [{"label": "My institution", "url": legacy_proxy}]
-                cfg["active_proxy"] = 0
-                migrated = True
         except Exception: pass
     # Keys come from the Keychain; a key still sitting in the file is one
     # saved by an older version, so it moves across and is wiped from the file.
@@ -2815,9 +2779,7 @@ def update_check():
 
     An installed MedSearch (the installers') is offered a version only once its
     installer is on GitHub: the Release is built after the push, and an offer
-    that cannot be carried out yet is no offer. A Mac running from a clone that
-    is not the development copy is offered the move to the installed app
-    instead (his choice, 30 Sep)."""
+    that cannot be carried out yet is no offer."""
     local = get_local_version()
     commit = _published_commit()
     body = _github_file("VERSION", commit) if commit else None
@@ -2827,14 +2789,12 @@ def update_check():
     remote = body.strip()
     newer = _version_tuple(remote) > _version_tuple(local)
     kind = _install_kind()
-    update_available, move = newer, False
+    update_available = newer
     if kind in ("mac_app", "windows_app"):
         update_available = newer and _release_published(remote) is True
-    elif _move_possible():
-        move = _release_published(remote) is True
     # What the new version changes, read from the same place it is published.
     changes = []
-    if newer and (update_available or move):
+    if update_available:
         changes = changelog_entry(_github_file(CHANGELOG_FILE, commit), remote)
     return jsonify({
         "ok": True,
@@ -2842,12 +2802,11 @@ def update_check():
         "remote": remote,
         "kind": kind,
         "update_available": update_available,
-        "move": move,
-        # A clone updates through git, an installed MedSearch through its Release.
-        "can_apply": kind != "copy",
+        # Only an installed MedSearch replaces itself.
+        "can_apply": kind != "source",
         "changes": changes,
         # Put off today: the window does not offer it by itself (Settings does).
-        "deferred": (update_available or move) and _update_deferred(remote),
+        "deferred": update_available and _update_deferred(remote),
     })
 
 @app.route("/update/later", methods=["POST"])
@@ -2861,84 +2820,16 @@ def update_later():
     save_config(CONFIG)
     return jsonify({"ok": True})
 
-def _requirements_digest():
-    try:
-        return hashlib.sha256((APP_DIR_PATH / "requirements.txt").read_bytes()).hexdigest()
-    except Exception:
-        return ""
-
 @app.route("/update/apply", methods=["POST"])
 def update_apply():
-    """
-    Update to the latest version from GitHub.
-    Uses fetch + hard reset to the remote branch so local file changes
-    (e.g. a flipped executable bit, or an accidental edit) can't block the
-    update. User config and data live in ~/.medsearch/, outside the repo,
-    so they're never touched. If requirements.txt changed, the new
-    dependencies are installed into the running interpreter's environment
-    before the app offers to restart — otherwise an update that adds a
-    dependency would leave an app that no longer starts.
-    """
+    """Update the installed MedSearch to the version published on GitHub. Run
+    from source, MedSearch leaves its folder to whoever keeps it."""
     kind = _install_kind()
-    if kind in ("mac_app", "windows_app"):
-        return _update_installed(kind)
-    if kind != "clone":
+    if kind == "source":
         return jsonify({"ok": False,
                         "message": "This copy of MedSearch can't update itself. Download the "
                                    "new version from github.com/H4lBarAd11/MedSearch."}), 200
-    git = ["git", "-C", str(APP_DIR_PATH)]
-    version_before = get_local_version()
-    reqs_before = _requirements_digest()
-    try:
-        # 1. Fetch the latest commits from origin
-        fetch = subprocess.run(git + ["fetch", "origin"],
-                               capture_output=True, text=True, timeout=60)
-        if fetch.returncode != 0:
-            return jsonify({"ok": False,
-                            "message": "Couldn't reach GitHub to fetch the update.",
-                            "error": (fetch.stderr or "").strip()[-400:]}), 200
-
-        # 2. Determine the current branch (usually 'main')
-        branch_res = subprocess.run(git + ["rev-parse", "--abbrev-ref", "HEAD"],
-                                    capture_output=True, text=True, timeout=15)
-        branch = branch_res.stdout.strip()
-        if not branch or branch == "HEAD":      # detached checkout
-            branch = "main"
-
-        # 3. Hard reset to origin/<branch> — guarantees we match the remote
-        reset = subprocess.run(git + ["reset", "--hard", f"origin/{branch}"],
-                               capture_output=True, text=True, timeout=60)
-        if reset.returncode != 0:
-            return jsonify({"ok": False,
-                            "message": "Update failed while applying changes.",
-                            "error": (reset.stderr or reset.stdout).strip()[-400:]}), 200
-
-        # 4. New or changed dependencies → install them now, into this venv
-        if _requirements_digest() != reqs_before:
-            pip = subprocess.run([sys.executable, "-m", "pip", "install", "--quiet",
-                                  "-r", str(APP_DIR_PATH / "requirements.txt")],
-                                 capture_output=True, text=True, timeout=600)
-            if pip.returncode != 0:
-                return jsonify({"ok": False,
-                                "message": "The update was downloaded, but installing its new "
-                                           "components failed. MedSearch may not start until this "
-                                           "is fixed — run \"Create Desktop App.command\" again.",
-                                "error": (pip.stderr or pip.stdout).strip()[-400:]}), 200
-
-        # 5. Verify the version actually changed (catch silent no-ops)
-        version_after = get_local_version()
-        if _version_tuple(version_after) <= _version_tuple(version_before):
-            return jsonify({"ok": True, "new_version": version_after, "unchanged": True,
-                            "message": f"Already up to date (version {version_after})."})
-        return jsonify({"ok": True, "new_version": version_after, "unchanged": False,
-                        "can_restart": not getattr(sys, "frozen", False)})
-    except subprocess.TimeoutExpired:
-        return jsonify({"ok": False, "message": "Update timed out."}), 200
-    except FileNotFoundError:
-        return jsonify({"ok": False,
-                        "message": "git is not installed, so auto-update isn't available."}), 200
-    except Exception as e:
-        return jsonify({"ok": False, "message": f"Update error: {e}"}), 200
+    return _update_installed(kind)
 
 # ── Updates for the installers' MedSearch ────────────────────────────────────
 # The installed app has no git and no Python of its own to update: it replaces
@@ -2947,26 +2838,16 @@ def update_apply():
 # put in place once this one has quit, and Windows' Setup, which closes and
 # reopens MedSearch itself, is started as MedSearch leaves.
 GITHUB_RELEASES = "https://github.com/H4lBarAd11/MedSearch/releases/download"
-APP_ID = "com.halbarad.medsearch"
 
 class UpdateRefused(Exception):
     """Why an update cannot go ahead, in words for the user."""
 
 def _install_kind():
-    """"mac_app" or "windows_app" (the installers'), "clone" (a git checkout),
-    or "copy" (neither, which cannot update itself)."""
+    """"mac_app" or "windows_app" (the installers'), or "source" (run from the
+    code itself, which does not update itself)."""
     if getattr(sys, "frozen", False):
-        return {"darwin": "mac_app", "win32": "windows_app"}.get(sys.platform, "copy")
-    return "clone" if (APP_DIR_PATH / ".git").exists() else "copy"
-
-def _development_clone():
-    """His own clone: marked by a .development file (git-ignored), and never
-    offered the move to the installed app (his choice, 30 Sep)."""
-    return (APP_DIR_PATH / ".development").exists()
-
-def _move_possible():
-    """A Mac running from a clone that is not the development copy."""
-    return sys.platform == "darwin" and _install_kind() == "clone" and not _development_clone()
+        return {"darwin": "mac_app", "win32": "windows_app"}.get(sys.platform, "source")
+    return "source"
 
 def _asset_name(version, system=None):
     if (system or sys.platform) == "win32":
@@ -3121,103 +3002,10 @@ def _update_installed(kind):
     threading.Thread(target=_replace_and_exit, args=(plan,), daemon=True).start()
     return jsonify({"ok": True, "restarting": True, "new_version": version})
 
-# ── From a clone to the installed app (Macs) ─────────────────────────────────
-_OPENER_STUB = ("#!/bin/bash\n"
-                "# MedSearch now lives in {app}: this icon opens it.\n"
-                'exec /usr/bin/open -a "{app}" --args "$@"\n')
-
-def _bundle_id_of(bundle):
-    try:
-        with open(Path(bundle) / "Contents" / "Info.plist", "rb") as fh:
-            return plistlib.load(fh).get("CFBundleIdentifier") or ""
-    except Exception:
-        return ""
-
-def _move_target():
-    """Where the installed app goes: Applications, or the user's own
-    Applications folder when this user may not change the shared one."""
-    shared = Path("/Applications")
-    folder = shared if os.access(shared, os.W_OK) else Path.home() / "Applications"
-    target = folder / "MedSearch.app"
-    found = _bundle_id_of(target) if target.exists() else ""
-    if target.exists() and found != APP_ID and not found.endswith(".launcher"):
-        raise UpdateRefused(f"{target} is another app of the same name, which MedSearch leaves "
-                            "alone. Move it elsewhere and try again.")
-    return target
-
-def _point_launchers_at(target):
-    """The launchers that started this clone (the Desktop icon) open the
-    installed app from now on, and so does Open at login. A launcher that is
-    the target itself is replaced with it instead."""
-    for bid in (f"{i}.launcher" for i in _LAUNCHER_IDS):
-        path = _bundle_path_for(bid)
-        if path is None or Path(path) == Path(target):
-            continue
-        try:
-            exe = Path(path) / "Contents" / "MacOS" / "MedSearch"
-            exe.write_text(_OPENER_STUB.format(app=target))
-            exe.chmod(0o755)
-        except OSError as e:
-            print(f"  (couldn't point the launcher at {target}: {e})")
-    if _LOGIN_AGENT.exists():
-        _write_login_agent(["/usr/bin/open", "-b", APP_ID, "--args", "--background"])
-
-@app.route("/update/move", methods=["POST"])
-def update_move():
-    """A clone's MedSearch moves to the installed app: downloaded, put in
-    Applications, the launchers pointed at it, and opened in this one's place."""
-    if not _move_possible():
-        return jsonify({"ok": False, "message": "This MedSearch doesn't move to the installed app."}), 400
-    version = _published_version()
-    try:
-        _check_published(version)
-        target = _move_target()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory() as tmp:
-            dmg = Path(tmp) / _asset_name(version, "darwin")
-            _download(_release_url(version, "darwin"), dmg)
-            staged = _stage_mac_app(dmg, target.parent, version)
-    except (UpdateRefused, OSError) as e:
-        return jsonify({"ok": False, "message": str(e)}), 200
-    _point_launchers_at(target)
-    threading.Thread(target=_replace_and_exit, args=(("mac", staged, target),),
-                     daemon=True).start()
-    return jsonify({"ok": True, "restarting": True, "new_version": version})
-
-def _relaunch_and_exit():
-    """Start a fresh copy of MedSearch once this process has gone, then exit.
-
-    Launched from the Desktop wrapper, the app is re-opened through
-    LaunchServices (`open -b`) so it comes back as MedSearch, with its icon and
-    no Terminal. A small detached shell waits for this PID to disappear first,
-    so the new copy gets port 5050 instead of finding this one still alive.
-    """
-    time.sleep(0.4)          # let the HTTP response reach the window
-    pid = os.getpid()
-    bundle_id = _launcher_bundle_id()
-    try:
-        if os.name == "posix":
-            if sys.platform == "darwin" and bundle_id:
-                relaunch = f"open -b {shlex.quote(bundle_id)}"
-            else:
-                relaunch = (f"cd {shlex.quote(str(APP_DIR_PATH))} && exec "
-                            + " ".join(shlex.quote(a) for a in _self_command("--relaunch")))
-            script = f"while kill -0 {pid} 2>/dev/null; do sleep 0.2; done; {relaunch}"
-            subprocess.Popen(["/bin/sh", "-c", script], cwd=str(APP_DIR_PATH),
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
-        else:
-            flags = getattr(subprocess, "DETACHED_PROCESS", 0) | \
-                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            subprocess.Popen(_self_command("--relaunch"), cwd=str(APP_DIR_PATH),
-                             creationflags=flags, close_fds=True)
-    finally:
-        os._exit(0)
-
 def _self_command(*args):
-    """The command that starts this MedSearch again, without a launcher: the
-    installers' app is its own executable, a clone is Python running app.py
-    (on Windows through pythonw.exe, which opens no console window)."""
+    """The command that starts this MedSearch: the installers' app is its own
+    executable; run from source it is Python running app.py (on Windows through
+    pythonw.exe, which opens no console window)."""
     if getattr(sys, "frozen", False):
         return [sys.executable, *args]
     exe = sys.executable
@@ -3226,11 +3014,6 @@ def _self_command(*args):
         if os.path.exists(windowless):
             exe = windowless
     return [exe, str(APP_DIR_PATH / "app.py"), *args]
-
-@app.route("/app/restart", methods=["POST"])
-def app_restart():
-    threading.Thread(target=_relaunch_and_exit, daemon=True).start()
-    return jsonify({"ok": True})
 
 # Sources that must be released before any later source, so the Cochrane /
 # Guidelines / PubMed labels win the dedup exactly as they did when the
@@ -3986,8 +3769,8 @@ def export_zotero_single():
 
 # ── Open at login ────────────────────────────────────────────────────────────
 # macOS: a LaunchAgent that starts MedSearch in the menu bar, window hidden.
-# Launched through the installed launcher when there is one (so it is MedSearch
-# in the Dock, not Python), else straight from this folder. A LaunchAgent works
+# Launched through the installed MedSearch.app when that is what runs (so it is
+# MedSearch in the Dock), else straight from this folder. A LaunchAgent works
 # on every macOS the app supports; the newer login-item API needs macOS 13.
 # Windows: the same command under the user's Run key, which starts it by the
 # clock and lists it in Task Manager's Startup apps; no administrator needed.
@@ -4036,7 +3819,7 @@ def _set_open_at_login(on):
     if not on:
         _LOGIN_AGENT.unlink(missing_ok=True)
         return
-    bundle_id = _launcher_bundle_id()
+    bundle_id = _app_bundle_id()
     if bundle_id:
         args = ["/usr/bin/open", "-b", bundle_id, "--args", "--background"]
     else:
@@ -4091,8 +3874,6 @@ def settings():
                         entry["remember_signin"] = True
                     cleaned.append(entry)
             CONFIG["institution_proxies"] = cleaned
-            # keep the legacy single field in sync with the first entry
-            CONFIG["institution_proxy"] = cleaned[0]["url"] if cleaned else ""
         if "ai_monthly_cap" in data:
             try:
                 CONFIG["ai_monthly_cap"] = max(0.0, float(data["ai_monthly_cap"] or 0))
@@ -4121,13 +3902,13 @@ def settings():
             except Exception as e:
                 warning = f"Settings were saved, but opening at login couldn't be changed: {e}"
         return jsonify({"ok": True, "warning": warning} if warning else {"ok": True})
-    # Mask API keys (show only last 4 chars). Email and proxy URL aren't
-    # sensitive, so return them in full so the user can see and verify them.
+    # Mask API keys (show only last 4 chars). The email isn't sensitive, so
+    # return it in full so the user can see and verify it.
     safe = {}
     for k, v in CONFIG.items():
         if not isinstance(v, str):
             continue
-        if k in ("unpaywall_email", "institution_proxy"):
+        if k == "unpaywall_email":
             safe[k] = v
         elif len(v) > 4:
             safe[k] = "*"*(len(v)-4) + v[-4:]
@@ -4237,73 +4018,6 @@ def _post_local(port, token, path, payload):
     with urllib.request.urlopen(req, timeout=5) as r:
         return r.status == 200
 
-# ── The installed launcher (macOS) ──────────────────────────────────────────
-# MedSearch.app is a stub that runs launcher.sh from this folder (see there).
-# Launchers built before launcher.sh existed exec'd Python directly, which is
-# why macOS filed the app under "Python", and git pull never touches them. So a
-# start through one rewrites it into the stub; the next start is MedSearch.
-_LAUNCHER_STUB = (
-    "#!/bin/bash\n"
-    "# MedSearch launcher stub: the logic is in launcher.sh in the MedSearch folder.\n"
-    'exec /bin/bash "{dir}/launcher.sh" "$(cd "$(dirname "$0")/../.." && pwd)" "$@"\n')
-
-def _bundle_path_for(bundle_id):
-    """Where macOS says that bundle is, or None. Asking Launch Services keeps
-    this off the disk: searching folders for it can raise a privacy prompt,
-    since the launcher usually sits on the Desktop."""
-    try:
-        from AppKit import NSWorkspace
-        url = NSWorkspace.sharedWorkspace().URLForApplicationWithBundleIdentifier_(bundle_id)
-        return Path(str(url.path())) if url is not None else None
-    except Exception:
-        return None
-
-
-def _maintain_launcher(bundle_id, upgrade_stub):
-    """Keep the installed MedSearch.app in step with this folder: convert an
-    old-style launcher into the stub, and give it the current icon.
-
-    Neither reaches it through git: the stub and the icon live inside the bundle.
-    Its location comes from macOS, not from searching folders, so nothing else on
-    the disk is touched (the Desktop is privacy-protected, and reading around in
-    it can raise a prompt)."""
-    if sys.platform != "darwin" or getattr(sys, "frozen", False):
-        return
-    if not bundle_id or not (APP_DIR_PATH / "launcher.sh").exists():
-        return
-    try:
-        bundle = _bundle_path_for(bundle_id)
-        if bundle is None:
-            return
-        changed = False
-
-        if upgrade_stub:
-            exe = bundle / "Contents" / "MacOS" / "MedSearch"
-            text = exe.read_text()
-            # Only a launcher for THIS folder, and only the old kind.
-            if "launcher.sh" not in text and str(APP_DIR_PATH / "app.py") in text:
-                exe.write_text(_LAUNCHER_STUB.format(dir=APP_DIR_PATH))
-                exe.chmod(0o755)
-                changed = True
-                print(f"  launcher updated: {bundle}")
-
-        icon_src = APP_DIR_PATH / "icon.icns"
-        icon_dst = bundle / "Contents" / "Resources" / "MedSearch.icns"
-        if icon_src.exists() and icon_dst.exists() and icon_src.read_bytes() != icon_dst.read_bytes():
-            icon_dst.write_bytes(icon_src.read_bytes())
-            changed = True
-            print("  launcher icon updated")
-
-        if changed:
-            # Finder and the Dock cache icons per bundle; a touch plus a
-            # re-register is what makes the new one appear.
-            bundle.touch()
-            subprocess.run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/"
-                            "LaunchServices.framework/Support/lsregister", "-f", str(bundle)],
-                           capture_output=True, timeout=20)
-    except Exception as e:
-        print(f"  (couldn't update the launcher: {e})")
-
 def _screen_fit(size, minimum, available, margin=24):
     """A window no larger than the room there is: `available` is (width, height)
     of the screen without the taskbar, in the window's own units, and a margin
@@ -4361,15 +4075,6 @@ def _write_private(path, text):
 if __name__ == "__main__":
     import socket, argparse
 
-    # launcher.sh sets this to tell Python which virtual environment it runs
-    # in. It has done its job once we are here, and must not reach the
-    # processes MedSearch starts itself (pip during an update, a restart). Its
-    # absence under a MedSearch launcher means an old-style launcher, which
-    # exec'd Python directly. Keep both facts; the launcher is maintained
-    # further down, once this launch knows it is the one that stays.
-    _old_style_launcher = "__PYVENV_LAUNCHER__" not in os.environ
-    os.environ.pop("__PYVENV_LAUNCHER__", None)
-
     # Optional deep-link args: open the window straight on a search. e.g.  python3 app.py --query "glioma" --source guidelines
     _parser = argparse.ArgumentParser(add_help=False)
     _parser.add_argument("--query", default="")
@@ -4405,12 +4110,6 @@ if __name__ == "__main__":
             except Exception:
                 pass
             sys.exit(0)
-
-    # Only the launch that stays maintains the installed launcher: a launch
-    # that hands its query to a running copy has already exited above, and
-    # keeping this off that path leaves the handoff instant (it reads the
-    # bundle, compares the icon and can call lsregister).
-    _maintain_launcher(_launcher_bundle_id(), _old_style_launcher)
 
     # Find a free port (in case 5050 is taken). A relaunch waits briefly for
     # the previous copy to release 5050 rather than moving to a random port.
@@ -4489,14 +4188,16 @@ if __name__ == "__main__":
             """A window whose page process was ended loads its page again.
 
             A BLANK WINDOW, SEEN 24 SEP (macOS 27.2). About a second after the
-            launcher stub exits, loginwindow ends the XPC helpers that app still
-            has running ("still has subordinate processes … scheduling its
-            subordinates' termination"), and WebKit's helpers count as that
-            app's. If they already exist by then (a quick relaunch), the page's
-            process is gone before the first load finishes. pywebview only puts
-            the web view in the window once a load finishes, so it never gets a
-            window, and WebKit waits for it to be visible before reloading. The
-            window stays blank while the server and the menu bar item run on.
+            launcher stub of a git clone (how MedSearch ran up to 2.0) exited,
+            loginwindow ended the XPC helpers that app still had running ("still
+            has subordinate processes … scheduling its subordinates'
+            termination"), and WebKit's helpers counted as that app's. If they
+            already existed by then (a quick relaunch), the page's process was
+            gone before the first load finished. pywebview only puts the web
+            view in the window once a load finishes, so it never got a window,
+            and WebKit waits for it to be visible before reloading. The window
+            stayed blank while the server and the menu bar item ran on. Any
+            page process that dies the same way is answered the same way.
 
             Answering the navigation delegate's "the content process ended" is
             how WebKit expects a client to recover. A subclass of pywebview's

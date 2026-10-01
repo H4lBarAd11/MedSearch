@@ -139,7 +139,7 @@ let _lastUpdateCheck = 0;
 // window speaks only to offer an update that was not put off today.
 function updateVerdict(data, manual) {
   if (!data || !data.ok) return manual ? 'unreachable' : null;
-  if (!data.update_available && !data.move) return manual ? 'latest' : null;
+  if (!data.update_available) return manual ? 'latest' : null;
   return (manual || !data.deferred) ? 'offer' : null;
 }
 
@@ -190,16 +190,6 @@ function showUpdateOffer(data) {
   const notes = (data.changes || []).length
     ? `<ul class="update-changes">${data.changes.map(c => `<li>${escHtml(c)}</li>`).join('')}</ul>`
     : '';
-  if (data.move) {
-    // A Mac running from a clone: the installed app takes over from here (his choice, 30 Sep).
-    document.getElementById('updateTitle').textContent = `MedSearch ${data.remote}: now a regular app`;
-    actions.innerHTML = '<button class="btn-secondary" onclick="closeUpdate()">Later</button>'
-      + '<button class="btn-primary" id="updateNowBtn" onclick="applyUpdate(\'/update/move\')">Move to it</button>';
-    text.innerHTML = `Future updates install themselves.${notes}`;
-    _updateOffered = data.remote;
-    openOverlay('updateOverlay');
-    return;
-  }
   actions.innerHTML = '<button class="btn-secondary" onclick="closeUpdate()">Later</button>'
     + (data.can_apply ? '<button class="btn-primary" id="updateNowBtn" onclick="applyUpdate()">Update now</button>' : '');
   if (data.can_apply) {
@@ -207,24 +197,12 @@ function showUpdateOffer(data) {
       <span class="ver">${escHtml(data.local)}</span> → <span class="ver">${escHtml(data.remote)}</span>
       ${notes}`;
   } else {
-    // Neither installed nor a git clone: it can't replace itself.
+    // Run from source: it can't replace itself.
     text.innerHTML = `A new version (<span class="ver">${escHtml(data.remote)}</span>) is available, but this copy can't update itself.${notes}<br><br>
       Download it from <span class="mono">github.com/H4lBarAd11/MedSearch</span>.`;
   }
   _updateOffered = data.remote;
   openOverlay('updateOverlay');
-}
-
-// The server starts a fresh copy once this one has exited, so the window
-// closes and reopens on its own.
-function restartApp() {
-  document.getElementById('updateActions').style.display = 'none';
-  document.getElementById('updateProgress').style.display = 'flex';
-  document.getElementById('updateProgressText').textContent = 'Restarting MedSearch…';
-  fetch('/app/restart', {method: 'POST'})
-    .then(r => r.json())
-    .then(d => { if (!d.ok) fail(d.message || 'Please quit and reopen MedSearch.', "Couldn't restart"); })
-    .catch(() => { /* the server went away mid-response: that is the restart */ });
 }
 
 // Closing the offer without updating, by Later or Escape, puts it off for the day.
@@ -241,16 +219,16 @@ function closeUpdate() {
 
 // A failed update keeps the offer, so closing its message puts it off for the
 // day as Later does, instead of it coming back each time the window does.
-// An installed MedSearch (and a clone moving to it) is replaced and reopened
-// by itself once the server answers: the window then only says so, and goes.
-function applyUpdate(route) {
+// MedSearch is replaced and reopened by itself once the server answers: the
+// window then only says so, and goes.
+function applyUpdate() {
   const offered = _updateOffered;
   _updateOffered = null;
   document.getElementById('updateActions').style.display = 'none';
   document.getElementById('updateProgress').style.display = 'flex';
   document.getElementById('updateProgressText').textContent = 'Downloading update…';
 
-  fetch(route || '/update/apply', {method: 'POST'})
+  fetch('/update/apply', {method: 'POST'})
     .then(r => r.json())
     .then(data => {
       const prog = document.getElementById('updateProgress');
@@ -262,24 +240,10 @@ function applyUpdate(route) {
         return;
       }
       if (data.ok) {
+        // Nothing to replace: this already is the published version.
         prog.style.display = 'none';
-        if (data.unchanged) {
-          title.textContent = 'Already up to date';
-          text.innerHTML = escHtml(data.message || `You're on the latest version.`);
-        } else {
-          title.textContent = 'Update complete';
-          if (data.can_restart) {
-            text.innerHTML = `Updated to <span class="ver">${escHtml(data.new_version)}</span>.<br><br>
-              MedSearch needs to restart to use it. It takes a few seconds.`;
-            document.getElementById('updateActions').style.display = 'flex';
-            document.getElementById('updateActions').innerHTML =
-              '<button class="btn-secondary" onclick="closeUpdate()">Later</button>' +
-              '<button class="btn-primary" onclick="restartApp()">Restart now</button>';
-            return;
-          }
-          text.innerHTML = `Updated to <span class="ver">${escHtml(data.new_version)}</span>.<br><br>
-            Please <strong>close and reopen MedSearch</strong> to use the new version.`;
-        }
+        title.textContent = 'Already up to date';
+        text.innerHTML = escHtml(data.message || `You're on the latest version.`);
         document.getElementById('updateActions').style.display = 'flex';
         document.getElementById('updateActions').innerHTML =
           '<button class="btn-primary" onclick="closeUpdate()">Got it</button>';

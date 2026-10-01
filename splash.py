@@ -17,11 +17,12 @@ is the real window made visible underneath, identical, while the splash fades
 off. Resizing the real window instead would lay the page out on every frame.
 
 DRAWN BY CORE ANIMATION, NOT IN A WEB PAGE. BIDS's splash is a page in a
-transparent window. MedSearch's cannot be: about a second after its launcher
-stub exits, macOS's loginwindow ends the web helper processes the app has
-running at that moment (see `_reload_when_the_page_dies` in app.py), which is
-exactly while a splash is on screen. Layers drawn by the app's own process and
-the window server are not touched by that, so the splash is layers.
+transparent window. MedSearch's was not, because of what a git clone's
+launcher stub did (up to 2.0): about a second after the stub exited, macOS's
+loginwindow ended the web helper processes the app had running at that moment
+(see `_reload_when_the_page_dies` in app.py), which is exactly while a splash is
+on screen. Layers drawn by the app's own process and the window server are not
+touched by that, so the splash is layers.
 
 Nothing here decides when MedSearch is ready: the page says so (`ready`, set by
 app.py's `page_ready`).
