@@ -10,6 +10,9 @@ one line per change, in plain words, no internals.
 - OpenAlex and CORE work without a key. A free key from either, added in Settings, lets it answer more searches a day or a minute.
 - Search by DOI asks the new databases as well, each by its own DOI field. IEEE Xplore is asked only about IEEE's own DOIs, as its key allows 200 calls a day.
 - Google Scholar: Search Google Scholar, at the bottom of the Databases panel, opens Scholar in its own window with your search and years filled in. Scholar can't be searched from another app, so its results are not added to the list.
+- Search by author and by institution, under Options. Type a name and pick it from OpenAlex's suggestions, which show each person's institution, number of papers and ORCID. OpenAlex then finds exactly that person or institution; the other databases match the name as written, with the ORCID where they keep it, and miss papers that spell it differently. A name you don't pick is searched as typed.
+- With an author or an institution set, the search box can be left empty: the search lists everything by them. Each one in use shows as a chip beside the search bar, and its cross removes it. Saved searches keep both, and Search Google Scholar passes the author on.
+- A database that keeps no authors (Semantic Scholar) or no institutions (arXiv, CORE, Crossref, Semantic Scholar) says so and is left out of such a search, rather than show papers that don't match.
 - Citations: the papers that cite a paper now come from OpenAlex too, with no key, alongside PubMed, Scopus and OpenCitations. OpenAlex often finds many that the others miss.
 
 ## 2.0

@@ -2178,6 +2178,27 @@ button.mesh-tag { font: inherit; font-size: 0.8rem; }
 .sources-chip:hover, .sources-chip.on { border-color: var(--accent); color: var(--text); }
 .sources-chip.empty { border-color: var(--red); color: var(--red); }
 
+/* Author and institution: OpenAlex's suggestions open under the field, in
+   the panel's flow (a floating list would be cut by the panel's scroll), and
+   each filter in use is a chip in the top bar, in the sources chip's style. */
+.people-list {
+  margin-top: 4px; padding: 3px; max-height: 232px; overflow-y: auto;
+  border: 1px solid var(--border2); border-radius: var(--radius); background: var(--bg2);
+}
+.people-option { padding: 6px 8px; border-radius: 3px; cursor: pointer; }
+.people-option:hover, .people-option.active { background: var(--bg3); }
+.people-option-name { font-size: 0.82rem; color: var(--text); }
+.people-option-hint { font-size: 0.7rem; color: var(--text3); margin-top: 1px; }
+.people-note { font-size: 0.74rem; color: var(--text3); padding: 6px 8px; line-height: 1.4; }
+.people-chips { display: contents; }
+.sources-chip.people-chip { max-width: 190px; padding: 0 5px 0 0; gap: 0; cursor: default; }
+.people-chip button { background: none; border: 0; font: inherit; color: inherit; cursor: pointer; }
+.people-chip-name { min-width: 0; padding: 7px 3px 7px 11px; }
+.people-chip-name span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.people-chip-x { display: inline-flex; padding: 4px; border-radius: 3px; }
+.people-chip-x:hover { background: var(--bg3); color: var(--text); }
+.people-chip-x .ico { width: 12px; height: 12px; }
+
 .status-hud {
   top: 72px;
   display: flex; align-items: center; gap: 8px;
@@ -2247,6 +2268,8 @@ button.mesh-tag { font: inherit; font-size: 0.8rem; }
   display: grid; grid-template-columns: auto 1fr; gap: 10px 14px; align-items: center;
 }
 .opt-grid .filter-label { margin: 0; }
+/* With the suggestions open, the label stays level with its field, not the list. */
+.opt-grid .people-label { align-self: start; margin-top: 9px; }
 .opt-grid .filter-row { margin: 0; }
 .opt-grid .search-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0; }
 .syntax-help { margin-top: 14px; font-size: 0.78rem; color: var(--text2); }
