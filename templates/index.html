@@ -21,6 +21,8 @@
     activeProxy:        {{ active_proxy | tojson }},
     hasScopus:          {{ 'true' if has_scopus else 'false' }},
     hasWos:             {{ 'true' if has_wos else 'false' }},
+    hasIeee:            {{ 'true' if has_ieee else 'false' }},
+    hasSemanticscholar: {{ 'true' if has_semanticscholar else 'false' }},
     aiOn:               {{ 'true' if ai_on else 'false' }},
     hasAiKey:           {{ 'true' if has_ai_key else 'false' }},
   };
@@ -179,6 +181,26 @@
       <span class="db-name">arXiv</span>
       <span class="db-badge free">Free</span>
     </div>
+    <div class="db-item{{ ' checked' if 'europepmc' in sources }}" data-db="europepmc">
+      <div class="db-check"></div>
+      <span class="db-name">Europe PMC</span>
+      <span class="db-badge free">Free</span>
+    </div>
+    <div class="db-item{{ ' checked' if 'openalex' in sources }}" data-db="openalex">
+      <div class="db-check"></div>
+      <span class="db-name">OpenAlex</span>
+      <span class="db-badge free">Free</span>
+    </div>
+    <div class="db-item{{ ' checked' if 'crossref' in sources }}" data-db="crossref">
+      <div class="db-check"></div>
+      <span class="db-name">Crossref</span>
+      <span class="db-badge free">Free</span>
+    </div>
+    <div class="db-item{{ ' checked' if 'core' in sources }}" data-db="core">
+      <div class="db-check"></div>
+      <span class="db-name">CORE</span>
+      <span class="db-badge free">Free</span>
+    </div>
     <div class="db-item{{ ' checked' if 'scopus' in sources and has_scopus }}" data-db="scopus" data-needs-key="scopus">
       <div class="db-check"></div>
       <span class="db-name">Scopus</span>
@@ -188,6 +210,16 @@
       <div class="db-check"></div>
       <span class="db-name">Web of Science</span>
       <span class="db-badge {{ 'available' if has_wos else 'needs-key' }}" id="badge_wos">{{ 'Available' if has_wos else 'API required' }}</span>
+    </div>
+    <div class="db-item{{ ' checked' if 'ieee' in sources and has_ieee }}" data-db="ieee" data-needs-key="ieee">
+      <div class="db-check"></div>
+      <span class="db-name">IEEE Xplore</span>
+      <span class="db-badge {{ 'available' if has_ieee else 'needs-key' }}" id="badge_ieee">{{ 'Available' if has_ieee else 'API required' }}</span>
+    </div>
+    <div class="db-item{{ ' checked' if 'semanticscholar' in sources and has_semanticscholar }}" data-db="semanticscholar" data-needs-key="semanticscholar">
+      <div class="db-check"></div>
+      <span class="db-name">Semantic Scholar</span>
+      <span class="db-badge {{ 'available' if has_semanticscholar else 'needs-key' }}" id="badge_semanticscholar">{{ 'Available' if has_semanticscholar else 'API required' }}</span>
     </div>
   </div>
   <button class="select-all-btn" id="selectAllBtn">Select all</button>
@@ -367,6 +399,22 @@
       <div class="settings-field">
         <label>Web of Science API key</label>
         <input type="password" id="set_wos" placeholder="apply at developer.clarivate.com">
+      </div>
+      <div class="settings-field">
+        <label>IEEE Xplore API key</label>
+        <input type="password" id="set_ieee" placeholder="get free at developer.ieee.org">
+      </div>
+      <div class="settings-field">
+        <label>Semantic Scholar API key</label>
+        <input type="password" id="set_semanticscholar" placeholder="apply free at semanticscholar.org/product/api">
+      </div>
+      <div class="settings-field">
+        <label>OpenAlex API key <span style="font-weight:normal;color:var(--text3)">— optional, ten times more searches a day</span></label>
+        <input type="password" id="set_openalex" placeholder="get free at openalex.org">
+      </div>
+      <div class="settings-field">
+        <label>CORE API key <span style="font-weight:normal;color:var(--text3)">— optional, more searches a minute</span></label>
+        <input type="password" id="set_core" placeholder="get free at core.ac.uk/services/api">
       </div>
       <div class="settings-field">
         <label>Email for Unpaywall (open-access lookup)</label>

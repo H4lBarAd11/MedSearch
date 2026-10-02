@@ -19,6 +19,12 @@ SOURCES = [
     ("arxiv",          "arXiv"),
     ("scopus",         "Scopus"),
     ("wos",            "Web of Science"),
+    ("europepmc",      "Europe PMC"),
+    ("openalex",       "OpenAlex"),
+    ("crossref",       "Crossref"),
+    ("core",           "CORE"),
+    ("ieee",           "IEEE Xplore"),
+    ("semanticscholar", "Semantic Scholar"),
     ("all",            "All sources"),
 ]
 LABELS = dict(SOURCES)

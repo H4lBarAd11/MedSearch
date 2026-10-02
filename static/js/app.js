@@ -38,7 +38,7 @@ const ONBOARD_CONTENT = {
         ],
       },
     ],
-    note: '<strong>Optional keys:</strong> Scopus, Web of Science and a PubMed key add more sources and higher limits — but everything works without them.',
+    note: '<strong>Optional keys:</strong> Scopus, Web of Science, IEEE Xplore and Semantic Scholar need a key to be searched; keys for PubMed, OpenAlex and CORE raise their limits. Everything else works without them.',
     note2: '<strong>Scopus &amp; Web of Science:</strong> these only work from your <strong>institution\'s network</strong>. From home, connect to your university VPN, or ask your library for an Elsevier "institutional token" and add it in Settings. If you see a 401 error, you\'re off-network.',
   },
   it: {
@@ -74,7 +74,7 @@ const ONBOARD_CONTENT = {
         ],
       },
     ],
-    note: '<strong>Chiavi opzionali:</strong> Scopus, Web of Science e una chiave PubMed aggiungono più fonti e limiti più alti — ma tutto funziona anche senza.',
+    note: '<strong>Chiavi opzionali:</strong> Scopus, Web of Science, IEEE Xplore e Semantic Scholar richiedono una chiave per essere cercati; le chiavi di PubMed, OpenAlex e CORE alzano i loro limiti. Tutto il resto funziona anche senza.',
     note2: '<strong>Scopus e Web of Science:</strong> funzionano solo dalla <strong>rete della tua istituzione</strong>. Da casa, connettiti alla VPN dell\'università, oppure chiedi alla biblioteca un "institutional token" Elsevier e inseriscilo nelle Impostazioni. Se vedi un errore 401, sei fuori dalla rete.',
   },
 };
@@ -536,13 +536,15 @@ function setSortMode(mode, suppressRerun) {
 // ── DB checkboxes ─────────────────────────────────────────────────────────
 // Which premium DBs currently have a key (set at render, updated on save)
 let dbKeyPresent = {
-  scopus: MS.hasScopus,
-  wos:    MS.hasWos,
+  scopus:          MS.hasScopus,
+  wos:             MS.hasWos,
+  ieee:            MS.hasIeee,
+  semanticscholar: MS.hasSemanticscholar,
 };
 
 document.querySelectorAll('.db-item').forEach(item => {
   item.addEventListener('click', () => {
-    const needsKey = item.dataset.needsKey;   // 'scopus' | 'wos' | undefined
+    const needsKey = item.dataset.needsKey;   // a key of dbKeyPresent, or undefined
     const turningOn = !item.classList.contains('checked');
     // If enabling a premium DB with no key, prompt gently instead of checking
     if (turningOn && needsKey && !dbKeyPresent[needsKey]) {
@@ -588,7 +590,9 @@ function getSelectedDBs() {
 // The chip beside Search always says what will be searched: "PubMed + 2".
 const _DB_SHORT = {pubmed: 'PubMed', cochrane: 'Cochrane', guidelines: 'Guidelines',
                    clinicaltrials: 'ClinicalTrials.gov', arxiv: 'arXiv', scopus: 'Scopus',
-                   wos: 'Web of Science'};
+                   wos: 'Web of Science', europepmc: 'Europe PMC', openalex: 'OpenAlex',
+                   crossref: 'Crossref', core: 'CORE', ieee: 'IEEE Xplore',
+                   semanticscholar: 'Semantic Scholar'};
 function updateSourcesSummary() {
   const dbs = getSelectedDBs();
   const label = document.getElementById('dockSourcesLabel');
@@ -624,6 +628,24 @@ const DB_KEY_INFO = {
       'Paste it into <strong>Settings</strong> (bottom bar) → Web of Science, and Save.',
     ],
   },
+  ieee: {
+    name: 'IEEE Xplore',
+    intro: 'IEEE Xplore is the engineering and computing library of the IEEE. To search it, you need a free API key:',
+    steps: [
+      'Go to <a href="https://developer.ieee.org" target="_blank">developer.ieee.org</a>, register and request a key for the Metadata Search API.',
+      'Once it is active (this can take a while), copy the key.',
+      'Paste it into <strong>Settings</strong> (bottom bar) → IEEE Xplore, and Save.',
+    ],
+  },
+  semanticscholar: {
+    name: 'Semantic Scholar',
+    intro: 'Semantic Scholar refuses most searches made without a key. The key is free:',
+    steps: [
+      'Fill in the request form at <a href="https://www.semanticscholar.org/product/api" target="_blank">semanticscholar.org/product/api</a>.',
+      'Semantic Scholar sends the key by email.',
+      'Paste it into <strong>Settings</strong> (bottom bar) → Semantic Scholar, and Save.',
+    ],
+  },
 };
 
 function showApiKeyPrompt(dbKey) {
@@ -644,13 +666,16 @@ function goToSettingsFromPrompt() {
   openSettings();
 }
 
-// Refresh the Scopus/WoS badges + internal state after settings are saved
-function refreshDbKeyBadges(scopusPresent, wosPresent) {
-  dbKeyPresent.scopus = !!scopusPresent;
-  dbKeyPresent.wos = !!wosPresent;
-  const map = {scopus: 'badge_scopus', wos: 'badge_wos'};
-  for (const [k, id] of Object.entries(map)) {
-    const badge = document.getElementById(id);
+// The settings that hold the key each database needs.
+const DB_KEY_SETTING = {scopus: 'scopus_api_key', wos: 'wos_api_key', ieee: 'ieee_api_key',
+                        semanticscholar: 'semantic_scholar_api_key'};
+
+// Refresh the badges of the databases that need a key, and the internal state,
+// from the settings as /settings returns them (masked: only whether each is set).
+function refreshDbKeyBadges(settings) {
+  for (const [k, setting] of Object.entries(DB_KEY_SETTING)) {
+    dbKeyPresent[k] = !!(settings && settings[setting]);
+    const badge = document.getElementById('badge_' + k);
     if (!badge) continue;
     if (dbKeyPresent[k]) {
       badge.textContent = 'Available';
@@ -2106,6 +2131,10 @@ async function openSettings() {
     scopus_api_key:    'set_scopus',
     scopus_insttoken:  'set_scopus_insttoken',
     wos_api_key:       'set_wos',
+    ieee_api_key:      'set_ieee',
+    semantic_scholar_api_key: 'set_semanticscholar',
+    openalex_api_key:  'set_openalex',
+    core_api_key:      'set_core',
     unpaywall_email:   'set_email',
   };
   // Reset all to their original placeholders first
@@ -2345,6 +2374,10 @@ async function saveSettings() {
     scopus_api_key:    document.getElementById('set_scopus').value.trim(),
     scopus_insttoken:  document.getElementById('set_scopus_insttoken').value.trim(),
     wos_api_key:       document.getElementById('set_wos').value.trim(),
+    ieee_api_key:      document.getElementById('set_ieee').value.trim(),
+    semantic_scholar_api_key: document.getElementById('set_semanticscholar').value.trim(),
+    openalex_api_key:  document.getElementById('set_openalex').value.trim(),
+    core_api_key:      document.getElementById('set_core').value.trim(),
     unpaywall_email:   document.getElementById('set_email').value.trim(),
   };
   // Only send fields the user actually filled in, so blank fields don't
@@ -2384,10 +2417,10 @@ async function saveSettings() {
   savedProxies = cleanProxies;
   institutionProxies = buildInstitutions();
   renderProxyPicker();
-  // Refresh the Scopus/WoS badges to reflect any newly-added (or removed) keys
+  // Refresh the badges of the keyed databases for any newly-added (or removed) keys
   try {
     const s = await (await fetch('/settings')).json();
-    refreshDbKeyBadges(!!(s.scopus_api_key), !!(s.wos_api_key));
+    refreshDbKeyBadges(s);
   } catch(e) {}
   closeSettings();
   showToast('Settings saved.', 'green');
