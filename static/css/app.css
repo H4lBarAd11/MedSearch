@@ -2201,6 +2201,8 @@ button.mesh-tag { font: inherit; font-size: 0.8rem; }
 .people-chips { display: contents; }
 .sources-chip.people-chip { max-width: 190px; padding: 0 5px 0 0; gap: 0; cursor: default; }
 .people-chip button { background: none; border: 0; font: inherit; color: inherit; cursor: pointer; }
+/* Inside the chip's frame a press does not shrink (as the order switch). */
+.sources-chip.people-chip button:active { transform: none; }
 .people-chip-name { min-width: 0; padding: 7px 3px 7px 11px; }
 .people-chip-name span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .people-chip-x { display: inline-flex; padding: 4px; border-radius: 3px; }

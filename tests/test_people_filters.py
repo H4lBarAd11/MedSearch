@@ -24,15 +24,17 @@ def institution_names(monkeypatch):
     """OpenAlex knows I900 by three names; every lookup is counted."""
     asked = []
 
-    def get(path, params, missing=None):
+    def get(path, params, missing=None, timeout=None):
         asked.append(path)
         return {"display_name": "Example University Hospital",
                 "display_name_alternatives": ["Ospedale Universitario Esempio", "EUH",
                                               "example university hospital"]}
     monkeypatch.setattr(A, "_openalex_get", get)
     A._INSTITUTION_NAMES.clear()
+    A._INSTITUTION_UNKNOWN.clear()
     yield asked
     A._INSTITUTION_NAMES.clear()
+    A._INSTITUTION_UNKNOWN.clear()
 
 
 @pytest.fixture
@@ -121,12 +123,25 @@ def test_a_picked_institution_goes_by_all_its_names_asked_once(institution_names
 
 def test_an_institution_openalex_cannot_describe_is_searched_by_its_name(monkeypatch):
     A._INSTITUTION_NAMES.clear()
+    A._INSTITUTION_UNKNOWN.clear()
+    asked, clock = [], [1000.0]
 
-    def down(*a, **k):
+    def down(path, params, missing=None, timeout=None):
+        asked.append(timeout)
         raise RuntimeError("OpenAlex didn't respond.")
     monkeypatch.setattr(A, "_openalex_get", down)
-    inst = A.people_filter(None, {"name": "Example Hospital", "openalex": "I901"})["institution"]
+    monkeypatch.setattr(A.time, "monotonic", lambda: clock[0])
+    pick = {"name": "Example Hospital", "openalex": "I901"}
+    inst = A.people_filter(None, pick)["institution"]
     assert inst["names"] == ["Example Hospital"] and "I901" not in A._INSTITUTION_NAMES
+    assert asked == [6]                       # every search waits for it: never long
+    clock[0] += 60
+    A.people_filter(None, pick)
+    assert asked == [6]                       # a minute later it is not asked again
+    clock[0] += A._INSTITUTION_RETRY
+    A.people_filter(None, pick)
+    assert asked == [6, 6]                    # after a few minutes it is
+    A._INSTITUTION_UNKNOWN.clear()
 
 
 @pytest.mark.parametrize("person, wrote", [
@@ -327,6 +342,29 @@ def test_words_and_filters_are_described_and_the_words_kept_in_history(client, a
     assert asked[0][2]["institution"]["names"] == ["Example Hospital"]
 
 
+def test_find_more_is_not_refused_when_openalex_answers_the_second_time(client, auth, monkeypatch):
+    """The names OpenAlex adds to a picked institution must not make "Find
+    more" think the search changed."""
+    _fake_sources(monkeypatch, [])
+    A._INSTITUTION_NAMES.clear()
+    A._INSTITUTION_UNKNOWN.clear()
+    answers = [RuntimeError("down"), {"display_name": "Example Hospital",
+                                      "display_name_alternatives": ["Ospedale Esempio"]}]
+
+    def get(path, params, missing=None, timeout=None):
+        a = answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+    monkeypatch.setattr(A, "_openalex_get", get)
+    monkeypatch.setattr(A, "_INSTITUTION_RETRY", 0)
+    pick = {"name": "Example Hospital", "openalex": "I9"}
+    _search(client, auth, institution=pick)
+    events = _search(client, auth, institution=pick, load_more=True)
+    assert events[0]["type"] != "error" and answers == []
+    A._INSTITUTION_NAMES.clear()
+
+
 def test_load_more_for_another_author_is_refused(client, auth, monkeypatch):
     _fake_sources(monkeypatch, [])
     _search(client, auth, author={"name": "Jane Doe"})
@@ -469,3 +507,11 @@ def test_typing_over_a_picked_name_makes_it_a_typed_one():
     assert "people[kind] = text ? {name: text} : null;" in listener
     assert re.search(r"e\.key === 'Escape' && !list\.hidden\) \{\s*e\.preventDefault\(\); e\.stopPropagation\(\);",
                      listener)     # Escape closes the list, not the whole Options panel
+
+
+def test_typing_in_one_field_never_cancels_the_others_suggestions():
+    for name in ("_suggestTimer", "_suggestAsked"):
+        assert re.search(rf"const {name} = \{{author: \w+, institution: \w+\}};", JS), name
+    listener = re.search(r"document\.querySelectorAll\('\.people-input'\)\.forEach.*?\n\}\);", JS, re.S).group(0)
+    assert "clearTimeout(_suggestTimer[kind]);" in listener
+    assert "_suggestAsked[kind]" in js_function("askSuggestions")

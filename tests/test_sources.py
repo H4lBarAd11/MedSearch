@@ -84,3 +84,9 @@ def test_the_order_switch_is_two_equal_halves_that_do_not_move_when_pressed():
     assert "flex: 1 1 0;" in opt                       # equal halves, whatever the word's weight
     assert "transition: all" not in opt                # nothing but colour animates
     assert re.search(r"\.sort-toggle \.sort-opt:active \{ transform: none; \}", css)
+
+
+def test_a_button_inside_a_chips_frame_does_not_shrink_when_pressed():
+    css = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")
+    # More specific than the press rule every other button follows.
+    assert re.search(r"\.sources-chip\.people-chip button:active \{ transform: none; \}", css)

@@ -1472,6 +1472,8 @@ _OPENALEX_ID = {"author": re.compile(r"^A\d{1,12}$"), "institution": re.compile(
 _NAME_PARTICLES = {"van", "von", "der", "den", "de", "del", "della", "dei", "degli", "di", "da",
                    "dos", "das", "do", "du", "le", "la", "ter", "ten", "bin", "al", "el"}
 _INSTITUTION_NAMES = {}     # OpenAlex id -> the names it goes by (a free lookup)
+_INSTITUTION_UNKNOWN = {}   # OpenAlex id -> when the lookup last failed (time.monotonic)
+_INSTITUTION_RETRY = 300    # seconds before a failed lookup is tried again
 
 def _query_safe(text):
     """Text that can sit inside any source's query: no quotes or brackets."""
@@ -1497,11 +1499,16 @@ def _institution_names(oid, name):
     others it lists (up to six). Only the given name if OpenAlex can't say."""
     if oid in _INSTITUTION_NAMES:
         return _INSTITUTION_NAMES[oid]
+    # Every search waits for this lookup, so a failed one is not tried again
+    # for a few minutes, and no lookup waits long.
+    if time.monotonic() - _INSTITUTION_UNKNOWN.get(oid, -_INSTITUTION_RETRY) < _INSTITUTION_RETRY:
+        return [name]
     try:
         inst = _openalex_get(f"/institutions/{oid}",
-                             {"select": "display_name,display_name_alternatives"})
+                             {"select": "display_name,display_name_alternatives"}, timeout=6)
     except Exception:
-        return [name]                       # not kept: asked again next time
+        _INSTITUTION_UNKNOWN[oid] = time.monotonic()
+        return [name]                       # not kept: asked again later
     names = []
     for n in [name, inst.get("display_name")] + list(inst.get("display_name_alternatives") or []):
         n = _query_safe(n)
@@ -2112,13 +2119,13 @@ _OPENALEX_FIELDS = ("id,doi,display_name,publication_year,authorships,primary_lo
                     "abstract_inverted_index,cited_by_count,ids,type,is_retracted,locations")
 _OPENALEX_TYPES = {"review": ["Review"], "preprint": ["Preprint"]}
 
-def _openalex_get(path, params, missing=None):
+def _openalex_get(path, params, missing=None, timeout=TIMEOUT):
     """One OpenAlex answer as JSON. Raises, saying why, when refused; a 404
     raises SourceCannotAnswer(missing) when the caller says what it means."""
     if _key("openalex_api_key"):
         params = dict(params, api_key=_key("openalex_api_key"))
     data, status = fetch_json(f"{OPENALEX}{path}?{urllib.parse.urlencode(params)}",
-                              error_body=True)
+                              timeout=timeout, error_body=True)
     if status == 200 and isinstance(data, dict):
         return data
     if status == 404 and missing:
@@ -2235,7 +2242,12 @@ def openalex_suggest(kind, q):
     return items[:8]
 
 def openalex_by_dois(dois):
-    """The OpenAlex records of these DOIs (free: a lookup, not a search)."""
+    """The OpenAlex records of these DOIs (free: a lookup, not a search). A
+    comma separates OpenAlex's filters and a bar its alternatives, so a DOI
+    holding either can't be asked for."""
+    dois = [d for d in dois if "," not in d and "|" not in d]
+    if not dois:
+        raise SourceCannotAnswer("OpenAlex can't be asked for a DOI that holds a comma or a bar.")
     data = _openalex_get("/works", {"filter": "doi:" + "|".join(dois),
                                     "per-page": min(2 * len(dois), 200),
                                     "select": _OPENALEX_FIELDS})
@@ -3863,7 +3875,10 @@ def search_stream():
     # An author or an institution narrows the search; either alone, with the
     # box empty, lists their papers.
     people  = people_filter(data.get("author"), data.get("institution"))
-    search_key = json.dumps([query, people], sort_keys=True)
+    # "Find more" must ask for the same search: compared as the window asked
+    # for it, not with the names OpenAlex adds, which may come and go.
+    search_key = json.dumps([query, _saved_person(data.get("author"), "author"),
+                             _saved_person(data.get("institution"), "institution")], sort_keys=True)
 
     def one_event(obj):
         return Response(_sse(obj), mimetype="text/event-stream")
@@ -4822,6 +4837,8 @@ def saved_list():
 def _saved_person(given, kind):
     """What a saved search keeps of an author or institution: the name and,
     when picked from the suggestions, OpenAlex's ids and the ORCID."""
+    if isinstance(given, str):
+        given = {"name": given}
     if not isinstance(given, dict) or not _query_safe(given.get("name")):
         return None
     kept = {"name": _query_safe(given.get("name"))}

@@ -496,7 +496,9 @@ const people = {author: null, institution: null};
 const PEOPLE_LABEL = {author: 'Author', institution: 'Institution'};
 const _suggested = {author: [], institution: []};
 const _activeOption = {author: -1, institution: -1};
-let _suggestTimer = null, _suggestAsked = 0;
+// Per field, so typing in one never cancels the other's suggestions.
+const _suggestTimer = {author: null, institution: null};
+const _suggestAsked = {author: 0, institution: 0};
 
 function setPerson(kind, value) {
   people[kind] = value && value.name ? value : null;
@@ -574,7 +576,7 @@ function pickSuggestion(kind, i) {
 }
 
 async function askSuggestions(kind, text) {
-  const asked = ++_suggestAsked;
+  const asked = ++_suggestAsked[kind];
   let data;
   try {
     data = await (await fetch(`/people/suggest?kind=${kind}&q=${encodeURIComponent(text)}`)).json();
@@ -582,7 +584,7 @@ async function askSuggestions(kind, text) {
     data = {ok: false, message: 'MedSearch did not answer.'};
   }
   // Only the answer to the latest keystroke is shown.
-  if (asked !== _suggestAsked || document.getElementById(kind + 'Input').value.trim() !== text) return;
+  if (asked !== _suggestAsked[kind] || document.getElementById(kind + 'Input').value.trim() !== text) return;
   showSuggestions(kind, data);
 }
 
@@ -593,9 +595,9 @@ document.querySelectorAll('.people-input').forEach(input => {
     // Typing changes what is searched: a picked name typed over is a typed one.
     people[kind] = text ? {name: text} : null;
     renderPeopleChips();
-    clearTimeout(_suggestTimer);
+    clearTimeout(_suggestTimer[kind]);
     if (text.length < 2) { hideSuggestions(kind); return; }
-    _suggestTimer = setTimeout(() => askSuggestions(kind, text), 250);
+    _suggestTimer[kind] = setTimeout(() => askSuggestions(kind, text), 250);
   });
   input.addEventListener('keydown', e => {
     const list = document.getElementById(kind + 'List');
