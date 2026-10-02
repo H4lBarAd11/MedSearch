@@ -211,6 +211,73 @@ def test_a_failed_cited_in_lookup_is_a_failure_with_its_reason(monkeypatch, no_e
     assert "cited-in" in rep["error"] and "502" in rep["error"]
 
 
+def openalex_knows(works_citing, total=None):
+    """A fake OpenAlex that has LANDMARK as W900 and answers its cites: list
+    from `works_citing` = [(doi, year)]; returns the parameters of each call."""
+    calls = []
+
+    def answer(url):
+        parts = urllib.parse.urlsplit(url)
+        params = dict(urllib.parse.parse_qsl(parts.query))
+        calls.append((urllib.parse.unquote(parts.path), params))
+        if parts.path.startswith("/works/doi:"):
+            if urllib.parse.unquote(parts.path) != f"/works/doi:{LANDMARK}":
+                return {"error": "Not found"}, 404
+            return {"id": "https://openalex.org/W900"}, 200
+        per, page = int(params["per-page"]), int(params["page"])
+        chunk = works_citing[(page - 1) * per:page * per]
+        return {"meta": {"count": len(works_citing) if total is None else total},
+                "results": [{"id": f"https://openalex.org/W{i}", "doi": f"https://doi.org/{d}",
+                             "display_name": f"Cites it {d}", "publication_year": y}
+                            for i, (d, y) in enumerate(chunk)]}, 200
+    return calls, answer
+
+
+def test_openalex_finds_the_paper_free_then_lists_who_cites_it_newest_first(monkeypatch, no_enrich):
+    calls, answer = openalex_knows([("10.1/oa-only", 2024), ("10.1/both", 2020)])
+    route(monkeypatch, [("api.openalex.org", answer)])
+    out = A.cited_by(LANDMARK, sources=["openalex"])
+    assert calls[0] == (f"/works/doi:{LANDMARK}", {"select": "id"})
+    path, params = calls[1]
+    assert path == "/works" and params["filter"] == "cites:W900"
+    assert (params["sort"], params["per-page"], params["page"]) == ("publication_date:desc", "200", "1")
+    assert [a["doi"] for a in out["articles"]] == ["10.1/oa-only", "10.1/both"]
+    assert all(a["found_in"] == ["OpenAlex"] for a in out["articles"])
+    assert out["sources"]["openalex"] == dict(out["sources"]["openalex"], status="ok", count=2, total=2)
+
+
+def test_a_paper_openalex_does_not_have_is_reported_as_such(monkeypatch, no_enrich):
+    calls, answer = openalex_knows([])
+    route(monkeypatch, [("api.openalex.org", answer)])
+    rep = A.cited_by("10.1/unknown", sources=["openalex"])["sources"]["openalex"]
+    assert rep["status"] == "not indexed" and "OpenAlex has no record with this DOI" in rep["error"]
+    assert len(calls) == 1                     # nothing listed for a paper it does not have
+
+
+def test_a_long_openalex_list_is_read_in_pages_of_200_and_cut_at_the_cap(monkeypatch, no_enrich):
+    works = [(f"10.1/c{i}", 2020) for i in range(450)]
+    calls, answer = openalex_knows(works)
+    route(monkeypatch, [("api.openalex.org", answer)])
+    out = A.cited_by(LANDMARK, sources=["openalex"], max_results=250)
+    assert [(p["page"], p["per-page"]) for path, p in calls[1:]] == [("1", "200"), ("2", "200")]
+    assert len(out["articles"]) == 250 and out["sources"]["openalex"]["total"] == 450
+
+
+def test_cited_by_asks_openalex_too_and_merges_it_with_pubmed(monkeypatch, no_enrich):
+    asked, esearch, efetch = pubmed_knows({
+        "900": (LANDMARK, "Landmark itself.", "2016"),
+        "1": ("10.1/both", "Cites Landmark.", "2020")})
+    calls, answer = openalex_knows([("10.1/BOTH", 2020), ("10.1/oa-only", 2024)])
+    route(monkeypatch, [("api.openalex.org", answer), ("elink.fcgi", elink("1")),
+                        ("esearch.fcgi", esearch)],
+          [("efetch.fcgi", efetch)])
+    out = A.cited_by(LANDMARK)
+    found = {a["doi"].lower(): a["found_in"] for a in out["articles"]}
+    assert found == {"10.1/both": ["PubMed", "OpenAlex"], "10.1/oa-only": ["OpenAlex"]}
+    assert list(out["sources"]) == ["pubmed", "scopus", "openalex"]
+    assert out["sources"]["scopus"]["status"] == "no key"
+
+
 def test_cited_by_refuses_an_unknown_source_by_name():
     with pytest.raises(ValueError, match="'wos'"):
         A.cited_by(LANDMARK, sources=["wos"])

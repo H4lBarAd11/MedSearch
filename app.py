@@ -1859,14 +1859,17 @@ _OPENALEX_FIELDS = ("id,doi,display_name,publication_year,authorships,primary_lo
                     "abstract_inverted_index,cited_by_count,ids,type,is_retracted,locations")
 _OPENALEX_TYPES = {"review": ["Review"], "preprint": ["Preprint"]}
 
-def _openalex_get(path, params):
-    """One OpenAlex answer as JSON. Raises, saying why, when refused."""
+def _openalex_get(path, params, missing=None):
+    """One OpenAlex answer as JSON. Raises, saying why, when refused; a 404
+    raises SourceCannotAnswer(missing) when the caller says what it means."""
     if _key("openalex_api_key"):
         params = dict(params, api_key=_key("openalex_api_key"))
     data, status = fetch_json(f"{OPENALEX}{path}?{urllib.parse.urlencode(params)}",
                               error_body=True)
     if status == 200 and isinstance(data, dict):
         return data
+    if status == 404 and missing:
+        raise SourceCannotAnswer(missing)
     if status == 429:
         raise RuntimeError("OpenAlex's daily allowance is used up (429). It renews at midnight "
                            "UTC (early morning in Europe). A free OpenAlex API key, added in "
@@ -2448,19 +2451,45 @@ def _scopus_citing(doi, max_r):
     entries, total = scopus_entries(f"REFEID({eid})", max_r)
     return fill_abstracts_from_pubmed([_scopus_article(e) for e in entries]), total
 
+def _openalex_citing(doi, max_r):
+    """OpenAlex's citing works for a DOI: find the work (free), then every work
+    that cites it, newest first, 200 a page ($0.0001 a page). Needs no key."""
+    work = _openalex_get(f"/works/doi:{urllib.parse.quote(doi)}", {"select": "id"},
+                         missing="OpenAlex has no record with this DOI, so it cannot say "
+                                 "who cites it.")
+    wid = (work.get("id") or "").rstrip("/").rsplit("/", 1)[-1]
+    if not wid:
+        raise RuntimeError("OpenAlex found the paper but sent no id for it, and the citing "
+                           "papers can only be asked for by id.")
+    per = max(1, min(200, max_r))
+    arts, total, page = [], 0, 1
+    while len(arts) < max_r:
+        data = _openalex_get("/works", {"filter": f"cites:{wid}", "per-page": per, "page": page,
+                                        "sort": "publication_date:desc",
+                                        "select": _OPENALEX_FIELDS})
+        total = (data.get("meta") or {}).get("count") or 0
+        batch = data.get("results") or []
+        arts += [_openalex_article(w) for w in batch]
+        if len(batch) < per or len(arts) >= total:
+            break
+        page += 1
+    return arts[:max_r], total
+
 def _year_key(a):
     y = str(a.get("year") or "")[:4]
     return y if y.isdigit() else ""
 
-_CITING_SOURCES = {"pubmed": ("PubMed", _pubmed_citing),
-                   "scopus": ("Scopus", _scopus_citing)}
+_CITING_SOURCES = {"pubmed":   ("PubMed", _pubmed_citing),
+                   "scopus":   ("Scopus", _scopus_citing),
+                   "openalex": ("OpenAlex", _openalex_citing)}
 
-def cited_by(doi, sources=("pubmed", "scopus"), max_results=200, enrich=True):
+def cited_by(doi, sources=("pubmed", "scopus", "openalex"), max_results=200, enrich=True):
     """
     The works citing `doi`, as ordinary article records merged across sources
     (by DOI, then PMID, then title), newest first: {"doi", "articles",
     "sources": a report per source}. PubMed's list covers citations deposited
-    in PubMed Central; Scopus's covers its own index and needs the Scopus key.
+    in PubMed Central; Scopus's covers its own index and needs the Scopus key
+    (and an entitlement to ask by REFEID); OpenAlex's needs no key.
     `max_results` caps each source. enrich=False skips the per-paper
     open-access and retraction lookups (much faster for long lists).
     """
@@ -3697,8 +3726,8 @@ def citations(idx):
         return jsonify({"error":"no_doi",
                         "message":"This article has no DOI, so its citation graph can't be retrieved.",
                         "title": art.get("title","")}), 200
-    # The citing side is PubMed's and Scopus's lists (full records) merged with
-    # OpenCitations; OpenCitations DOIs neither of them had are resolved through
+    # The citing side is PubMed's, Scopus's and OpenAlex's lists (full records)
+    # merged with OpenCitations; OpenCitations DOIs none of them had are resolved through
     # Crossref, capped as before, and all count toward the total.
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
         graph_f = ex.submit(get_citation_graph, doi, 12, 0)
