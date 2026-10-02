@@ -61,6 +61,7 @@
   <symbol id="i-fit" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></g></symbol>
   <symbol id="i-stop" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></g></symbol>
   <symbol id="i-send" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></g></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></g></symbol>
 </svg>
 
 <main class="main">
@@ -107,6 +108,8 @@
            placeholder="e.g. cognitive mapping awake surgery…"
            onkeydown="if(event.key==='Enter') runSearch()">
   </div>
+  <!-- The author and institution the search is narrowed to (Options), one chip each. -->
+  <div class="people-chips" id="peopleChips"></div>
   <button class="sources-chip" type="button" id="dockSources" aria-haspopup="dialog" aria-expanded="false"
           onclick="togglePanel('panelSources', this)" title="Choose which databases to search">
     <svg class="ico" aria-hidden="true"><use href="#i-sources"/></svg>
@@ -122,8 +125,8 @@
   <button class="dock-btn" type="button" onclick="closePanels(); resetToHome()" title="Home — clear the results">
     <svg class="ico" aria-hidden="true"><use href="#i-home"/></svg><span class="dock-label">Home</span>
   </button>
-  <button class="dock-btn" type="button" aria-haspopup="dialog" aria-expanded="false"
-          onclick="togglePanel('panelOptions', this)" title="Years, number of results, order, strict mode, library">
+  <button class="dock-btn" type="button" id="dockOptions" aria-haspopup="dialog" aria-expanded="false"
+          onclick="togglePanel('panelOptions', this)" title="Years, author, institution, number of results, order, strict mode, library">
     <svg class="ico" aria-hidden="true"><use href="#i-options"/></svg><span class="dock-label">Options</span>
   </button>
   <span class="dock-sep" aria-hidden="true"></span>
@@ -238,6 +241,20 @@
       <input class="filter-input" type="number" id="yearFrom" placeholder="From, e.g. 2018" min="1900" max="2099" aria-label="From year">
       <input class="filter-input" type="number" id="yearTo" placeholder="To, e.g. 2024" min="1900" max="2099" aria-label="To year">
     </div>
+    <span class="filter-label people-label">Author</span>
+    <div class="people-field">
+      <input class="filter-input people-input" type="text" id="authorInput" data-kind="author"
+             placeholder="Type a name, then pick it" autocomplete="off" spellcheck="false"
+             role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="authorList" aria-label="Author">
+      <div class="people-list" id="authorList" role="listbox" aria-label="Authors" hidden></div>
+    </div>
+    <span class="filter-label people-label">Institution</span>
+    <div class="people-field">
+      <input class="filter-input people-input" type="text" id="institutionInput" data-kind="institution"
+             placeholder="Hospital or university, then pick it" autocomplete="off" spellcheck="false"
+             role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="institutionList" aria-label="Institution">
+      <div class="people-list" id="institutionList" role="listbox" aria-label="Institutions" hidden></div>
+    </div>
     <span class="filter-label">Results per source</span>
     <div><input class="max-results-input" type="number" id="maxResults" value="10" min="1" max="50" aria-label="Results per source"></div>
     <span class="filter-label">Order</span>
@@ -263,9 +280,15 @@
     <p>Operators always work and override Strict: <code>AND OR NOT</code> (uppercase), <code>"exact phrase"</code>,
        <code>term[tiab]</code> title/abstract, <code>term[mesh]</code>, <code>author[au]</code>, <code>2020[dp]</code>.</p>
     <p>Example: <code>glioblastoma AND temozolomide[tiab] NOT pediatric</code></p>
+    <p><b>Author and institution:</b> pick from the list as you type, and OpenAlex finds exactly
+       that person or place (an institution with its institutes). The other databases match the
+       name as written, with the ORCID where they keep it, so they miss papers that spell it
+       differently. A name you don't pick is searched as typed. Leave the search box empty to list
+       everything by that author or institution. Databases that keep no authors or no
+       institutions say so and are left out.</p>
     <p><b>DOI:</b> paste one or more DOIs, doi.org links or links to the articles, and each ticked
-       database looks those papers up. Years and Strict don't apply; a paper none of them has is
-       shown from Crossref.</p>
+       database looks those papers up. Years, Strict, author and institution don't apply; a paper
+       none of them has is shown from Crossref.</p>
   </details>
 </div>
 
@@ -284,7 +307,7 @@
     <div class="saved-item" data-id="{{ s.id }}">
       <div class="saved-item-main" onclick='runSaved({{ s|tojson }})'>
         <div class="saved-name">{{ s.name }}</div>
-        <div class="saved-sub">{{ s.query }}</div>
+        <div class="saved-sub">{{ describe_saved(s) }}</div>
       </div>
       <button class="saved-delete" onclick="deleteSaved('{{ s.id }}', event)" title="Delete">✕</button>
     </div>

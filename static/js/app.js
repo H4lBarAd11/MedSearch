@@ -487,11 +487,183 @@ function openInAppBrowser(url, title) {
   window.open(url, '_blank', 'noopener');
 }
 
+// ── Author and institution ─────────────────────────────────────────────────
+// A search can be narrowed to an author and to an institution (Options).
+// Picked from OpenAlex's suggestions, each is {name, hint, openalex, orcid};
+// typed and not picked, it is {name} alone and searched as written (his
+// choice, 2 Oct 2026). Each one in use shows as a chip in the top bar.
+const people = {author: null, institution: null};
+const PEOPLE_LABEL = {author: 'Author', institution: 'Institution'};
+const _suggested = {author: [], institution: []};
+const _activeOption = {author: -1, institution: -1};
+let _suggestTimer = null, _suggestAsked = 0;
+
+function setPerson(kind, value) {
+  people[kind] = value && value.name ? value : null;
+  const input = document.getElementById(kind + 'Input');
+  if (input) input.value = people[kind] ? people[kind].name : '';
+  renderPeopleChips();
+}
+
+function clearPeople(kind) {
+  setPerson(kind, null);
+  hideSuggestions(kind);
+}
+
+// What one person or place is, for a chip's tooltip and a saved search's line.
+function personLine(kind, p) {
+  return `${PEOPLE_LABEL[kind]}: ${p.name}` + (p.openalex ? (p.hint ? ` (${p.hint})` : '') : ' (as typed)');
+}
+
+function renderPeopleChips() {
+  const box = document.getElementById('peopleChips');
+  if (!box) return;
+  box.innerHTML = ['author', 'institution'].filter(k => people[k]).map(k => `
+    <span class="sources-chip people-chip" title="${escHtml(personLine(k, people[k]))}">
+      <button type="button" class="people-chip-name" onclick="openOptionsPanel()"><span>${PEOPLE_LABEL[k]}: ${escHtml(people[k].name)}</span></button>
+      <button type="button" class="people-chip-x" onclick="clearPeople('${k}')" aria-label="Stop narrowing the search to this ${k}">${ico('close')}</button>
+    </span>`).join('');
+}
+
+function openOptionsPanel() {
+  const panel = document.getElementById('panelOptions');
+  if (panel.hidden) togglePanel('panelOptions', document.getElementById('dockOptions'));
+}
+
+function suggestionHint(it) {
+  const works = Number(it.works || 0);
+  return [it.hint, `${works.toLocaleString('en')} paper${works === 1 ? '' : 's'}`, it.orcid ? 'ORCID' : '']
+    .filter(Boolean).join(' · ');
+}
+
+function showSuggestions(kind, data) {
+  const list = document.getElementById(kind + 'List');
+  const input = document.getElementById(kind + 'Input');
+  _suggested[kind] = data.ok ? (data.items || []) : [];
+  _activeOption[kind] = -1;
+  if (!data.ok) {
+    list.innerHTML = `<div class="people-note">${escHtml(data.message || "OpenAlex didn't answer.")} ` +
+                     `What you typed will be searched as written.</div>`;
+  } else if (!_suggested[kind].length) {
+    list.innerHTML = `<div class="people-note">OpenAlex suggests nothing for this. ` +
+                     `It will be searched as written.</div>`;
+  } else {
+    list.innerHTML = _suggested[kind].map((it, i) => `
+      <div class="people-option" role="option" id="${kind}Opt${i}" aria-selected="false"
+           onmousedown="event.preventDefault(); pickSuggestion('${kind}', ${i})">
+        <div class="people-option-name">${escHtml(it.name)}</div>
+        <div class="people-option-hint">${escHtml(suggestionHint(it))}</div>
+      </div>`).join('');
+  }
+  list.hidden = false;
+  input.setAttribute('aria-expanded', 'true');
+}
+
+function hideSuggestions(kind) {
+  const list = document.getElementById(kind + 'List');
+  const input = document.getElementById(kind + 'Input');
+  if (list) list.hidden = true;
+  if (input) { input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); }
+}
+
+function pickSuggestion(kind, i) {
+  const it = _suggested[kind][i];
+  if (!it) return;
+  setPerson(kind, {name: it.name, hint: it.hint || '', openalex: it.openalex, orcid: it.orcid || null});
+  hideSuggestions(kind);
+}
+
+async function askSuggestions(kind, text) {
+  const asked = ++_suggestAsked;
+  let data;
+  try {
+    data = await (await fetch(`/people/suggest?kind=${kind}&q=${encodeURIComponent(text)}`)).json();
+  } catch (e) {
+    data = {ok: false, message: 'MedSearch did not answer.'};
+  }
+  // Only the answer to the latest keystroke is shown.
+  if (asked !== _suggestAsked || document.getElementById(kind + 'Input').value.trim() !== text) return;
+  showSuggestions(kind, data);
+}
+
+document.querySelectorAll('.people-input').forEach(input => {
+  const kind = input.dataset.kind;
+  input.addEventListener('input', () => {
+    const text = input.value.trim();
+    // Typing changes what is searched: a picked name typed over is a typed one.
+    people[kind] = text ? {name: text} : null;
+    renderPeopleChips();
+    clearTimeout(_suggestTimer);
+    if (text.length < 2) { hideSuggestions(kind); return; }
+    _suggestTimer = setTimeout(() => askSuggestions(kind, text), 250);
+  });
+  input.addEventListener('keydown', e => {
+    const list = document.getElementById(kind + 'List');
+    const open = !list.hidden && _suggested[kind].length;
+    if (e.key === 'Escape' && !list.hidden) {
+      e.preventDefault(); e.stopPropagation(); hideSuggestions(kind); return;
+    }
+    if (!open) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const n = _suggested[kind].length, cur = _activeOption[kind];
+      _activeOption[kind] = e.key === 'ArrowDown' ? (cur + 1) % n : (cur <= 0 ? n - 1 : cur - 1);
+      list.querySelectorAll('.people-option').forEach((o, i) => {
+        o.classList.toggle('active', i === _activeOption[kind]);
+        o.setAttribute('aria-selected', i === _activeOption[kind] ? 'true' : 'false');
+      });
+      input.setAttribute('aria-activedescendant', `${kind}Opt${_activeOption[kind]}`);
+    } else if (e.key === 'Enter' && _activeOption[kind] >= 0) {
+      e.preventDefault();
+      pickSuggestion(kind, _activeOption[kind]);
+    }
+  });
+  input.addEventListener('blur', () => setTimeout(() => hideSuggestions(kind), 150));
+});
+
+// What runSearch sends, and a saved search keeps.
+function peopleForSearch() {
+  return {author: people.author ? {...people.author} : null,
+          institution: people.institution ? {...people.institution} : null};
+}
+
+// The search in words: what a saved search is called unless named.
+function describeSearch(params) {
+  const said = ['author', 'institution'].filter(k => params[k]).map(k => `${k}: ${params[k].name}`);
+  if (!said.length) return params.query || '';
+  return params.query ? `${params.query} (${said.join('; ')})` : said.join('; ');
+}
+
 // Google Scholar's own results page for a search: Scholar has no API, so it
 // is opened, not asked. Years go in Scholar's own fields; anything else in
-// them (a half-typed year) is left out rather than sent.
-function scholarUrl(query, yearFrom, yearTo) {
-  const p = new URLSearchParams({q: query});
+// them (a half-typed year) is left out rather than sent. An author goes in
+// Scholar's author: operator, as Scholar writes names: "J Doe".
+function scholarAuthor(name) {
+  // Words that belong to the family name before it: "van Gogh", "de la Cruz".
+  const particles = new Set(['van', 'von', 'der', 'den', 'de', 'del', 'della', 'dei', 'degli',
+    'di', 'da', 'dos', 'das', 'do', 'du', 'le', 'la', 'ter', 'ten', 'bin', 'al', 'el']);
+  name = String(name || '').replace(/"/g, ' ').replace(/\s+/g, ' ').trim();
+  let family, given;
+  if (name.includes(',')) {
+    [family, given] = [name.slice(0, name.indexOf(',')).trim(), name.slice(name.indexOf(',') + 1).trim()];
+  } else {
+    const words = name.split(' ');
+    let i = words.length - 1;
+    while (i > 0 && particles.has(words[i - 1].toLowerCase())) i--;
+    family = words.slice(i).join(' ');
+    given = words.slice(0, i).join(' ');
+    // PubMed's way round: "Doe JA".
+    if (words.length > 1 && /^(?:[A-Z]\.?){1,3}$/.test(words[words.length - 1])) {
+      family = words.slice(0, -1).join(' ');
+      given = words[words.length - 1];
+    }
+  }
+  const initial = (given.match(/\p{L}/u) || [''])[0].toUpperCase();
+  return initial ? `${initial} ${family}` : family;
+}
+function scholarUrl(query, yearFrom, yearTo, author) {
+  const words = [query, author ? `author:"${scholarAuthor(author)}"` : ''].filter(Boolean).join(' ');
+  const p = new URLSearchParams({q: words});
   if (/^\d{4}$/.test(String(yearFrom || '').trim())) p.set('as_ylo', String(yearFrom).trim());
   if (/^\d{4}$/.test(String(yearTo || '').trim()))   p.set('as_yhi', String(yearTo).trim());
   return 'https://scholar.google.com/scholar?' + p.toString();
@@ -499,14 +671,17 @@ function scholarUrl(query, yearFrom, yearTo) {
 
 function openGoogleScholar() {
   const q = (document.getElementById('searchInput').value || '').trim();
-  if (!q) {
-    fail('Type what to look for in the search box first, then open Google Scholar.',
-         'Nothing to search for');
+  const author = people.author ? people.author.name : '';
+  if (!q && !author) {
+    fail('Type what to look for in the search box, or set an author under Options, ' +
+         'then open Google Scholar.', 'Nothing to search for');
     return;
   }
   closePanels(true);
+  if (people.institution)
+    showToast("Google Scholar can't be narrowed to an institution: it opens without it.", '');
   openInAppBrowser(scholarUrl(q, document.getElementById('yearFrom').value,
-                              document.getElementById('yearTo').value), 'Google Scholar');
+                              document.getElementById('yearTo').value, author), 'Google Scholar');
 }
 
 // Wrap a URL in the active institutional proxy so paywalled-but-subscribed
@@ -761,7 +936,13 @@ function runSearch(isLoadMore) {
   const query = isLoadMore ? lastSearchParams.query
                            : document.getElementById('searchInput').value.trim();
   const dbs   = isLoadMore ? lastSearchParams.sources : getSelectedDBs();
-  if (!query) { fail('Type what you are looking for in the search box.', 'No search terms'); return; }
+  const who   = isLoadMore ? {author: lastSearchParams.author, institution: lastSearchParams.institution}
+                           : peopleForSearch();
+  if (!query && !who.author && !who.institution) {
+    fail('Type what you are looking for in the search box, or set an author or an institution ' +
+         'under Options.', 'No search terms');
+    return;
+  }
   if (!dbs.length) { fail('Click the sources button beside Search and tick at least one database.', 'No database selected'); return; }
   if (searchRunning) return;
 
@@ -787,6 +968,8 @@ function runSearch(isLoadMore) {
     year_to:     document.getElementById('yearTo').value   || null,
     strict:      document.getElementById('strictToggle').checked,
     sort:        sortMode,
+    author:      who.author,
+    institution: who.institution,
     // The server keeps each source's own position, so "load more" asks every
     // source for its next batch rather than skipping by the combined count.
     load_more:   isLoadMore,
@@ -795,7 +978,8 @@ function runSearch(isLoadMore) {
     // same filters as the search on screen, only the batch size may change
     const prev = window._lastFullParams || {};
     Object.assign(lastSearchParams, {year_from: prev.year_from, year_to: prev.year_to,
-                                     strict: prev.strict, sort: prev.sort});
+                                     strict: prev.strict, sort: prev.sort,
+                                     author: prev.author, institution: prev.institution});
   } else {
     window._lastFullParams = Object.assign({}, lastSearchParams);
   }
@@ -1002,6 +1186,8 @@ function resetToHome() {
   if (q) q.value = '';
   const yf = document.getElementById('yearFrom');  if (yf) yf.value = '';
   const yt = document.getElementById('yearTo');    if (yt) yt.value = '';
+  clearPeople('author');
+  clearPeople('institution');
   const mr = document.getElementById('maxResults');if (mr) mr.value = 10;
   const strict = document.getElementById('strictToggle'); if (strict) strict.checked = true;
   setSortMode('relevance', true);   // back to default ordering
@@ -1185,7 +1371,7 @@ function finishSearch(query, isLoadMore) {
   searchRunning = false;
   setSearchButtonStop(false);
   searchAbortController = null;
-  updateHistory(query);
+  if (query) updateHistory(query);
   const n = allArticles.filter(Boolean).length;
   document.getElementById('searchProgress').textContent = '';
   setStatus('done', `Found ${n} unique article${n===1?'':'s'}`);
@@ -2528,9 +2714,10 @@ async function clearAllSaved() {
 // ── Saved searches ─────────────────────────────────────────────────────────
 async function saveCurrentSearch() {
   if (!lastSearchParams) { fail('Run a search first.'); return; }
-  const name = await ask({title: 'Name this saved search', input: lastSearchParams.query, okLabel: 'Save'});
+  const said = describeSearch(lastSearchParams);
+  const name = await ask({title: 'Name this saved search', input: said, okLabel: 'Save'});
   if (name === null) return;   // cancelled
-  const payload = {...lastSearchParams, name: name.trim() || lastSearchParams.query};
+  const payload = {...lastSearchParams, name: name.trim() || said};
   const res  = await fetch('/saved', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
@@ -2551,7 +2738,7 @@ function renderSaved(items) {
     <div class="saved-item" data-id="${s.id}">
       <div class="saved-item-main" onclick='runSaved(${JSON.stringify(s).replace(/'/g,"&#39;")})'>
         <div class="saved-name">${escHtml(s.name)}</div>
-        <div class="saved-sub">${escHtml(s.query)}</div>
+        <div class="saved-sub">${escHtml(describeSearch(s))}</div>
       </div>
       <button class="saved-delete" onclick="deleteSaved('${s.id}', event)" title="Delete">✕</button>
     </div>`).join('');
@@ -2564,6 +2751,8 @@ function runSaved(s) {
   document.getElementById('yearFrom').value    = s.year_from || '';
   document.getElementById('yearTo').value      = s.year_to   || '';
   document.getElementById('strictToggle').checked = (s.strict !== false);
+  setPerson('author', s.author || null);
+  setPerson('institution', s.institution || null);
   // Restore sort mode (defaults to relevance for older saved searches)
   setSortMode(s.sort === 'date' ? 'date' : 'relevance', true);
   updateQueryHint();

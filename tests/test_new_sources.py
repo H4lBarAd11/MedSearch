@@ -536,5 +536,6 @@ def test_the_scholar_button_sits_in_the_databases_panel_and_opens_a_window():
     assert 'onclick="openGoogleScholar()"' in panel
     fn = re.search(r"\nfunction openGoogleScholar\(\) \{.*?\n\}", js, re.S).group(0)
     assert "openInAppBrowser(scholarUrl(" in fn          # its own window, never the main one
-    assert re.search(r"if \(!q\) \{\s*fail\(", fn)        # an empty box is a popup, not a blank search
+    # nothing to search for (no words, no author) is a popup, not a blank Scholar page
+    assert re.search(r"if \(!q && !author\) \{\s*fail\(", fn)
     assert "google" not in [k for k, *_ in A.SOURCES]      # not a source: nothing is merged from it

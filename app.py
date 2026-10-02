@@ -25,7 +25,7 @@ Server-Sent Events (SSE).
 import sys, os, json, re, time, threading, urllib.parse, urllib.request
 import urllib.error, xml.etree.ElementTree as ET
 import concurrent.futures, hashlib, hmac, html, secrets, ssl, subprocess
-import plistlib, shlex, shutil, tempfile
+import plistlib, shlex, shutil, tempfile, unicodedata
 from datetime import datetime
 from pathlib import Path
 from xml.sax.saxutils import escape as escape_xml
@@ -1400,20 +1400,165 @@ def _article(**fields):
 def _short_authors(names, n=3):
     return "; ".join(names[:n]) + (" et al." if len(names) > n else "")
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  AUTHOR AND INSTITUTION  (a search narrowed to a person, or to a place)
+# ══════════════════════════════════════════════════════════════════════════════
+# Picked from OpenAlex's suggestions, an author brings OpenAlex's ids for that
+# person and their ORCID, and an institution its OpenAlex id and the names it
+# goes by. Typed and not picked, either is the words as written (his choice,
+# 2 Oct 2026). OpenAlex matches a picked one exactly; every other source by
+# name, and by ORCID where it keeps them, so a paper that writes the name
+# differently is missed there. A source that keeps no authors or no
+# affiliations says so (_cannot) rather than answer without the filter.
+
+_ORCID_RE = re.compile(r"^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$")
+_OPENALEX_ID = {"author": re.compile(r"^A\d{1,12}$"), "institution": re.compile(r"^I\d{1,12}$")}
+# Words that belong to the family name before it: "van Gogh", "de la Cruz".
+_NAME_PARTICLES = {"van", "von", "der", "den", "de", "del", "della", "dei", "degli", "di", "da",
+                   "dos", "das", "do", "du", "le", "la", "ter", "ten", "bin", "al", "el"}
+_INSTITUTION_NAMES = {}     # OpenAlex id -> the names it goes by (a free lookup)
+
+def _query_safe(text):
+    """Text that can sit inside any source's query: no quotes or brackets."""
+    return " ".join(re.sub(r'["()\[\]{}<>]', " ", str(text or "")).split())[:200]
+
+def _name_parts(name):
+    """(family, given) of a person's name, written any of the usual ways:
+    "Doe, Jane A.", "Jane A. Doe", or PubMed's "Doe JA"."""
+    name = " ".join(name.split())
+    if "," in name:
+        family, _, given = name.partition(",")
+        return family.strip(), given.strip()
+    words = name.split(" ")
+    if len(words) > 1 and re.fullmatch(r"(?:[A-Z]\.?){1,3}", words[-1]):
+        return " ".join(words[:-1]), words[-1]
+    i = len(words) - 1
+    while i > 0 and words[i - 1].lower() in _NAME_PARTICLES:
+        i -= 1
+    return " ".join(words[i:]), " ".join(words[:i])
+
+def _institution_names(oid, name):
+    """The names an OpenAlex institution goes by: its own first, then the
+    others it lists (up to six). Only the given name if OpenAlex can't say."""
+    if oid in _INSTITUTION_NAMES:
+        return _INSTITUTION_NAMES[oid]
+    try:
+        inst = _openalex_get(f"/institutions/{oid}",
+                             {"select": "display_name,display_name_alternatives"})
+    except Exception:
+        return [name]                       # not kept: asked again next time
+    names = []
+    for n in [name, inst.get("display_name")] + list(inst.get("display_name_alternatives") or []):
+        n = _query_safe(n)
+        if len(n) >= 4 and n.lower() not in {m.lower() for m in names}:
+            names.append(n)
+    _INSTITUTION_NAMES[oid] = names[:6] or [name]
+    return _INSTITUTION_NAMES[oid]
+
+def _openalex_short(value):
+    return str(value or "").strip().rstrip("/").rsplit("/", 1)[-1]
+
+def people_filter(author=None, institution=None):
+    """
+    The author and institution a search is narrowed to, checked and ready for
+    every source: {"author": {...}, "institution": {...}} with either missing,
+    or None when neither is set. Each is a name as typed, or what the window
+    picked from OpenAlex's suggestions: {"name", "orcid", "openalex": [ids]}
+    for an author, {"name", "openalex": id} for an institution.
+    """
+    out = {}
+    if isinstance(author, str):
+        author = {"name": author}
+    if isinstance(author, dict):
+        name = _query_safe(author.get("name"))
+        if re.search(r"[^\W\d_]", name):
+            family, given = _name_parts(name)
+            orcid = _openalex_short(author.get("orcid")).upper()
+            ids = [_openalex_short(i) for i in author.get("openalex") or [] if isinstance(i, str)]
+            out["author"] = {
+                "name": name, "family": family or name, "given": given,
+                "initial": next((c.upper() for c in given if c.isalpha()), ""),
+                "orcid": orcid if _ORCID_RE.match(orcid) else None,
+                "openalex": [i for i in ids if _OPENALEX_ID["author"].match(i)][:20]}
+    if isinstance(institution, str):
+        institution = {"name": institution}
+    if isinstance(institution, dict):
+        name = _query_safe(institution.get("name"))
+        if re.search(r"[^\W\d_]", name):
+            oid = _openalex_short(institution.get("openalex"))
+            oid = oid if _OPENALEX_ID["institution"].match(oid) else None
+            out["institution"] = {"name": name, "openalex": oid,
+                                  "names": _institution_names(oid, name) if oid else [name]}
+    return out or None
+
+def describe_search(query, people):
+    """The search in words, for the AI, the export and the history."""
+    said = [f"{w}: {people[w]['name']}" for w in ("author", "institution") if (people or {}).get(w)]
+    if not said:
+        return query
+    return f"{query} ({'; '.join(said)})" if query else "; ".join(said)
+
+def _cannot(label, people, author=True, institution=True):
+    """Raise SourceCannotAnswer when the search is narrowed in a way `label`
+    can't follow: left out, not answered without the filter."""
+    if not people:
+        return
+    which = [w for w, ok in (("author", author), ("institution", institution))
+             if people.get(w) and not ok]
+    if which:
+        raise SourceCannotAnswer(f"{label} can't be searched by {' or '.join(which)}, "
+                                 "so it was left out of this search.")
+
+def _fold(text):
+    return unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
+
+def _wrote(a, au):
+    """Whether one of the article's authors is `au`, by family name and first
+    initial: the check for a source that only ranks by an author's name."""
+    family, initial = re.findall(r"[a-z]+", _fold(au["family"])), _fold(au["initial"])
+    if not family:
+        return True
+    for person in a.get("author_list") or [a.get("authors") or ""]:
+        words = re.findall(r"[a-z]+", _fold(person))
+        for i in range(len(words) - len(family) + 1):
+            if words[i:i + len(family)] == family:
+                rest = words[:i] + words[i + len(family):]
+                if not initial or any(w.startswith(initial) for w in rest):
+                    return True
+    return False
+
+def _short_name(au):
+    """"Doe J": the family name and the first initial, as PubMed indexes."""
+    return f"{au['family']} {au['initial']}".strip()
+
+def _either(terms):
+    return terms[0] if len(terms) == 1 else "(" + " OR ".join(terms) + ")"
+
+def _pubmed_people(people):
+    out, au, inst = [], (people or {}).get("author"), (people or {}).get("institution")
+    if au:
+        # A name with only its initial is truncated by PubMed: "Doe J" finds Doe JA too.
+        out.append(_either([f"{_short_name(au)}[au]"]
+                           + ([f"{au['orcid']}[auid]"] if au["orcid"] else [])))
+    if inst:
+        out.append(_either([f'"{n}"[ad]' for n in inst["names"]]))
+    return out
+
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
 def _ncbi_key_param():
     return f"&api_key={CONFIG['pubmed_api_key']}" if CONFIG.get("pubmed_api_key") else ""
 
 def search_pubmed(query, max_r, y_from, y_to, strict=True, extra_filter=None,
-                  source_label="PubMed", sort="relevance", offset=0):
+                  source_label="PubMed", sort="relevance", offset=0, people=None):
     base = EUTILS
     kp   = _ncbi_key_param()
     dp   = (f"&mindate={y_from or 1900}/01/01&maxdate={y_to or 2099}/12/31&datetype=pdat"
             if y_from or y_to else "")
     term = build_pubmed_term(query, strict=strict)
-    if extra_filter:
-        term = f"({term}) AND {extra_filter}"
+    for extra in [extra_filter, *_pubmed_people(people)]:
+        if extra:
+            term = f"({term}) AND {extra}" if term else extra
     # sort=relevance → PubMed "Best Match"; sort=date → most recent first
     sort_param = "date" if sort == "date" else "relevance"
     data, _ = fetch_json(f"{base}/esearch.fcgi?db=pubmed&term={urllib.parse.quote(term)}"
@@ -1588,7 +1733,8 @@ def fill_abstracts_from_pubmed(articles):
                 a["abstract_note"] = "No abstract: PubMed has this paper, but without an abstract."
     return articles
 
-def search_cochrane(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0):
+def search_cochrane(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0,
+                    people=None):
     """
     Cochrane systematic reviews are indexed in PubMed under the journal
     'Cochrane Database of Systematic Reviews'. We search PubMed restricted to
@@ -1597,24 +1743,39 @@ def search_cochrane(query, max_r, y_from, y_to, strict=True, sort="relevance", o
     # [ta] = journal title abbreviation field; covers the current journal name.
     return search_pubmed(query, max_r, y_from, y_to, strict=strict,
                          extra_filter='"Cochrane Database Syst Rev"[ta]',
-                         source_label="Cochrane", sort=sort, offset=offset)
+                         source_label="Cochrane", sort=sort, offset=offset, people=people)
 
-def search_guidelines(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0):
+def search_guidelines(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0,
+                      people=None):
     # Clinical practice guidelines: PubMed restricted to guideline publication
     # types. Captures national/society guidelines from many countries.
     return search_pubmed(query, max_r, y_from, y_to, strict=strict,
                          extra_filter='(Guideline[ptyp] OR "Practice Guideline"[ptyp])',
-                         source_label="Guidelines", sort=sort, offset=offset)
+                         source_label="Guidelines", sort=sort, offset=offset, people=people)
 
-def search_arxiv(query, max_r, y_from, y_to, sort="relevance", offset=0):
+def _arxiv_author(au):
+    """arXiv keeps names as written ("Jane A. Doe"): the family name, and the
+    first given name when it is spelt out (an initial alone matches anyone's)."""
+    term = "au:" + "_".join(re.findall(r"[^\W\d_]+", au["family"]))
+    first = (au["given"].split() or [""])[0]
+    return term + (f" AND au:{first}" if len(first) > 1 and first.isalpha() else "")
+
+def search_arxiv(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
+    _cannot("arXiv", people, institution=False)
+    au = (people or {}).get("author")
+    search = f"all:{urllib.parse.quote(query)}"
+    if au:
+        search = urllib.parse.quote(f"(all:{query}) AND {_arxiv_author(au)}"
+                                    if query.strip() else _arxiv_author(au), safe=":")
     # sortBy=relevance ↔ submittedDate (most recent first)
     sort_by = "submittedDate" if sort == "date" else "relevance"
-    body, _ = http_get(f"https://export.arxiv.org/api/query?search_query=all:"
-                       f"{urllib.parse.quote(query)}&start={offset}&max_results={max_r}"
+    body, _ = http_get(f"https://export.arxiv.org/api/query?search_query="
+                       f"{search}&start={offset}&max_results={max_r}"
                        f"&sortBy={sort_by}&sortOrder=descending", timeout=20)
     if not body:
         raise RuntimeError("arXiv didn't respond. Try again in a moment.")
-    return _arxiv_articles(body, y_from, y_to), 0
+    arts = _arxiv_articles(body, y_from, y_to)
+    return ([a for a in arts if _wrote(a, au)] if au else arts), 0
 
 def arxiv_by_ids(ids):
     """The arXiv papers with these arXiv ids (e.g. 2101.00001), as articles."""
@@ -1653,14 +1814,28 @@ def _arxiv_articles(body, y_from=None, y_to=None):
             continue
     return results
 
-def search_clinicaltrials(query, max_r, y_from, y_to, sort="relevance", offset=0):
+def _ctgov_people(people):
+    """A trial's people are its overall officials; its places are the lead
+    sponsor and the sites."""
+    out, au, inst = [], (people or {}).get("author"), (people or {}).get("institution")
+    if au:
+        out.append(f'AREA[OverallOfficialName]"{au["family"]}"')
+    if inst:
+        out.append(_either([f'AREA[{field}]"{n}"' for n in inst["names"]
+                            for field in ("LeadSponsorName", "LocationFacility")]))
+    return out
+
+def search_clinicaltrials(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
+    term = query
+    if people:
+        term = " AND ".join(([f"({query})"] if query.strip() else []) + _ctgov_people(people))
     # ClinicalTrials v2: default ordering is relevance; LastUpdatePostDate:desc
     # gives most-recently-updated first.
     sort_p = "&sort=LastUpdatePostDate%3Adesc" if sort == "date" else ""
     # The v2 API paginates by opaque token, not numeric offset, so for "load
     # more" we over-fetch (offset+max_r, max 1000) and skip the first `offset`.
     data, status = fetch_json(f"https://clinicaltrials.gov/api/v2/studies"
-                              f"?query.term={urllib.parse.quote(query)}"
+                              f"?query.term={urllib.parse.quote(term)}"
                               f"&pageSize={min(max_r + offset, 1000)}&format=json{sort_p}")
     if not data:
         raise RuntimeError(f"ClinicalTrials.gov didn't respond (HTTP {status or 'no answer'}).")
@@ -1784,7 +1959,19 @@ def _scopus_article(e):
         cited_by=e.get("citedby-count"), abstract=e.get("dc:description", ""),
         source="Scopus")
 
-def search_scopus(query, max_r, y_from, y_to, sort="relevance", offset=0):
+def _scopus_people(people):
+    out, au, inst = [], (people or {}).get("author"), (people or {}).get("institution")
+    if au:
+        name = (f"AUTHOR-NAME({au['family']}, {au['initial']})" if au["initial"]
+                else f"AUTHLASTNAME({au['family']})")
+        out.append(_either([name] + ([f"ORCID({au['orcid']})"] if au["orcid"] else [])))
+    if inst:
+        out.append(_either([f'AFFIL("{n}")' for n in inst["names"]]))
+    return out
+
+def search_scopus(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
+    if people:
+        query = " AND ".join(([f"({query})"] if query.strip() else []) + _scopus_people(people))
     dr = (f" AND PUBYEAR > {(y_from or 1900)-1} AND PUBYEAR < {(y_to or 2099)+1}"
           if y_from or y_to else "")
     entries, total = scopus_entries(query + dr, max_r, offset, sort)
@@ -1792,7 +1979,16 @@ def search_scopus(query, max_r, y_from, y_to, sort="relevance", offset=0):
     results = fill_abstracts_from_pubmed([_scopus_article(e) for e in entries])
     return enrich_access(results), total
 
-def search_wos(query, max_r, y_from, y_to, sort="relevance", offset=0):
+def _wos_people(people):
+    out, au, inst = [], (people or {}).get("author"), (people or {}).get("institution")
+    if au:
+        name = f"AU=({au['family']} {au['initial']}*)" if au["initial"] else f"AU=({au['family']})"
+        out.append(_either([name] + ([f"AI=({au['orcid']})"] if au["orcid"] else [])))
+    if inst:
+        out.append("OG=(" + " OR ".join(f'"{n}"' for n in inst["names"]) + ")")
+    return out
+
+def search_wos(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
     key = (CONFIG.get("wos_api_key","") or "").strip()
     if not key:
         raise RuntimeError("No Web of Science API key set.")
@@ -1806,6 +2002,8 @@ def search_wos(query, max_r, y_from, y_to, sort="relevance", offset=0):
     # HTTP 400 (MISS_TAGEQ). Search topic (title, abstract, keywords) unless
     # the user already wrote WoS syntax.
     q = query if re.search(r"\b[A-Z]{2,3}\s*=", query) else f"TS=({query})"
+    if people:
+        q = " AND ".join(([f"({q})"] if query.strip() else []) + _wos_people(people))
     data, status = fetch_json(
         f"https://api.clarivate.com/apis/wos-starter/v1/documents"
         f"?db=WOS&q={urllib.parse.quote(q)}&limit={max_r}&page={wos_page}{sort_p}",
@@ -1910,14 +2108,31 @@ def _openalex_article(w):
         retraction="retracted" if w.get("is_retracted") else None,
         pub_types=_OPENALEX_TYPES.get(w.get("type"), []))
 
-def search_openalex(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0):
+def _openalex_people(people):
+    """A picked author or institution exactly, by OpenAlex's ids (an
+    institution with the institutes under it); a typed one by the names and
+    affiliations as the papers print them."""
+    out, au, inst = [], (people or {}).get("author"), (people or {}).get("institution")
+    if au:
+        # A comma separates OpenAlex's filters, so it cannot be inside one.
+        out.append("authorships.author.id:" + "|".join(au["openalex"]) if au["openalex"]
+                   else "raw_author_name.search:" + au["name"].replace(",", " "))
+    if inst:
+        out.append(f"authorships.institutions.lineage:{inst['openalex']}" if inst["openalex"]
+                   else "raw_affiliation_strings.search:" + inst["name"].replace(",", " "))
+    return out
+
+def search_openalex(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0,
+                    people=None):
     q = query.strip()
-    filters = []
+    filters = _openalex_people(people)
     params = {"per-page": max_r, "page": offset // max_r + 1 if max_r else 1,
               "select": _OPENALEX_FIELDS}
     # Strict: the words in the title or abstract. Broad, or a query with
     # operators: OpenAlex's own search, which also reads the full text.
-    if strict and not is_power_query(q):
+    if not q:
+        pass                                    # an author's or a place's papers, all of them
+    elif strict and not is_power_query(q):
         # A comma separates OpenAlex's filters, so it cannot be inside one.
         filters.append("title_and_abstract.search:" + q.replace(",", " "))
     else:
@@ -1930,10 +2145,39 @@ def search_openalex(query, max_r, y_from, y_to, strict=True, sort="relevance", o
         params["filter"] = ",".join(filters)
     if sort == "date":
         params["sort"] = "publication_date:desc"
+    elif not q:
+        params["sort"] = "cited_by_count:desc"  # with no words to rank by, the most cited first
     data = _openalex_get("/works", params)
     arts = [_openalex_article(w) for w in data.get("results") or []]
     arts = [a for a in arts if within_range(a["year"], y_from, y_to)]
     return enrich_access(arts), (data.get("meta") or {}).get("count") or 0
+
+def openalex_suggest(kind, q):
+    """OpenAlex's suggestions for a name being typed (free): up to eight
+    {"name", "hint", "works", "openalex", and for an author "orcid"}. One
+    person split across several OpenAlex records shares an ORCID: those are
+    one suggestion, with every record's id, so none of their papers is lost."""
+    data = _openalex_get(f"/autocomplete/{kind}s", {"q": q})
+    items = []
+    for r in data.get("results") or []:
+        oid = _openalex_short(r.get("id"))
+        if not r.get("display_name") or not _OPENALEX_ID[kind].match(oid):
+            continue
+        works = r.get("works_count") or 0
+        if kind == "institution":
+            items.append({"name": r["display_name"], "hint": r.get("hint") or "",
+                          "works": works, "openalex": oid})
+            continue
+        ext = r.get("external_id") or ""
+        orcid = _openalex_short(ext) if "orcid.org" in ext else None
+        same = next((i for i in items if orcid and i["orcid"] == orcid), None)
+        if same:
+            same["openalex"].append(oid)
+            same["works"] += works
+            continue
+        items.append({"name": r["display_name"], "hint": r.get("hint") or "",
+                      "works": works, "orcid": orcid, "openalex": [oid]})
+    return items[:8]
 
 def openalex_by_dois(dois):
     """The OpenAlex records of these DOIs (free: a lookup, not a search)."""
@@ -1991,8 +2235,20 @@ def _europepmc_article(r):
         a["access_kind"], a["access_link"] = "open", _pmc_pdf_url(r["pmcid"])
     return a
 
-def search_europepmc(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0):
+def _europepmc_people(people):
+    out, au, inst = [], (people or {}).get("author"), (people or {}).get("institution")
+    if au:
+        out.append(_either([f'AUTH:"{_short_name(au)}"']
+                           + ([f'AUTHORID:"{au["orcid"]}"'] if au["orcid"] else [])))
+    if inst:
+        out.append(_either([f'AFF:"{n}"' for n in inst["names"]]))
+    return out
+
+def search_europepmc(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0,
+                     people=None):
     term = _europepmc_term(query, strict)
+    if people:
+        term = " AND ".join(([f"({term})"] if term else []) + _europepmc_people(people))
     if y_from or y_to:
         term = f"({term}) AND PUB_YEAR:[{y_from or 1000} TO {y_to or 3000}]"
     # Europe PMC pages by an opaque cursor, not by number, so "load more"
@@ -2017,14 +2273,22 @@ def _crossref_headers():
     return {"User-Agent": "MedSearch/1.0" +
             (f" (mailto:{_contact_email()})" if _contact_email() else "")}
 
-def search_crossref(query, max_r, y_from, y_to, sort="relevance", offset=0):
+def search_crossref(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
+    # Crossref holds affiliations for few papers, and ranks by an author's
+    # name rather than filtering: each paper is checked for the author.
+    _cannot("Crossref", people, institution=False)
+    au = (people or {}).get("author")
     filters = [f"type:{t}" for t in _CROSSREF_TYPES]
     if y_from:
         filters.append(f"from-pub-date:{y_from}")
     if y_to:
         filters.append(f"until-pub-date:{y_to}-12-31")
-    params = {"query": query, "rows": max_r, "offset": offset,
-              "filter": ",".join(filters), "select": _CROSSREF_FIELDS}
+    params = {"rows": max_r, "offset": offset, "filter": ",".join(filters),
+              "select": _CROSSREF_FIELDS}
+    if query.strip():
+        params["query"] = query
+    if au:
+        params["query.author"] = au["name"]
     if sort == "date":
         params.update(sort="published", order="desc")
     data, status = fetch_json(f"{CROSSREF}?{urllib.parse.urlencode(params)}",
@@ -2039,7 +2303,7 @@ def search_crossref(query, max_r, y_from, y_to, sort="relevance", offset=0):
         raise RuntimeError(f"Crossref returned HTTP {status}.")
     msg = data.get("message") or {}
     arts = [_crossref_article(m) for m in msg.get("items") or []]
-    arts = [a for a in arts if within_range(a["year"], y_from, y_to)]
+    arts = [a for a in arts if within_range(a["year"], y_from, y_to) and (not au or _wrote(a, au))]
     return enrich_access(fill_abstracts_from_pubmed(arts)), msg.get("total-results") or 0
 
 # ── IEEE Xplore ──────────────────────────────────────────────────────────────
@@ -2085,8 +2349,15 @@ def _ieee_article(r):
         cited_by=r.get("citing_paper_count") or None,
         abstract=_jats_text(r.get("abstract") or ""), source="IEEE Xplore")
 
-def search_ieee(query, max_r, y_from, y_to, sort="relevance", offset=0):
-    params = {"querytext": query, "max_records": max_r, "start_record": offset + 1}
+def search_ieee(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
+    au, inst = (people or {}).get("author"), (people or {}).get("institution")
+    params = {"max_records": max_r, "start_record": offset + 1}
+    if query.strip():
+        params["querytext"] = query
+    if au:
+        params["author"] = au["name"]
+    if inst:
+        params["affiliation"] = inst["names"][0]
     if y_from:
         params["start_year"] = y_from
     if y_to:
@@ -2095,7 +2366,7 @@ def search_ieee(query, max_r, y_from, y_to, sort="relevance", offset=0):
         params.update(sort_field="publication_year", sort_order="desc")
     data = _ieee_get(params)
     arts = [_ieee_article(r) for r in data.get("articles") or []]
-    arts = [a for a in arts if within_range(a["year"], y_from, y_to)]
+    arts = [a for a in arts if within_range(a["year"], y_from, y_to) and (not au or _wrote(a, au))]
     return enrich_access(arts), data.get("total_records") or 0
 
 def ieee_by_dois(dois):
@@ -2161,7 +2432,8 @@ def _s2_article(p):
         source="Semantic Scholar", access_kind="open" if pdf else None, access_link=pdf,
         pub_types=[_S2_TYPES[t] for t in p.get("publicationTypes") or [] if t in _S2_TYPES])
 
-def search_semantic_scholar(query, max_r, y_from, y_to, sort="relevance", offset=0):
+def search_semantic_scholar(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
+    _cannot("Semantic Scholar", people, author=False, institution=False)
     params = {"query": query, "fields": _S2_FIELDS}
     if y_from or y_to:
         params["year"] = f"{y_from or ''}-{y_to or ''}"
@@ -2230,11 +2502,19 @@ def _core_article(r):
         cited_by=r.get("citationCount") or None, abstract=(r.get("abstract") or "").strip(),
         source="CORE", access_kind="open" if pdf else None, access_link=pdf)
 
-def search_core(query, max_r, y_from, y_to, sort="relevance", offset=0):
+def search_core(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
+    _cannot("CORE", people, institution=False)
+    au = (people or {}).get("author")
     q = query.strip()
     # CORE matches ANY of the words unless told otherwise.
     if not is_power_query(q):
-        q = " AND ".join(q.split())
+        # Beside an author, plain words find almost nothing (1 paper where
+        # naming the fields finds 285, 2 Oct 2026): name them.
+        q = " AND ".join(f'(title:"{w}" OR abstract:"{w}")' if au else w for w in q.split())
+    if au:
+        # CORE reads a name in quotes as any of its words, so it is asked for
+        # the family name and each paper is checked for the initial.
+        q = " AND ".join(([f"({q})"] if q else []) + [f'authors:"{au["family"]}"'])
     bounds = []
     if y_from:
         bounds.append(f"yearPublished>={y_from}")
@@ -2246,7 +2526,7 @@ def search_core(query, max_r, y_from, y_to, sort="relevance", offset=0):
         q = " AND ".join([f"({q})"] + bounds)
     data = _core_get(q, max_r, offset, sort)
     arts = [_core_article(r) for r in data.get("results") or []]
-    arts = [a for a in arts if within_range(a["year"], y_from, y_to)]
+    arts = [a for a in arts if within_range(a["year"], y_from, y_to) and (not au or _wrote(a, au))]
     return enrich_access(arts), data.get("totalHits") or 0
 
 # Every source, in dedup-priority order: when two sources return the same
@@ -2376,15 +2656,18 @@ _LONG_QUERY_SOURCES = {"scopus"}
 
 def merged_search(query, sources=("pubmed", "scopus", "wos"), max_results=10,
                   keywords=None, year_from=None, year_to=None, strict=True,
-                  sort="relevance"):
+                  sort="relevance", author=None, institution=None):
     """
     Run one search across `sources` (keys of SOURCES) at once and return
     {"query", "keywords", "articles": one deduplicated list, "sources": a
     report per source}. `query` may be a long natural-language question; if
     `keywords` is given, every source except Scopus is sent that instead, and
     each report's "query" says what that source was actually sent. Any
-    `max_results` works: Scopus is asked in pages of 25.
+    `max_results` works: Scopus is asked in pages of 25. `author` and
+    `institution` (names, or what people_filter takes) narrow every source
+    that can be narrowed; the others report "not indexed", saying why.
     """
+    people = people_filter(author, institution)
     by_key = {row[0]: row for row in SOURCES}
     unknown = [k for k in sources if k not in by_key]
     if unknown:
@@ -2401,6 +2684,8 @@ def merged_search(query, sources=("pubmed", "scopus", "wos"), max_results=10,
         # Only the PubMed-based sources take `strict`; search_wos and the
         # others have no such argument and would refuse it.
         kwargs = {"sort": sort, "strict": strict} if takes_strict else {"sort": sort}
+        if people:
+            kwargs["people"] = people
         run = (lambda fn=fn, q=q, kwargs=kwargs:
                fn(q, max_results, year_from, year_to, **kwargs))
         jobs.append((key, label, run, q))
@@ -3504,10 +3789,14 @@ def search_stream():
     strict  = data.get("strict", True) is not False
     sort    = data.get("sort") if data.get("sort") in ("relevance", "date") else "relevance"
     load_more = bool(data.get("load_more"))
+    # An author or an institution narrows the search; either alone, with the
+    # box empty, lists their papers.
+    people  = people_filter(data.get("author"), data.get("institution"))
+    search_key = json.dumps([query, people], sort_keys=True)
 
     def one_event(obj):
         return Response(_sse(obj), mimetype="text/event-stream")
-    if not query:
+    if not query and not people:
         return one_event({"type": "error", "text": "Empty query"})
     # A box holding only DOIs looks those papers up: each source by its DOI
     # field, with no years, and Crossref for the ones no source returned.
@@ -3515,7 +3804,7 @@ def search_stream():
     if len(dois) > MAX_DOIS:
         return one_event({"type": "error", "text": f"Look up at most {MAX_DOIS} DOIs at a time. "
                                                    f"This search has {len(dois)}."})
-    if load_more and query != SESSION.get("query"):
+    if load_more and search_key != SESSION.get("search_key"):
         return one_event({"type": "error",
                           "text": "The search changed since these results loaded. Run it again first."})
 
@@ -3527,13 +3816,18 @@ def search_stream():
     # sources the second batch skipped results 11–30 of each.)
     if not load_more:
         SESSION["articles"] = []
-        SESSION["query"]    = query
+        # What the AI and the export are told was searched, filters included.
+        SESSION["query"]    = describe_search(query, None if dois else people)
+        SESSION["search_key"] = search_key
         SESSION["last_synthesis"] = ""
         SESSION["offsets"]  = {}
-        if query in SESSION["history"]:
-            SESSION["history"].remove(query)
-        SESSION["history"].append(query)
-        _save_history()
+        # The history holds what goes back in the box; a search by author or
+        # institution alone has nothing to put there.
+        if query:
+            if query in SESSION["history"]:
+                SESSION["history"].remove(query)
+            SESSION["history"].append(query)
+            _save_history()
     starts = {}
     for key, *_ in selected:
         starts[key] = SESSION["offsets"].get(key, 0) if load_more else 0
@@ -3546,6 +3840,8 @@ def search_stream():
         kwargs = dict(sort=sort, offset=starts[key])
         if takes_strict:
             kwargs["strict"] = strict
+        if people:
+            kwargs["people"] = people
         return fn(query, max_r, y_from, y_to, **kwargs)
 
     def generate():
@@ -3583,7 +3879,7 @@ def search_stream():
                     pending[src_pool.submit(run_source, key, fn, takes_strict)] = ("src", key)
 
             # MeSH hints only on a fresh search that includes a PubMed source
-            if not load_more and not dois and any(k in _PRIORITY_SOURCES for k, *_ in selected):
+            if not load_more and not dois and query and any(k in _PRIORITY_SOURCES for k, *_ in selected):
                 pending[src_pool.submit(get_mesh, query)] = ("mesh",)
 
             def release_ready():
@@ -4425,9 +4721,51 @@ def write_saved(items):
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     SAVED_FILE.write_text(json.dumps(items, indent=2))
 
+@app.template_global()
+def describe_saved(s):
+    """A saved search's line under its name: the words, and who or where."""
+    return describe_search(s.get("query") or "", {k: s[k] for k in ("author", "institution")
+                                                  if isinstance(s.get(k), dict) and s[k].get("name")})
+
+@app.route("/people/suggest")
+def people_suggest():
+    """OpenAlex's suggestions for an author or institution being typed."""
+    kind = request.args.get("kind")
+    q = (request.args.get("q") or "").strip()[:100]
+    if kind not in ("author", "institution"):
+        return jsonify({"ok": False, "message": "Suggestions are for an author or an institution."}), 400
+    if len(q) < 2:
+        return jsonify({"ok": True, "items": []})
+    try:
+        return jsonify({"ok": True, "items": openalex_suggest(kind, q)})
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e) or "OpenAlex didn't answer."}), 502
+
 @app.route("/saved", methods=["GET"])
 def saved_list():
     return jsonify(load_saved())
+
+def _saved_person(given, kind):
+    """What a saved search keeps of an author or institution: the name and,
+    when picked from the suggestions, OpenAlex's ids and the ORCID."""
+    if not isinstance(given, dict) or not _query_safe(given.get("name")):
+        return None
+    kept = {"name": _query_safe(given.get("name"))}
+    if kind == "author":
+        ids = [_openalex_short(i) for i in given.get("openalex") or [] if isinstance(i, str)]
+        ids = [i for i in ids if _OPENALEX_ID["author"].match(i)][:20]
+        orcid = _openalex_short(given.get("orcid")).upper()
+        if ids:
+            kept["openalex"] = ids
+        if _ORCID_RE.match(orcid):
+            kept["orcid"] = orcid
+    else:
+        oid = _openalex_short(given.get("openalex"))
+        if _OPENALEX_ID["institution"].match(oid):
+            kept["openalex"] = oid
+    if isinstance(given.get("hint"), str) and given["hint"].strip():
+        kept["hint"] = given["hint"].strip()[:200]
+    return kept
 
 @app.route("/saved", methods=["POST"])
 def saved_add():
@@ -4435,7 +4773,7 @@ def saved_add():
     items = load_saved()
     entry = {
         "id":        str(int(time.time()*1000)),
-        "name":      data.get("name","").strip() or data.get("query","Untitled"),
+        "name":      (data.get("name") or "").strip() or data.get("query") or "Untitled",
         "query":     data.get("query",""),
         "sources":   data.get("sources",[]),
         "year_from": data.get("year_from"),
@@ -4443,10 +4781,14 @@ def saved_add():
         "max_results": data.get("max_results", MAX_RESULTS_DEFAULT),
         "strict":    data.get("strict", True),
         "sort":      data.get("sort") if data.get("sort") in ("relevance", "date") else "relevance",
+        "author":    _saved_person(data.get("author"), "author"),
+        "institution": _saved_person(data.get("institution"), "institution"),
         "created":   datetime.now().strftime("%Y-%m-%d"),
     }
-    # avoid exact duplicates (same name + query)
-    if not any(s["name"] == entry["name"] and s["query"] == entry["query"] for s in items):
+    # avoid exact duplicates (same name, query and filters)
+    if not any(s["name"] == entry["name"] and s["query"] == entry["query"]
+               and s.get("author") == entry["author"]
+               and s.get("institution") == entry["institution"] for s in items):
         items.append(entry)
         write_saved(items)
     return jsonify({"ok": True, "saved": items})
