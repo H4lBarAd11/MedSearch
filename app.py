@@ -490,22 +490,75 @@ def fetch_json(url, headers=None, timeout=TIMEOUT, error_body=False, data=None, 
 #  DEDUPLICATION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _dedup_keys(doi, title):
-    # DOIs are case-insensitive, and sources disagree on case (PubMed keeps the
-    # publisher's capitals, Crossref lowercases), so compare them lowercased.
+def _norm_text(text):
+    """Letters and digits only, in lower case and without accents, so two
+    spellings of one title compare equal. Letters of every alphabet count:
+    α-synuclein and β-synuclein stay two titles (an a-z filter made them one)."""
+    folded = unicodedata.normalize("NFKD", text or "").casefold()
+    return re.sub(r"[\W_]+", "", "".join(c for c in folded if not unicodedata.combining(c)))
+
+def _norm_title(title):
+    n = _norm_text(title)
+    return "" if n == "notitle" else n     # _article's placeholder is not a title
+
+# Where a subtitle begins: "Effect of X: A Randomized Clinical Trial".
+_SUBTITLE = re.compile(r"[:?!]\s|\s[-\u2013\u2014]\s|\.\s")
+
+def _work_keys(a):
+    """
+    One work recorded twice, where neither the DOI nor the whole title agrees.
+    SEEN 2 OCT 2026: OpenAlex kept a university repository's copy of a JAMA
+    trial as a paper of its own, under the repository's DOI, without the PMID,
+    and with the title cut before ": A Randomized Clinical Trial", so it was
+    listed again beside PubMed's.
+
+    The work is the main title (before a subtitle, at least 25 letters, so
+    "Glioblastoma: …" or "Correction to: …" never qualify), the year and the
+    first author's family name. Only a title WITHOUT a subtitle meets one WITH
+    a subtitle: two subtitles that differ ("X: Part I", "X: Part II") are two
+    papers. Returns (the key this record is filed under, the key that finds
+    its other half), or (None, None) when anything is missing.
+    """
+    title = a.get("title") or ""
+    main = _norm_title(_SUBTITLE.split(title, maxsplit=1)[0])
+    year = str(a.get("year") or "")[:4]
+    names = a.get("author_list") or []
+    family = _norm_text(_name_parts(_query_safe(names[0]))[0]) if names else ""
+    if len(main) < 25 or not year.isdigit() or not family:
+        return None, None
+    work = f"{main}|{year}|{family}"
+    if main == _norm_title(title):
+        return "bare:" + work, "sub:" + work
+    return "sub:" + work, "bare:" + work
+
+def _dedup_keys(a):
+    """What a result is filed under: the DOI (in any case: PubMed keeps the
+    publisher's capitals, Crossref lowercases), the PMID, the whole title,
+    and the work (_work_keys)."""
     keys = []
+    doi = (a.get("doi") or "").strip().lower()
     if doi:
-        keys.append("doi:" + doi.strip().lower())
-    norm = re.sub(r"[^a-z0-9]", "", (title or "").lower())
-    if norm:
-        keys.append("title:" + norm)
+        keys.append("doi:" + doi)
+    pmid = str(a.get("pmid") or "").strip()
+    if pmid:
+        keys.append("pmid:" + pmid)
+    title = _norm_title(a.get("title"))
+    if title:
+        keys.append("title:" + title)
+    filed, _other_half = _work_keys(a)
+    if filed:
+        keys.append(filed)
     return keys
 
-def is_duplicate(seen, doi, title):
-    return any(k in seen for k in _dedup_keys(doi, title))
+def is_duplicate(seen, a):
+    """Whether a result is one already listed: by DOI, PMID or whole title,
+    or as the other half of a work (_work_keys)."""
+    _filed, other_half = _work_keys(a)
+    return (any(k in seen for k in _dedup_keys(a) if not k.startswith(("bare:", "sub:")))
+            or (other_half is not None and other_half in seen))
 
-def register(seen, doi, title):
-    seen.update(_dedup_keys(doi, title))
+def register(seen, a):
+    seen.update(_dedup_keys(a))
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ACCESS RESOLUTION
@@ -2617,30 +2670,30 @@ def _gather(jobs):
             reports[key] = rep
     return groups, reports
 
-def _norm_title(title):
-    n = re.sub(r"[^a-z0-9]", "", (title or "").lower())
-    return "" if n == "notitle" else n     # _article's placeholder is not a title
-
 def merge_articles(groups):
     """
     One list from [(source_label, articles)], given in priority order: the
     first source to return a paper keeps its record; later ones only fill what
     it lacks (DOI, PMID, abstract, citation count) and add their name to
     `found_in`. Two records are the same paper by DOI; failing that by PMID;
-    failing that by normalised title — but a title match between two records
-    whose DOIs (or PMIDs) differ is two papers, not one.
+    failing that as two halves of one work (_work_keys), whatever their DOIs;
+    failing that by normalised title — but a title match
+    between two records whose DOIs (or PMIDs) differ is two papers, not one.
     """
-    merged, by_doi, by_pmid, by_title = [], {}, {}, {}
+    merged, by_doi, by_pmid, by_title, by_work = [], {}, {}, {}, {}
     for label, arts in groups:
         for a in arts:
             doi = (a.get("doi") or "").strip().lower() or None
             pmid = str(a.get("pmid") or "").strip() or None
             title = _norm_title(a.get("title"))
+            filed, other_half = _work_keys(a)
             hit = by_doi.get(doi) if doi else None
             if hit is None and pmid:
                 h = by_pmid.get(pmid)
                 if h is not None and not (doi and h.get("doi")):
                     hit = h
+            if hit is None and other_half:
+                hit = by_work.get(other_half)
             if hit is None and title:
                 hit = next((h for h in by_title.get(title, [])
                             if not (doi and h.get("doi")) and not (pmid and h.get("pmid"))), None)
@@ -2662,6 +2715,9 @@ def merge_articles(groups):
             t = _norm_title(hit.get("title"))
             if t and hit not in by_title.setdefault(t, []):
                 by_title[t].append(hit)
+            for w in (filed, _work_keys(hit)[0]):
+                if w:
+                    by_work.setdefault(w, hit)
     return merged
 
 # Scopus reads a sentence as a search. PubMed ANDs every word (tagged [tiab]
@@ -3864,7 +3920,7 @@ def search_stream():
         if load_more:
             all_results = list(SESSION["articles"])
             for a in all_results:
-                register(seen, a.get("doi"), a.get("title"))
+                register(seen, a)
         else:
             all_results = []
         ai_on = ai_active()
@@ -3911,9 +3967,12 @@ def search_stream():
                         yield _sse({"type": "source_error", "source": label, "text": err})
                     fresh = []
                     for a in res:
-                        if is_duplicate(seen, a.get("doi"), a.get("title")):
+                        if is_duplicate(seen, a):
+                            # Its own DOI and title count too, so a third copy
+                            # that matches only this one is caught as well.
+                            register(seen, a)
                             continue
-                        register(seen, a.get("doi"), a.get("title"))
+                        register(seen, a)
                         a["_idx"] = len(all_results)
                         all_results.append(a)
                         fresh.append(a)

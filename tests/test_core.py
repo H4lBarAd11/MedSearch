@@ -11,23 +11,122 @@ from conftest import article
 
 # ── Deduplication ───────────────────────────────────────────────────────────
 
-def test_dois_are_compared_case_insensitively():
+def _seen(*records):
     seen = set()
-    A.register(seen, "10.1016/J.WNEU.2020.01.001", "One title")
-    assert A.is_duplicate(seen, "10.1016/j.wneu.2020.01.001", "A different title")
+    for r in records:
+        A.register(seen, r)
+    return seen
+
+
+def test_dois_are_compared_case_insensitively():
+    seen = _seen({"doi": "10.1016/J.WNEU.2020.01.001", "title": "One title"})
+    assert A.is_duplicate(seen, {"doi": "10.1016/j.wneu.2020.01.001", "title": "A different title"})
 
 
 def test_titles_match_ignoring_case_and_punctuation():
-    seen = set()
-    A.register(seen, None, "Awake craniotomy: a review.")
-    assert A.is_duplicate(seen, None, "AWAKE CRANIOTOMY — A REVIEW")
-    assert not A.is_duplicate(seen, None, "Asleep craniotomy: a review")
+    seen = _seen({"title": "Awake craniotomy: a review."})
+    assert A.is_duplicate(seen, {"title": "AWAKE CRANIOTOMY — A REVIEW"})
+    assert not A.is_duplicate(seen, {"title": "Asleep craniotomy: a review"})
 
 
 def test_an_empty_title_never_matches_another_empty_title():
-    seen = set()
-    A.register(seen, None, "")
-    assert not A.is_duplicate(seen, None, "")
+    seen = _seen({"title": ""})
+    assert not A.is_duplicate(seen, {"title": ""})
+
+
+def test_papers_without_a_title_are_not_all_one_paper():
+    """_article calls a paper with no title "No title": that is not a title."""
+    seen = _seen(article(title="No title", doi="10.1/a"))
+    assert not A.is_duplicate(seen, article(title="No title", doi="10.1/b"))
+
+
+def test_a_letter_of_another_alphabet_still_tells_two_titles_apart():
+    seen = _seen({"title": "α-Synuclein in Parkinson's disease"})
+    assert not A.is_duplicate(seen, {"title": "β-Synuclein in Parkinson's disease"})
+    assert A.is_duplicate(seen, {"title": "Α-SYNUCLEIN IN PARKINSON'S DISEASE."})
+    assert A.is_duplicate(_seen({"title": "Résection éveillée"}), {"title": "Resection eveillee"})
+
+
+def test_one_pmid_is_one_paper_whatever_the_dois_and_titles():
+    seen = _seen({"pmid": "29260225", "doi": "10.1001/jama.2017.18718", "title": "One"})
+    assert A.is_duplicate(seen, {"pmid": "29260225", "doi": "10.5167/uzh-1", "title": "Two"})
+
+
+# SEEN 2 OCT 2026: PubMed's record of a JAMA trial, and OpenAlex's second record
+# of it, a university repository's copy (placeholder authors).
+JOURNAL = {"doi": "10.1001/jama.2017.0001", "pmid": "29260225", "year": "2017",
+           "author_list": ["Doe, Jane", "Example, Ada"],
+           "title": "Effect of Tumor-Treating Fields Plus Maintenance Temozolomide vs Maintenance "
+                    "Temozolomide Alone on Survival in Patients With Glioblastoma: "
+                    "A Randomized Clinical Trial."}
+REPOSITORY = {"doi": "10.5167/uzh-000001", "pmid": None, "year": "2017",
+              "author_list": ["Jane Doe", "Ada Example"],
+              "title": "Effect of Tumor-Treating Fields Plus Maintenance Temozolomide vs Maintenance "
+                       "Temozolomide Alone on Survival in Patients With Glioblastoma"}
+
+
+def test_a_repository_copy_under_its_own_doi_is_the_same_paper():
+    assert A.is_duplicate(_seen(JOURNAL), REPOSITORY)
+    assert A.is_duplicate(_seen(REPOSITORY), JOURNAL)
+    assert A.is_duplicate(_seen(JOURNAL), dict(REPOSITORY, author_list=["Doe J", "Example A"]))
+
+
+@pytest.mark.parametrize("change", [
+    {"year": "2018"},                                     # another year
+    {"author_list": ["Smith, Jane"]},                     # another first author
+    {"author_list": []},                                  # no author to compare
+    {"year": "n.d."},                                     # no year to compare
+])
+def test_a_shared_main_title_alone_is_not_the_same_paper(change):
+    assert not A.is_duplicate(_seen(JOURNAL), dict(REPOSITORY, **change))
+
+
+def test_two_different_subtitles_are_two_papers_even_by_one_author_in_one_year():
+    part = {"year": "2020", "author_list": ["Doe, Jane"]}
+    one = dict(part, title="Awake surgery for low-grade gliomas in adults: part I", doi="10.1/1")
+    two = dict(part, title="Awake surgery for low-grade gliomas in adults: part II", doi="10.1/2")
+    assert not A.is_duplicate(_seen(one), two)
+    assert len(A.merge_articles([("A", [article(**one)]), ("B", [article(**two)])])) == 2
+
+
+def test_two_records_without_a_year_are_not_matched_by_their_main_title():
+    assert not A.is_duplicate(_seen(dict(JOURNAL, year="n.d.")), dict(REPOSITORY, year="n.d."))
+
+
+@pytest.mark.parametrize("first, second", [
+    ("Glioblastoma", "Glioblastoma: a review of radiotherapy"),   # an editorial, and a review
+    ("Glioblastoma: imaging after surgery", "Glioblastoma: a review of radiotherapy"),
+    ("Correction to: Awake mapping of language areas in adults",
+     "Correction to: Awake mapping of motor areas in adults"),
+])
+def test_a_short_main_title_never_makes_two_papers_one(first, second):
+    a = {"year": "2020", "author_list": ["Doe, Jane"]}
+    assert not A.is_duplicate(_seen(dict(a, title=first, doi="10.1/a")), dict(a, title=second, doi="10.1/b"))
+
+
+def test_a_third_copy_matching_only_a_skipped_duplicate_is_caught_too(client, auth, monkeypatch):
+    from conftest import BASE, sse_events
+    # Cochrane, Guidelines and PubMed are always released in that order, so
+    # the journal record comes first, its repository copy second, and a third
+    # record sharing only the copy's DOI last.
+    third = article(title="Awake mapping: repository copy", doi=REPOSITORY["doi"])
+    results = {"cochrane": [article(**JOURNAL)], "guidelines": [article(**REPOSITORY)],
+               "pubmed": [third]}
+
+    def make(key):
+        return lambda q, *a, **k: ([dict(r) for r in results.get(key, [])], 0)
+    monkeypatch.setattr(A, "SOURCES", [(k, l, make(k), s) for k, l, _f, s in A.SOURCES])
+    monkeypatch.setattr(A, "get_mesh", lambda q: [])
+    monkeypatch.setattr(A, "save_doi_cache", lambda: None)
+    events = sse_events(client.post("/search_stream", headers=auth, base_url=BASE, json={
+        "query": "glioblastoma", "sources": ["cochrane", "guidelines", "pubmed"]}))
+    assert [e["source"] for e in events if e["type"] == "article"] == ["Cochrane"]
+
+
+def test_the_merged_list_makes_the_repository_copy_one_paper_found_in_both():
+    merged = A.merge_articles([("PubMed", [article(**JOURNAL)]), ("OpenAlex", [article(**REPOSITORY)])])
+    assert len(merged) == 1
+    assert merged[0]["doi"] == JOURNAL["doi"] and merged[0]["found_in"] == ["PubMed", "OpenAlex"]
 
 
 # ── Versions ────────────────────────────────────────────────────────────────
