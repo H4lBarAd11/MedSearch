@@ -24,7 +24,7 @@ Server-Sent Events (SSE).
 
 import sys, os, json, re, time, threading, urllib.parse, urllib.request
 import urllib.error, xml.etree.ElementTree as ET
-import concurrent.futures, hashlib, hmac, html, secrets, ssl, subprocess
+import concurrent.futures, hashlib, hmac, html, random, secrets, ssl, subprocess
 import plistlib, shlex, shutil, tempfile, unicodedata
 from datetime import datetime
 from pathlib import Path
@@ -453,11 +453,12 @@ def _contact_email():
     """The user's own address for polite-pool APIs (NCBI, Crossref), or None."""
     return (CONFIG.get("unpaywall_email") or "").strip() or None
 
-def http_get(url, headers=None, timeout=TIMEOUT, error_body=False, data=None):
+def http_get(url, headers=None, timeout=TIMEOUT, error_body=False, data=None, retry=True):
     """error_body=True also returns what the server said alongside an HTTP error.
     Opt-in, because most callers read a body as "it worked"; the ones that ask
     for it check the status first and use the body to say WHY it was refused.
-    `data` (bytes) makes it a POST."""
+    `data` (bytes) makes it a POST. A 429 is asked again once, a second later,
+    unless retry=False: the caller then waits by its own rule."""
     req = urllib.request.Request(url, data=data, headers=headers or {
         "User-Agent": "MedSearch/1.0 (academic literature search)"})
     for attempt in (1, 2):
@@ -466,7 +467,7 @@ def http_get(url, headers=None, timeout=TIMEOUT, error_body=False, data=None):
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return r.read().decode("utf-8", errors="replace"), r.status
         except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt == 1:
+            if e.code == 429 and attempt == 1 and retry:
                 time.sleep(1.0)
                 continue
             if error_body:
@@ -477,8 +478,9 @@ def http_get(url, headers=None, timeout=TIMEOUT, error_body=False, data=None):
             return None, 0
     return None, 0
 
-def fetch_json(url, headers=None, timeout=TIMEOUT, error_body=False, data=None):
-    body, status = http_get(url, headers, timeout=timeout, error_body=error_body, data=data)
+def fetch_json(url, headers=None, timeout=TIMEOUT, error_body=False, data=None, retry=True):
+    body, status = http_get(url, headers, timeout=timeout, error_body=error_body, data=data,
+                            retry=retry)
     if body:
         try: return json.loads(body), status
         except Exception: pass
@@ -2390,6 +2392,14 @@ _S2_FIELDS = ("title,year,authors,venue,journal,externalIds,abstract,citationCou
 _S2_TYPES = {"MetaAnalysis": "Meta-analysis", "Review": "Review",
              "ClinicalTrial": "Clinical trial", "CaseReport": "Case report"}
 
+# Semantic Scholar's key terms (agreed when the key is requested): calls are
+# spaced to one a second (_S2_LIMITER), and a call refused as too many or
+# while its servers are busy is asked again with exponential backoff, 1, 2
+# then 4 seconds plus a random part, so that clients refused together do not
+# return together. Then it gives up and says so.
+_S2_BACKOFF = (1, 2, 4)
+_S2_BUSY = (429, 500, 502, 503, 504)
+
 def _s2_call(path, params, body=None):
     key = _key("semantic_scholar_api_key")
     if not key:
@@ -2397,19 +2407,24 @@ def _s2_call(path, params, body=None):
     headers = {"x-api-key": key, "User-Agent": "MedSearch/1.0"}
     if body is not None:
         headers["Content-Type"] = "application/json"
-    data, status = fetch_json(f"{S2}{path}?{urllib.parse.urlencode(params)}", headers=headers,
-                              timeout=25, error_body=True,
-                              data=json.dumps(body).encode() if body is not None else None)
+    for wait in (*_S2_BACKOFF, None):
+        data, status = fetch_json(f"{S2}{path}?{urllib.parse.urlencode(params)}", headers=headers,
+                                  timeout=25, error_body=True, retry=False,
+                                  data=json.dumps(body).encode() if body is not None else None)
+        if status not in _S2_BUSY or wait is None:
+            break
+        time.sleep(wait + random.uniform(0, wait / 2))
     if status == 200 and data is not None:
         return data
     said = ((data or {}).get("message") or (data or {}).get("error") or "") \
         if isinstance(data, dict) else ""
     if status in (401, 403):
-        raise RuntimeError(f"Semantic Scholar did not accept the API key ({status}). "
-                           "Check it in Settings.")
+        raise RuntimeError(f"Semantic Scholar did not accept the API key ({status}). Check it in "
+                           "Settings. Semantic Scholar removes keys left unused for about 60 "
+                           "days; a removed key has to be requested again.")
     if status == 429:
-        raise RuntimeError("Semantic Scholar is answering too many calls (429). "
-                           "Try again in a moment.")
+        raise RuntimeError("Semantic Scholar is answering too many calls (429), and still was "
+                           "after three tries over about ten seconds. Try again in a moment.")
     if status == 400:
         raise RuntimeError("Semantic Scholar rejected the query (400)"
                            + (f": {said}" if said else "."))
