@@ -147,6 +147,11 @@ DEFAULTS = {
     "scopus_api_key":    "",
     "scopus_insttoken":  "",
     "wos_api_key":       "",
+    "ieee_api_key":      "",
+    "semantic_scholar_api_key": "",
+    # Optional: OpenAlex and CORE answer without a key, a key allows more.
+    "openalex_api_key":  "",
+    "core_api_key":      "",
     "unpaywall_email":   "",
     # User preference: whether AI features are active (independent of key).
     # Lets users who don't want AI turn it off even with a key present.
@@ -183,7 +188,8 @@ DEFAULTS = {
 # unpaywall_email is deliberately not one: it is an address, shown in full in
 # Settings, and it is what identifies the caller to Unpaywall.
 SECRET_KEYS = ("anthropic_api_key", "pubmed_api_key", "scopus_api_key",
-               "scopus_insttoken", "wos_api_key")
+               "scopus_insttoken", "wos_api_key", "ieee_api_key",
+               "semantic_scholar_api_key", "openalex_api_key", "core_api_key")
 
 
 def _config_for_disk(cfg, stored):
@@ -433,21 +439,26 @@ class _RateLimiter:
 # lookups all hit NCBI. NCBI allows 3 requests/s without a key and 10 with one,
 # and answers 429 beyond that, so every NCBI call shares one limiter.
 _NCBI_LIMITER = _RateLimiter()
+# A Semantic Scholar key allows one request a second, across all its uses.
+_S2_LIMITER = _RateLimiter()
 
 def _throttle(url):
     host = (urllib.parse.urlparse(url).hostname or "").lower()
     if host.endswith("ncbi.nlm.nih.gov"):
         _NCBI_LIMITER.wait(9 if CONFIG.get("pubmed_api_key") else 2.8)
+    elif host == "api.semanticscholar.org":
+        _S2_LIMITER.wait(1)
 
 def _contact_email():
     """The user's own address for polite-pool APIs (NCBI, Crossref), or None."""
     return (CONFIG.get("unpaywall_email") or "").strip() or None
 
-def http_get(url, headers=None, timeout=TIMEOUT, error_body=False):
+def http_get(url, headers=None, timeout=TIMEOUT, error_body=False, data=None):
     """error_body=True also returns what the server said alongside an HTTP error.
     Opt-in, because most callers read a body as "it worked"; the ones that ask
-    for it check the status first and use the body to say WHY it was refused."""
-    req = urllib.request.Request(url, headers=headers or {
+    for it check the status first and use the body to say WHY it was refused.
+    `data` (bytes) makes it a POST."""
+    req = urllib.request.Request(url, data=data, headers=headers or {
         "User-Agent": "MedSearch/1.0 (academic literature search)"})
     for attempt in (1, 2):
         _throttle(url)
@@ -466,8 +477,8 @@ def http_get(url, headers=None, timeout=TIMEOUT, error_body=False):
             return None, 0
     return None, 0
 
-def fetch_json(url, headers=None, timeout=TIMEOUT, error_body=False):
-    body, status = http_get(url, headers, timeout=timeout, error_body=error_body)
+def fetch_json(url, headers=None, timeout=TIMEOUT, error_body=False, data=None):
+    body, status = http_get(url, headers, timeout=timeout, error_body=error_body, data=data)
     if body:
         try: return json.loads(body), status
         except Exception: pass
@@ -1365,10 +1376,11 @@ _PUB_TYPE_BADGES = [
 ]
 
 def _pub_type_badges(raw_types):
-    raw = set(raw_types)
+    # Europe PMC writes some of PubMed's names in lower case ("review").
+    raw = {t.lower() for t in raw_types}
     out = []
     for name, badge in _PUB_TYPE_BADGES:
-        if name in raw and badge not in out:
+        if name.lower() in raw and badge not in out:
             out.append(badge)
     return out
 
@@ -1830,21 +1842,433 @@ def search_wos(query, max_r, y_from, y_to, sort="relevance", offset=0):
             abstract=h.get("abstract") or "", source="Web of Science"))
     return enrich_access(results), 0
 
+def _key(setting):
+    return (CONFIG.get(setting) or "").strip()
+
+def _strict_terms(query, field):
+    """Strict, for a source with a title-and-abstract field: every word in
+    that field, ANDed, as build_pubmed_term does with [tiab]."""
+    return " AND ".join(f'{field}:"{w}"' for w in query.split())
+
+# ── OpenAlex ─────────────────────────────────────────────────────────────────
+# Free, key or no key. Without one it allows $0.10 of calls a day, with a free
+# key $1; a search costs $0.001, a list by filter $0.0001, and looking a paper
+# up by its DOI or id is free. The allowance renews at midnight UTC.
+OPENALEX = "https://api.openalex.org"
+_OPENALEX_FIELDS = ("id,doi,display_name,publication_year,authorships,primary_location,"
+                    "abstract_inverted_index,cited_by_count,ids,type,is_retracted,locations")
+_OPENALEX_TYPES = {"review": ["Review"], "preprint": ["Preprint"]}
+
+def _openalex_get(path, params):
+    """One OpenAlex answer as JSON. Raises, saying why, when refused."""
+    if _key("openalex_api_key"):
+        params = dict(params, api_key=_key("openalex_api_key"))
+    data, status = fetch_json(f"{OPENALEX}{path}?{urllib.parse.urlencode(params)}",
+                              error_body=True)
+    if status == 200 and isinstance(data, dict):
+        return data
+    if status == 429:
+        raise RuntimeError("OpenAlex's daily allowance is used up (429). It renews at midnight "
+                           "UTC (early morning in Europe). A free OpenAlex API key, added in "
+                           "Settings, allows ten times as many searches a day.")
+    if status in (401, 403):
+        raise RuntimeError(f"OpenAlex did not accept the API key ({status}). Check it in "
+                           "Settings, or remove it: OpenAlex also answers without one.")
+    if status == 400:
+        said = (data or {}).get("message") or (data or {}).get("error")
+        raise RuntimeError("OpenAlex rejected the query (400)" + (f": {said}" if said else "."))
+    if not status:
+        raise RuntimeError("OpenAlex didn't respond. Check your connection and try again.")
+    raise RuntimeError(f"OpenAlex returned HTTP {status}.")
+
+def _openalex_abstract(inverted):
+    """OpenAlex keeps an abstract as {word: [positions]}; this puts it back in order."""
+    at = {}
+    for word, places in (inverted or {}).items():
+        for i in places or []:
+            at[i] = word
+    return " ".join(at[i] for i in sorted(at))
+
+def _openalex_article(w):
+    names = [((au.get("author") or {}).get("display_name") or au.get("raw_author_name") or "").strip()
+             for au in w.get("authorships") or []]
+    names = [n for n in names if n]
+    pmid = ((w.get("ids") or {}).get("pmid") or "").rstrip("/").rsplit("/", 1)[-1]
+    oa = _best_oa_url(_openalex_locations(w))
+    return _article(
+        title=_jats_text(w.get("display_name") or "") or "No title",
+        authors=_short_authors(names), author_list=names,
+        year=str(w.get("publication_year") or "n.d."),
+        journal=((w.get("primary_location") or {}).get("source") or {}).get("display_name") or "",
+        doi=_clean_doi(w.get("doi")) or None, pmid=pmid if pmid.isdigit() else None,
+        cited_by=w.get("cited_by_count") or None,
+        abstract=_openalex_abstract(w.get("abstract_inverted_index")), source="OpenAlex",
+        access_kind="open" if oa else None, access_link=oa,
+        retraction="retracted" if w.get("is_retracted") else None,
+        pub_types=_OPENALEX_TYPES.get(w.get("type"), []))
+
+def search_openalex(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0):
+    q = query.strip()
+    filters = []
+    params = {"per-page": max_r, "page": offset // max_r + 1 if max_r else 1,
+              "select": _OPENALEX_FIELDS}
+    # Strict: the words in the title or abstract. Broad, or a query with
+    # operators: OpenAlex's own search, which also reads the full text.
+    if strict and not is_power_query(q):
+        # A comma separates OpenAlex's filters, so it cannot be inside one.
+        filters.append("title_and_abstract.search:" + q.replace(",", " "))
+    else:
+        params["search"] = q
+    if y_from:
+        filters.append(f"from_publication_date:{y_from}-01-01")
+    if y_to:
+        filters.append(f"to_publication_date:{y_to}-12-31")
+    if filters:
+        params["filter"] = ",".join(filters)
+    if sort == "date":
+        params["sort"] = "publication_date:desc"
+    data = _openalex_get("/works", params)
+    arts = [_openalex_article(w) for w in data.get("results") or []]
+    arts = [a for a in arts if within_range(a["year"], y_from, y_to)]
+    return enrich_access(arts), (data.get("meta") or {}).get("count") or 0
+
+def openalex_by_dois(dois):
+    """The OpenAlex records of these DOIs (free: a lookup, not a search)."""
+    data = _openalex_get("/works", {"filter": "doi:" + "|".join(dois),
+                                    "per-page": min(2 * len(dois), 200),
+                                    "select": _OPENALEX_FIELDS})
+    return enrich_access([_openalex_article(w) for w in data.get("results") or []])
+
+# ── Europe PMC ───────────────────────────────────────────────────────────────
+# Free, no key. PubMed's records and PubMed Central's, plus the preprint
+# servers (medRxiv, bioRxiv, Research Square, …) that have no search of their
+# own, and the full text of its open-access papers.
+EUROPEPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+
+def _europepmc_term(query, strict=True):
+    q = query.strip()
+    if is_power_query(q) or not strict or not q:
+        return q
+    return _strict_terms(q, "TITLE_ABS")
+
+def _europepmc_get(term, page_size, sort="relevance"):
+    params = {"query": term, "format": "json", "resultType": "core", "pageSize": page_size}
+    if sort == "date":
+        params["sort"] = "FIRST_PDATE_D desc"
+    data, status = fetch_json(f"{EUROPEPMC}?{urllib.parse.urlencode(params)}",
+                              timeout=25, error_body=True)
+    if status == 200 and isinstance(data, dict):
+        return data
+    if status == 400:
+        said = ((data or {}).get("errMsg") or "").strip()
+        raise RuntimeError("Europe PMC rejected the query (400)" + (f": {said}" if said else "."))
+    if not status:
+        raise RuntimeError("Europe PMC didn't respond. Check your connection and try again.")
+    raise RuntimeError(f"Europe PMC returned HTTP {status}.")
+
+def _europepmc_article(r):
+    people = ((r.get("authorList") or {}).get("author")) or []
+    names = [(p.get("fullName") or p.get("collectiveName") or "").strip() for p in people]
+    names = [n for n in names if n]
+    if not names and r.get("authorString"):
+        names = [n.strip() for n in r["authorString"].rstrip(".").split(",") if n.strip()]
+    types = ((r.get("pubTypeList") or {}).get("pubType")) or []
+    journal = (((r.get("journalInfo") or {}).get("journal") or {}).get("title")
+               or (r.get("bookOrReportDetails") or {}).get("publisher") or "")
+    a = _article(
+        title=_jats_text(r.get("title") or "") or "No title",
+        authors=_short_authors(names), author_list=names,
+        year=str(r.get("pubYear") or "n.d."), journal=journal,
+        doi=r.get("doi"), pmid=r.get("pmid"), cited_by=r.get("citedByCount") or None,
+        abstract=_jats_text(r.get("abstractText") or ""), source="Europe PMC",
+        pub_types=_pub_type_badges(types),
+        retraction="retracted" if any(t.lower() == "retracted publication" for t in types) else None)
+    # An open-access paper in PubMed Central: its PDF, with no extra lookup.
+    if r.get("pmcid") and r.get("isOpenAccess") == "Y":
+        a["access_kind"], a["access_link"] = "open", _pmc_pdf_url(r["pmcid"])
+    return a
+
+def search_europepmc(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0):
+    term = _europepmc_term(query, strict)
+    if y_from or y_to:
+        term = f"({term}) AND PUB_YEAR:[{y_from or 1000} TO {y_to or 3000}]"
+    # Europe PMC pages by an opaque cursor, not by number, so "load more"
+    # asks for everything up to the next batch and keeps only that batch.
+    data = _europepmc_get(term, min(offset + max_r, 1000), sort)
+    results = ((data.get("resultList") or {}).get("result") or [])[offset:offset + max_r]
+    arts = [_europepmc_article(r) for r in results]
+    arts = [a for a in arts if within_range(a["year"], y_from, y_to)]
+    return enrich_access(arts), data.get("hitCount") or 0
+
+# ── Crossref ─────────────────────────────────────────────────────────────────
+# Free, no key: every DOI registered, from every publisher. Its search was
+# built to match citations, so it ranks topics loosely; abstracts are missing
+# for many papers (PubMed fills those it has).
+CROSSREF = "https://api.crossref.org/works"
+_CROSSREF_TYPES = ("journal-article", "posted-content", "proceedings-article", "book-chapter")
+# "institution" is refused here (HTTP 400): a search may not select it.
+_CROSSREF_FIELDS = ("DOI,title,author,container-title,published-print,"
+                    "published-online,issued,created,abstract,type,is-referenced-by-count")
+
+def _crossref_headers():
+    return {"User-Agent": "MedSearch/1.0" +
+            (f" (mailto:{_contact_email()})" if _contact_email() else "")}
+
+def search_crossref(query, max_r, y_from, y_to, sort="relevance", offset=0):
+    filters = [f"type:{t}" for t in _CROSSREF_TYPES]
+    if y_from:
+        filters.append(f"from-pub-date:{y_from}")
+    if y_to:
+        filters.append(f"until-pub-date:{y_to}-12-31")
+    params = {"query": query, "rows": max_r, "offset": offset,
+              "filter": ",".join(filters), "select": _CROSSREF_FIELDS}
+    if sort == "date":
+        params.update(sort="published", order="desc")
+    data, status = fetch_json(f"{CROSSREF}?{urllib.parse.urlencode(params)}",
+                              headers=_crossref_headers(), timeout=25, error_body=True)
+    if status != 200 or not isinstance(data, dict):
+        if status == 400:
+            said = "; ".join(m.get("message", "") for m in (data or {}).get("message") or []
+                             if isinstance(m, dict))
+            raise RuntimeError("Crossref rejected the query (400)" + (f": {said}" if said else "."))
+        if not status:
+            raise RuntimeError("Crossref didn't respond. Check your connection and try again.")
+        raise RuntimeError(f"Crossref returned HTTP {status}.")
+    msg = data.get("message") or {}
+    arts = [_crossref_article(m) for m in msg.get("items") or []]
+    arts = [a for a in arts if within_range(a["year"], y_from, y_to)]
+    return enrich_access(fill_abstracts_from_pubmed(arts)), msg.get("total-results") or 0
+
+# ── IEEE Xplore ──────────────────────────────────────────────────────────────
+# Needs a free key from developer.ieee.org: 200 calls a day, 10 a second.
+IEEE = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
+
+def _ieee_get(params):
+    key = _key("ieee_api_key")
+    if not key:
+        raise RuntimeError("No IEEE Xplore API key set.")
+    url = f"{IEEE}?{urllib.parse.urlencode(dict(params, apikey=key, format='json'))}"
+    body, status = http_get(url, timeout=20, error_body=True)
+    if status == 200 and body:
+        try:
+            return json.loads(body)
+        except Exception:
+            raise RuntimeError("IEEE Xplore sent a response that couldn't be read.")
+    # IEEE says why in a line of HTML: "<h1>Developer Inactive</h1>".
+    said = " ".join(re.sub(r"<[^>]+>", " ", body or "").split())
+    if "Per Day" in said:
+        raise RuntimeError("IEEE Xplore's daily allowance for this key (200 calls) is used up "
+                           f"({status}: {said}). It renews tomorrow.")
+    if "Per Second" in said:
+        raise RuntimeError(f"IEEE Xplore was asked too fast ({status}: {said}). "
+                           "Try again in a moment.")
+    if status in (401, 403):
+        raise RuntimeError(f"IEEE Xplore did not accept the API key ({status}"
+                           + (f": {said}" if said else "") + "). Check it in Settings: a new "
+                           "key can take a while to be activated on developer.ieee.org.")
+    if not status:
+        raise RuntimeError("IEEE Xplore didn't respond. Check your connection and try again.")
+    raise RuntimeError(f"IEEE Xplore returned HTTP {status}" + (f": {said}" if said else "."))
+
+def _ieee_article(r):
+    people = sorted(((r.get("authors") or {}).get("authors")) or [],
+                    key=lambda p: p.get("author_order") or 0)
+    names = [p.get("full_name", "").strip() for p in people if p.get("full_name")]
+    return _article(
+        title=_jats_text(r.get("title") or "") or "No title",
+        authors=_short_authors(names), author_list=names,
+        year=str(r.get("publication_year") or "n.d."),
+        journal=r.get("publication_title") or "", doi=r.get("doi"),
+        cited_by=r.get("citing_paper_count") or None,
+        abstract=_jats_text(r.get("abstract") or ""), source="IEEE Xplore")
+
+def search_ieee(query, max_r, y_from, y_to, sort="relevance", offset=0):
+    params = {"querytext": query, "max_records": max_r, "start_record": offset + 1}
+    if y_from:
+        params["start_year"] = y_from
+    if y_to:
+        params["end_year"] = y_to
+    if sort == "date":
+        params.update(sort_field="publication_year", sort_order="desc")
+    data = _ieee_get(params)
+    arts = [_ieee_article(r) for r in data.get("articles") or []]
+    arts = [a for a in arts if within_range(a["year"], y_from, y_to)]
+    return enrich_access(arts), data.get("total_records") or 0
+
+def ieee_by_dois(dois):
+    """IEEE Xplore's records of these DOIs, one call each, so only the DOIs
+    IEEE itself issues (10.1109/…) are asked: the key allows 200 calls a day."""
+    own = [d for d in dois if d.lower().startswith("10.1109/")]
+    if not own:
+        raise SourceCannotAnswer("IEEE Xplore is asked only about IEEE's own DOIs, "
+                                 "the ones beginning 10.1109/.")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+        answers = list(ex.map(lambda d: _ieee_get({"doi": d, "max_records": 2}), own))
+    return enrich_access([_ieee_article(r) for data in answers
+                          for r in data.get("articles") or []])
+
+# ── Semantic Scholar ─────────────────────────────────────────────────────────
+# Needs a free key (semanticscholar.org/product/api): without one it shares
+# a pool with everyone, and refuses most calls. One call a second per key.
+S2 = "https://api.semanticscholar.org/graph/v1"
+_S2_FIELDS = ("title,year,authors,venue,journal,externalIds,abstract,citationCount,"
+              "openAccessPdf,publicationTypes")
+_S2_TYPES = {"MetaAnalysis": "Meta-analysis", "Review": "Review",
+             "ClinicalTrial": "Clinical trial", "CaseReport": "Case report"}
+
+def _s2_call(path, params, body=None):
+    key = _key("semantic_scholar_api_key")
+    if not key:
+        raise RuntimeError("No Semantic Scholar API key set.")
+    headers = {"x-api-key": key, "User-Agent": "MedSearch/1.0"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    data, status = fetch_json(f"{S2}{path}?{urllib.parse.urlencode(params)}", headers=headers,
+                              timeout=25, error_body=True,
+                              data=json.dumps(body).encode() if body is not None else None)
+    if status == 200 and data is not None:
+        return data
+    said = ((data or {}).get("message") or (data or {}).get("error") or "") \
+        if isinstance(data, dict) else ""
+    if status in (401, 403):
+        raise RuntimeError(f"Semantic Scholar did not accept the API key ({status}). "
+                           "Check it in Settings.")
+    if status == 429:
+        raise RuntimeError("Semantic Scholar is answering too many calls (429). "
+                           "Try again in a moment.")
+    if status == 400:
+        raise RuntimeError("Semantic Scholar rejected the query (400)"
+                           + (f": {said}" if said else "."))
+    if not status:
+        raise RuntimeError("Semantic Scholar didn't respond. Check your connection and try again.")
+    raise RuntimeError(f"Semantic Scholar returned HTTP {status}.")
+
+def _s2_article(p):
+    ids = p.get("externalIds") or {}
+    names = [a.get("name", "").strip() for a in p.get("authors") or [] if a.get("name")]
+    pdf = (p.get("openAccessPdf") or {}).get("url") or None
+    if pdf and not _is_full_text(pdf):
+        pdf = None
+    return _article(
+        title=p.get("title") or "No title", authors=_short_authors(names), author_list=names,
+        year=str(p.get("year") or "n.d."),
+        journal=(p.get("journal") or {}).get("name") or p.get("venue") or "",
+        doi=ids.get("DOI"), pmid=str(ids["PubMed"]) if ids.get("PubMed") else None,
+        cited_by=p.get("citationCount") or None, abstract=p.get("abstract") or "",
+        source="Semantic Scholar", access_kind="open" if pdf else None, access_link=pdf,
+        pub_types=[_S2_TYPES[t] for t in p.get("publicationTypes") or [] if t in _S2_TYPES])
+
+def search_semantic_scholar(query, max_r, y_from, y_to, sort="relevance", offset=0):
+    params = {"query": query, "fields": _S2_FIELDS}
+    if y_from or y_to:
+        params["year"] = f"{y_from or ''}-{y_to or ''}"
+    if sort == "date":
+        # Only the bulk search can put the newest first. It answers in
+        # batches of up to 1,000, so "load more" reads further into the batch.
+        params["sort"] = "publicationDate:desc"
+        data = _s2_call("/paper/search/bulk", params)
+        papers = (data.get("data") or [])[offset:offset + max_r]
+    else:
+        params.update(offset=offset, limit=max_r)
+        data = _s2_call("/paper/search", params)
+        papers = data.get("data") or []
+    arts = [_s2_article(p) for p in papers if p]
+    arts = [a for a in arts if within_range(a["year"], y_from, y_to)]
+    return enrich_access(arts), data.get("total") or 0
+
+def semantic_scholar_by_dois(dois):
+    """Semantic Scholar's records of these DOIs, in one call."""
+    data = _s2_call("/paper/batch", {"fields": _S2_FIELDS}, body={"ids": [f"DOI:{d}" for d in dois]})
+    return enrich_access([_s2_article(p) for p in (data if isinstance(data, list) else []) if p])
+
+# ── CORE ─────────────────────────────────────────────────────────────────────
+# Open-access papers from repositories worldwide (universities, preprint
+# servers). Answers without a key, a few searches a minute; a free key from
+# core.ac.uk raises that.
+CORE_URL = "https://api.core.ac.uk/v3/search/works/"
+
+def _core_get(q, max_r, offset, sort="relevance"):
+    params = {"q": q, "limit": max_r, "offset": offset}
+    if sort == "date":
+        params["sort"] = "publishedDate:desc"
+    key = _key("core_api_key")
+    headers = {"User-Agent": "MedSearch/1.0", **({"Authorization": f"Bearer {key}"} if key else {})}
+    data, status = fetch_json(f"{CORE_URL}?{urllib.parse.urlencode(params)}", headers=headers,
+                              timeout=25, error_body=True)
+    if status == 200 and isinstance(data, dict):
+        return data
+    if status in (401, 403):
+        raise RuntimeError(f"CORE did not accept the API key ({status}). Check it in Settings, "
+                           "or remove it: CORE also answers without one.")
+    if status == 429:
+        raise RuntimeError("CORE is answering too many calls (429). Without a key it allows only "
+                           "a few searches a minute; a free CORE API key, added in Settings, "
+                           "allows more.")
+    if status == 400:
+        said = (data or {}).get("message") if isinstance(data, dict) else ""
+        raise RuntimeError("CORE rejected the query (400)" + (f": {said}" if said else "."))
+    if not status:
+        raise RuntimeError("CORE didn't respond. Check your connection and try again.")
+    raise RuntimeError(f"CORE returned HTTP {status}.")
+
+def _core_article(r):
+    names = [a.get("name", "").strip() for a in r.get("authors") or [] if a.get("name")]
+    year = r.get("yearPublished")
+    # CORE holds some years in other calendars (2550 is the Thai 2007).
+    year = str(year) if isinstance(year, int) and 1000 < year <= datetime.now().year + 1 else "n.d."
+    pdf = r.get("downloadUrl") or None
+    journal = next((j.get("title") for j in r.get("journals") or [] if j.get("title")), "") \
+        or r.get("publisher") or ""
+    pmid = str(r.get("pubmedId") or "")
+    return _article(
+        title=" ".join((r.get("title") or "").split()) or "No title",
+        authors=_short_authors(names), author_list=names, year=year, journal=journal,
+        doi=r.get("doi") or None, pmid=pmid if pmid.isdigit() else None,
+        cited_by=r.get("citationCount") or None, abstract=(r.get("abstract") or "").strip(),
+        source="CORE", access_kind="open" if pdf else None, access_link=pdf)
+
+def search_core(query, max_r, y_from, y_to, sort="relevance", offset=0):
+    q = query.strip()
+    # CORE matches ANY of the words unless told otherwise.
+    if not is_power_query(q):
+        q = " AND ".join(q.split())
+    bounds = []
+    if y_from:
+        bounds.append(f"yearPublished>={y_from}")
+    # Newest first would otherwise open on the impossible years.
+    upper = y_to or (datetime.now().year + 1 if sort == "date" else None)
+    if upper:
+        bounds.append(f"yearPublished<={upper}")
+    if bounds:
+        q = " AND ".join([f"({q})"] + bounds)
+    data = _core_get(q, max_r, offset, sort)
+    arts = [_core_article(r) for r in data.get("results") or []]
+    arts = [a for a in arts if within_range(a["year"], y_from, y_to)]
+    return enrich_access(arts), data.get("totalHits") or 0
+
 # Every source, in dedup-priority order: when two sources return the same
 # paper, the earlier one keeps it. Cochrane and Guidelines come before plain
 # PubMed so systematic reviews and guidelines are labelled as such.
 SOURCES = [
-    # key,             label,                 runner,                takes strict
-    ("cochrane",       "Cochrane",            search_cochrane,       True),
-    ("guidelines",     "Guidelines",          search_guidelines,     True),
-    ("pubmed",         "PubMed",              search_pubmed,         True),
-    ("scopus",         "Scopus",              search_scopus,         False),
-    ("wos",            "Web of Science",      search_wos,            False),
-    ("clinicaltrials", "ClinicalTrials.gov",  search_clinicaltrials, False),
-    ("arxiv",          "arXiv",               search_arxiv,          False),
+    # key,              label,                 runner,                  takes strict
+    ("cochrane",        "Cochrane",            search_cochrane,         True),
+    ("guidelines",      "Guidelines",          search_guidelines,       True),
+    ("pubmed",          "PubMed",              search_pubmed,           True),
+    ("europepmc",       "Europe PMC",          search_europepmc,        True),
+    ("scopus",          "Scopus",              search_scopus,           False),
+    ("wos",             "Web of Science",      search_wos,              False),
+    ("openalex",        "OpenAlex",            search_openalex,         True),
+    ("semanticscholar", "Semantic Scholar",    search_semantic_scholar, False),
+    ("ieee",            "IEEE Xplore",         search_ieee,             False),
+    ("core",            "CORE",                search_core,             False),
+    ("crossref",        "Crossref",            search_crossref,         False),
+    ("clinicaltrials",  "ClinicalTrials.gov",  search_clinicaltrials,   False),
+    ("arxiv",           "arXiv",               search_arxiv,            False),
 ]
-_KEY_REQUIRED = {"scopus": ("scopus_api_key", "Scopus"),
-                 "wos":    ("wos_api_key", "Web of Science")}
+_KEY_REQUIRED = {"scopus":          ("scopus_api_key", "Scopus"),
+                 "wos":             ("wos_api_key", "Web of Science"),
+                 "ieee":            ("ieee_api_key", "IEEE Xplore"),
+                 "semanticscholar": ("semantic_scholar_api_key", "Semantic Scholar")}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CITED BY, AND ONE MERGED LIST ACROSS SOURCES  (for use as a library too)
@@ -2128,13 +2552,14 @@ def dois_in_query(query):
             dois.append(doi)
     return dois
 
-def doi_lookup(key, fn, dois):
+def doi_lookup(key, fn, dois, report=None):
     """
     The papers with these DOIs in one source, as (articles, total), asked by
     that source's own DOI field; `fn` is the source's search function. Only a
     record whose DOI is one of those asked is kept: PubMed's DOI field also
     returns the other versions of a Cochrane review. Raises SourceCannotAnswer
-    for a source that has no DOIs to look up.
+    for a source that has no DOIs to look up. `report` goes to Crossref, which
+    lists there the DOIs it has no record of (see crossref_records).
     """
     n = len(dois)
     if key == "arxiv":
@@ -2154,6 +2579,18 @@ def doi_lookup(key, fn, dois):
     elif key == "wos":
         arts, _ = fn("DO=(" + " OR ".join(f'"{d}"' for d in dois) + ")",
                      min(2 * n, MAX_DOIS), None, None)
+    elif key == "europepmc":
+        arts, _ = fn(" OR ".join(f'DOI:"{d}"' for d in dois), min(3 * n, 300), None, None)
+    elif key == "core":
+        arts, _ = fn(" OR ".join(f'doi:"{d}"' for d in dois), min(3 * n, 100), None, None)
+    elif key == "openalex":
+        arts = openalex_by_dois(dois)
+    elif key == "semanticscholar":
+        arts = semantic_scholar_by_dois(dois)
+    elif key == "ieee":
+        arts = ieee_by_dois(dois)
+    elif key == "crossref":
+        arts, _ = crossref_records(dois, report)
     else:
         raise SourceCannotAnswer("Can't be searched by DOI.")
     order = {d.lower(): i for i, d in enumerate(dois)}
@@ -2169,11 +2606,12 @@ def _crossref_year(msg):
     return ""
 
 def _jats_text(s):
-    """Plain text out of Crossref's JATS markup. A section's title becomes a
-    "Title:" label, except the bare "Abstract" heading."""
-    s = re.sub(r"<jats:title>\s*Abstract\s*</jats:title>", " ", s or "", flags=re.I)
-    s = re.sub(r"<jats:title>(.*?)</jats:title>", r" \1: ", s, flags=re.I | re.S)
-    s = re.sub(r"</?jats:(?:p|sec|list|list-item)\b[^>]*>", " ", s)
+    """Plain text out of JATS markup, Crossref's ("<jats:p>") or Europe PMC's
+    ("<p>"). A section's title becomes a "Title:" label, except the bare
+    "Abstract" heading."""
+    s = re.sub(r"<(?:jats:)?title>\s*Abstract\s*</(?:jats:)?title>", " ", s or "", flags=re.I)
+    s = re.sub(r"<(?:jats:)?title>(.*?)</(?:jats:)?title>", r" \1: ", s, flags=re.I | re.S)
+    s = re.sub(r"</?(?:jats:)?(?:p|sec|list|list-item|h\d)\b[^>]*>", " ", s)
     return html.unescape(" ".join(re.sub(r"<[^>]+>", "", s).split()))
 
 def _crossref_article(msg):
@@ -2189,7 +2627,7 @@ def _crossref_article(msg):
                     authors="; ".join(short) + (" et al." if len(names) > 3 else ""),
                     author_list=names, year=_crossref_year(msg) or "n.d.",
                     journal=journal, doi=msg.get("DOI"), abstract=_jats_text(msg.get("abstract")),
-                    source="Crossref",
+                    cited_by=msg.get("is-referenced-by-count") or None, source="Crossref",
                     pub_types=["Preprint"] if msg.get("type") == "posted-content" else [])
 
 def crossref_records(dois, report=None):
@@ -2569,6 +3007,8 @@ def index():
                            app_version=get_local_version(),
                            has_scopus=bool((CONFIG.get("scopus_api_key","") or "").strip()),
                            has_wos=bool((CONFIG.get("wos_api_key","") or "").strip()),
+                           has_ieee=bool(_key("ieee_api_key")),
+                           has_semanticscholar=bool(_key("semantic_scholar_api_key")),
                            institution_proxies=CONFIG.get("institution_proxies", []),
                            active_proxy=CONFIG.get("active_proxy", 0),
                            sources=_start_sources(),
@@ -3069,10 +3509,11 @@ def search_stream():
     for key, *_ in selected:
         starts[key] = SESSION["offsets"].get(key, 0) if load_more else 0
         SESSION["offsets"][key] = starts[key] + max_r
+    registry = {}          # what Crossref said about the DOIs no source returned
 
     def run_source(key, fn, takes_strict):
         if dois:
-            return doi_lookup(key, fn, dois)
+            return doi_lookup(key, fn, dois, registry)
         kwargs = dict(sort=sort, offset=starts[key])
         if takes_strict:
             kwargs["strict"] = strict
@@ -3098,16 +3539,17 @@ def search_stream():
         pending  = {}          # future → ("mesh",) | ("src", key) | ("ol", idx)
         finished = {}          # key → (results, total, error_text, note)
         released = set()
-        registry = {}          # what Crossref said about the DOIs no source returned
-        asked_registry = False
+        # A ticked Crossref has already been asked about every DOI.
+        asked_registry = any(k == "crossref" for k, *_ in selected)
         try:
             total_sources = len(selected)
             for i, (key, label, fn, takes_strict) in enumerate(selected, 1):
                 yield _sse({"type": "source_start", "source": label,
                             "index": i, "total": total_sources})
                 if key in _KEY_REQUIRED and not (CONFIG.get(_KEY_REQUIRED[key][0]) or "").strip():
-                    finished[key] = ([], 0, f"Add a {_KEY_REQUIRED[key][1]} API key in Settings "
-                                            "to search this source.", None)
+                    name = _KEY_REQUIRED[key][1]
+                    finished[key] = ([], 0, f"Add {'an' if name[0] in 'AEIOU' else 'a'} {name} "
+                                            "API key in Settings to search this source.", None)
                 else:
                     pending[src_pool.submit(run_source, key, fn, takes_strict)] = ("src", key)
 
@@ -3844,8 +4286,7 @@ def _write_login_agent(args):
 def settings():
     if request.method == "POST":
         data = _json_body()
-        secret_fields = ("anthropic_api_key","pubmed_api_key","scopus_api_key",
-                         "scopus_insttoken","wos_api_key","unpaywall_email")
+        secret_fields = SECRET_KEYS + ("unpaywall_email",)
         # A blank field means "keep what's saved" (the field shows a masked
         # placeholder), so removing a key is an explicit request.
         for k in data.get("clear") or []:

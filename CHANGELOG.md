@@ -4,6 +4,12 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 2.1
+
+- Six new databases. Free: Europe PMC (PubMed and PubMed Central, plus preprints from medRxiv, bioRxiv and other preprint servers), OpenAlex, Crossref and CORE. With a free key from each, added in Settings: IEEE Xplore and Semantic Scholar.
+- OpenAlex and CORE work without a key. A free key from either, added in Settings, lets it answer more searches a day or a minute.
+- Search by DOI asks the new databases as well, each by its own DOI field. IEEE Xplore is asked only about IEEE's own DOIs, as its key allows 200 calls a day.
+
 ## 2.0
 
 - MedSearch for Windows is ready: searching, the icon by the clock, library sign-ins, article windows and PDFs have all been through a hands-on check on Windows 11.
