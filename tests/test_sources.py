@@ -73,3 +73,14 @@ def test_the_settings_icon_is_a_gear_not_a_sun():
     sym = re.search(r'<symbol id="i-settings".*?</symbol>', html).group(0)
     assert sym.count(" Z") == 1 and "<circle" in sym      # one toothed outline round a hub
     assert "M12 3v2.5" not in sym                         # the sun's rays
+
+
+def test_the_order_switch_is_two_equal_halves_that_do_not_move_when_pressed():
+    """Seen 2 Oct 2026: pressing Relevance or Recent made the switch wobble (the
+    press shrink, and the bold word widening its half), and its frame spanned
+    the row with an empty box beside the two words."""
+    css = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")
+    opt = re.search(r"\n\.sort-opt \{(.*?)\}", css, re.S).group(1)
+    assert "flex: 1 1 0;" in opt                       # equal halves, whatever the word's weight
+    assert "transition: all" not in opt                # nothing but colour animates
+    assert re.search(r"\.sort-toggle \.sort-opt:active \{ transform: none; \}", css)
