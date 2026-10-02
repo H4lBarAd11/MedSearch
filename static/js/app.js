@@ -487,6 +487,28 @@ function openInAppBrowser(url, title) {
   window.open(url, '_blank', 'noopener');
 }
 
+// Google Scholar's own results page for a search: Scholar has no API, so it
+// is opened, not asked. Years go in Scholar's own fields; anything else in
+// them (a half-typed year) is left out rather than sent.
+function scholarUrl(query, yearFrom, yearTo) {
+  const p = new URLSearchParams({q: query});
+  if (/^\d{4}$/.test(String(yearFrom || '').trim())) p.set('as_ylo', String(yearFrom).trim());
+  if (/^\d{4}$/.test(String(yearTo || '').trim()))   p.set('as_yhi', String(yearTo).trim());
+  return 'https://scholar.google.com/scholar?' + p.toString();
+}
+
+function openGoogleScholar() {
+  const q = (document.getElementById('searchInput').value || '').trim();
+  if (!q) {
+    fail('Type what to look for in the search box first, then open Google Scholar.',
+         'Nothing to search for');
+    return;
+  }
+  closePanels(true);
+  openInAppBrowser(scholarUrl(q, document.getElementById('yearFrom').value,
+                              document.getElementById('yearTo').value), 'Google Scholar');
+}
+
 // Wrap a URL in the active institutional proxy so paywalled-but-subscribed
 // papers open through the user's library. No-op if no proxy is active.
 // Handles two EZProxy modes plus OpenAthens:

@@ -2239,6 +2239,7 @@ button.mesh-tag { font: inherit; font-size: 0.8rem; }
 .panel-title-2 { margin-top: 16px; }
 .dock-panel .db-list, .dock-panel .saved-list, .dock-panel .history-list { padding: 0; }
 .dock-panel .select-all-btn { margin: 8px 0 0; width: 100%; }
+.dock-panel .scholar-btn { display: flex; align-items: center; justify-content: center; gap: 6px; }
 .dock-panel .natl-guideline-btn { display: flex; align-items: center; justify-content: center; gap: 6px; }
 .dock-panel .history-list { max-height: 220px; }
 .saved-empty { font-size: 0.78rem; color: var(--text3); padding: 4px 10px 6px; }
