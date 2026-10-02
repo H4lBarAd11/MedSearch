@@ -135,6 +135,14 @@ def test_openalex_out_of_allowance_says_when_it_renews_and_what_a_key_does(answe
         A.search_openalex("glioma", 10, None, None)
 
 
+def test_a_doi_openalex_cannot_hold_in_its_filter_is_left_out(answer):
+    calls = answer({"meta": {}, "results": []})
+    A.openalex_by_dois(["10.1000/a", "10.1000/x,y", "10.1000/p|q"])
+    assert calls.params()["filter"] == "doi:10.1000/a"
+    with pytest.raises(A.SourceCannotAnswer, match="comma or a bar"):
+        A.openalex_by_dois(["10.1000/x,y"])
+
+
 def test_openalex_looks_dois_up_in_one_free_call(answer):
     calls = answer({"meta": {}, "results": [OPENALEX_WORK]})
     arts = A.openalex_by_dois(["10.1000/a", "10.1000/b"])
@@ -588,3 +596,15 @@ def test_the_quick_second_try_on_a_429_is_left_to_the_caller_when_asked(monkeypa
     monkeypatch.setattr(A.time, "sleep", slept.append)
     assert A.http_get("https://api.example.org/x", retry=retry) == (None, 429)
     assert (len(tries), slept) == (opened, waits)
+
+
+def test_openalex_waits_only_as_long_as_its_caller_allows(monkeypatch):
+    waited = []
+
+    def fetch_json(url, headers=None, timeout=None, error_body=False, data=None, retry=True):
+        waited.append(timeout)
+        return {"results": []}, 200
+    monkeypatch.setattr(A, "fetch_json", fetch_json)
+    A._openalex_get("/institutions/I1", {}, timeout=6)
+    A._openalex_get("/works", {})
+    assert waited == [6, A.TIMEOUT]
