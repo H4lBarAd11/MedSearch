@@ -1,12 +1,14 @@
 <p align="center">
-  <img src="docs/readme/banner.svg" alt="MedSearch — the medical literature, seven sources at once, with AI summaries, a PDF reader and a research assistant" width="100%">
+  <img src="docs/readme/banner.svg" alt="MedSearch — the medical literature, thirteen sources at once, with AI summaries, a PDF reader and a research assistant" width="100%">
 </p>
 
 MedSearch is a desktop application for macOS and Windows, for searching the medical and
-scientific literature. One question goes to PubMed, Cochrane, ClinicalTrials.gov, arXiv,
-Scopus, Web of Science and a clinical-guidelines source at the same time; the answers come
-back as one list, with the duplicates removed, the free full text found where it exists,
-and retracted papers marked before anyone quotes them.
+scientific literature. One question goes to PubMed, Europe PMC, Cochrane, a
+clinical-guidelines source, ClinicalTrials.gov, OpenAlex, Crossref, CORE, arXiv, Scopus,
+Web of Science, IEEE Xplore and Semantic Scholar at the same time; the answers come back as
+one list, with the duplicates removed, the free full text found where it exists, and
+retracted papers marked before anyone quotes them. Google Scholar opens beside them, with
+the same search.
 
 It is a personal project by [Riccardo Nevoso](https://github.com/H4lBarAd11), built for
 the way clinicians and researchers actually search: one window instead of a dozen browser
@@ -28,13 +30,27 @@ tabs.
 
 ## What it does
 
-**One search, every source.** The seven sources are searched in parallel and merged into a
+**One search, every source.** The thirteen sources are searched in parallel and merged into a
 single deduplicated list. Each source reports on its own, so one that fails (a missing key,
-an off-campus Scopus) says so in a dialog and the others' results still arrive.
+an off-campus Scopus) says so in a dialog and the others' results still arrive. Europe PMC
+brings the preprint servers (medRxiv, bioRxiv and others) and the full text of its
+open-access papers; OpenAlex, Crossref and CORE reach beyond medicine. Google Scholar can't
+be searched by another program, so *Search Google Scholar*, in the Databases panel, opens
+it in its own window with the search and years filled in.
+
+**Search by author or institution.** Under *Options*, type an author or an institution and
+pick it from OpenAlex's suggestions, which show each person's institution, number of papers
+and ORCID. OpenAlex then finds exactly that person or institution (an institution with its
+institutes); the other databases match the name as written, with the ORCID where they keep
+one, so they miss papers that spell it differently. A name that isn't picked is searched as
+typed. With either set, the search box can be left empty to list everything by them; each
+one in use shows as a chip beside the search bar, and saved searches keep them. A database
+that keeps no authors or no institutions says so and is left out of such a search.
 
 **Search by DOI.** Paste a DOI, a doi.org link or a link to the article, or several DOIs at
-once, and each ticked source looks those papers up by DOI. Years and Strict don't apply. A
-paper none of them has is shown from Crossref, and a DOI that nobody knows is reported.
+once, and each ticked source looks those papers up by DOI. Years, Strict, author and
+institution don't apply. A paper none of them has is shown from Crossref, and a DOI that
+nobody knows is reported.
 
 **Guidelines.** A *Guidelines* source finds national and society guidelines indexed in
 PubMed, and the *Guidelines* panel opens a country's official body directly (SNLG, NICE,
@@ -55,8 +71,9 @@ streamed synthesis across all of them, an *Explain* for any single paper, and a 
 assistant that answers from the papers on screen and cites them by number. One switch, *AI
 on/off* in the bottom bar, turns all of it off.
 
-**Citations and export.** A citation graph for any paper (what it cites, what cites it),
-and export to Markdown, BibTeX or RIS, or straight into Zotero.
+**Citations and export.** A citation graph for any paper: what it cites, and what cites it,
+gathered from PubMed, Scopus, OpenAlex and OpenCitations. Export to Markdown, BibTeX or RIS,
+or straight into Zotero.
 
 **From the menu bar.** MedSearch keeps an icon in the macOS menu bar, or by the clock on
 Windows: a quick search from anywhere, your recent searches, and the default source for
@@ -133,13 +150,14 @@ The installers are built with `packaging/build-mac.sh` and `packaging/build-wind
 
 ## API keys
 
-The free sources need no keys: PubMed, Cochrane, ClinicalTrials.gov and arXiv work out of
-the box. Keys are added in **Settings** (bottom bar) and never leave the machine: on macOS
-they are kept in the **Keychain** (visible in Keychain Access under *MedSearch*, and
-revocable from there), and on Windows in **Credential Manager** (*Windows Credentials*, as
-*MedSearch/…*), so no key is written to a file. A key saved by an older version is moved
-there the next time MedSearch starts. Where there is neither, they stay in
-`~/.medsearch/config.json`, which is readable only by its owner.
+The free sources need no keys: PubMed, Europe PMC, Cochrane, the guidelines source,
+ClinicalTrials.gov, OpenAlex, Crossref, CORE and arXiv work out of the box. Keys are added
+in **Settings** (bottom bar) and never leave the machine: on macOS they are kept in the
+**Keychain** (visible in Keychain Access under *MedSearch*, and revocable from there), and
+on Windows in **Credential Manager** (*Windows Credentials*, as *MedSearch/…*), so no key
+is written to a file. A key saved by an older version is moved there the next time
+MedSearch starts. Where there is neither, they stay in `~/.medsearch/config.json`, which is
+readable only by its owner.
 
 On a Mac, macOS asks for the login password when MedSearch stores a key, and may keep
 asking when it reads one back — a new Keychain item does not yet name the tool allowed to
@@ -153,6 +171,10 @@ touches the Keychain, so it never asks.
 | **NCBI / PubMed** | [ncbi.nlm.nih.gov/account](https://ncbi.nlm.nih.gov/account) | A higher PubMed rate limit (10 requests a second instead of 3) |
 | **Scopus** | [dev.elsevier.com](https://dev.elsevier.com) | Scopus as a source |
 | **Web of Science** | [developer.clarivate.com](https://developer.clarivate.com) | Web of Science as a source |
+| **IEEE Xplore** | [developer.ieee.org](https://developer.ieee.org) | IEEE Xplore as a source (200 calls a day) |
+| **Semantic Scholar** | [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api) | Semantic Scholar as a source. Requested with an institutional email address; a key left unused for about 60 days may be removed |
+| **OpenAlex** | [openalex.org](https://openalex.org) | Optional: about 1,000 OpenAlex searches a day instead of about 100 |
+| **CORE** | [core.ac.uk/services/api](https://core.ac.uk/services/api) | Optional: more CORE searches a minute |
 | **Unpaywall** | any valid email address | Better detection of free full text |
 
 > [!IMPORTANT]
@@ -200,7 +222,8 @@ own API key in its own Anthropic console workspace and set the spend limit there
 
 Everything runs on your machine. Searches, keys, history and saved searches stay in
 `~/.medsearch/` (on Windows, `.medsearch` in your user folder). The only traffic out is to
-the literature services you search and, with AI on, to the Anthropic API.
+the literature services you search (including OpenAlex, for the suggestions while you type
+an author or institution) and, with AI on, to the Anthropic API.
 
 ---
 
@@ -240,6 +263,13 @@ page rather than to a PDF file. MedSearch opens it in its own browser window, wh
 library login applies.
 
 **PubMed answers with HTTP 429.** Too many requests: add a free NCBI key in Settings.
+
+**OpenAlex says its daily allowance is used up.** Without a key OpenAlex allows about 100
+searches a day, renewed at midnight UTC. A free OpenAlex key in Settings raises that to
+about 1,000.
+
+**Semantic Scholar no longer accepts its key (403).** Semantic Scholar removes keys left
+unused for about 60 days; request a new one.
 
 **On Windows the window stays empty.** Microsoft's WebView2 is missing or broken: install
 the *WebView2 Runtime* from microsoft.com and open MedSearch again.

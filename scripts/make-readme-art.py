@@ -72,7 +72,7 @@ def banner(c: dict, icon: Path) -> str:
         f'<text x="352" y="178" font-size="104" font-weight="800" letter-spacing="-3" '
         f'fill="{c["text"]}">Med<tspan fill="{c["wordmark"]}">Search</tspan></text>'
         f'<text x="356" y="228" font-size="27" font-weight="500" fill="{c["text"]}">'
-        'The medical literature, seven sources at once</text>'
+        'The medical literature, thirteen sources at once</text>'
         f'<text x="356" y="263" font-size="27" font-weight="500" fill="{c["text"]}">'
         'with AI summaries, a PDF reader and a research assistant</text>'
         f'<line x1="356" y1="292" x2="1188" y2="292" stroke="{c["border"]}" stroke-width="2"/>'
