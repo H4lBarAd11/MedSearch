@@ -39,11 +39,11 @@ def answer(monkeypatch, no_enrich):
     list of calls made (url, headers, data)."""
     calls, state = Calls(), {"answer": (None, 0)}
 
-    def fetch_json(url, headers=None, timeout=None, error_body=False, data=None):
+    def fetch_json(url, headers=None, timeout=None, error_body=False, data=None, retry=True):
         calls.append({"url": url, "headers": headers or {}, "data": data})
         return state["answer"]
 
-    def http_get(url, headers=None, timeout=None, error_body=False, data=None):
+    def http_get(url, headers=None, timeout=None, error_body=False, data=None, retry=True):
         calls.append({"url": url, "headers": headers or {}, "data": data})
         body, status = state["answer"]
         return (body if body is None or isinstance(body, str) else json.dumps(body)), status
@@ -349,11 +349,43 @@ def test_semantic_scholar_looks_dois_up_in_one_call(answer):
     assert [a["doi"] for a in arts] == ["10.1000/s.1"]
 
 
-def test_a_refused_semantic_scholar_key_says_so(answer):
+def test_a_refused_semantic_scholar_key_says_so_and_why_it_may_have_gone(answer, monkeypatch):
     A.CONFIG["semantic_scholar_api_key"] = "s2-key"
-    answer({"message": "Forbidden"}, 403)
-    with pytest.raises(RuntimeError, match="did not accept the API key \\(403\\)"):
+    monkeypatch.setattr(A.time, "sleep", lambda s: pytest.fail("waited on a refused key"))
+    calls = answer({"message": "Forbidden"}, 403)
+    with pytest.raises(RuntimeError, match="did not accept the API key \\(403\\).*about 60 days"):
         A.search_semantic_scholar("glioma", 10, None, None)
+    assert len(calls) == 1                                   # a refused key is not asked again
+
+
+def _busy_then(monkeypatch, statuses):
+    """Semantic Scholar answers each status in turn, then 200; returns the
+    waits slept and whether each call let http_get retry on its own."""
+    waits, retried, answers = [], [], list(statuses)
+    monkeypatch.setattr(A.time, "sleep", waits.append)
+    monkeypatch.setattr(A.random, "uniform", lambda a, b: b)          # the longest wait
+
+    def fetch_json(url, headers=None, timeout=None, error_body=False, data=None, retry=True):
+        retried.append(retry)
+        return ({"message": "Too Many Requests"}, answers.pop(0)) if answers else ({"data": []}, 200)
+    monkeypatch.setattr(A, "fetch_json", fetch_json)
+    monkeypatch.setattr(A, "enrich_access", lambda arts: arts)
+    A.CONFIG["semantic_scholar_api_key"] = "s2-key"
+    return waits, retried
+
+
+def test_semantic_scholar_too_busy_is_asked_again_with_exponential_backoff(monkeypatch):
+    waits, retried = _busy_then(monkeypatch, [429, 503, 429])
+    assert A.search_semantic_scholar("glioma", 10, None, None) == ([], 0)
+    assert waits == [1.5, 3.0, 6.0]                 # 1, 2, 4 s, each plus up to half again
+    assert retried == [False] * 4                   # no second, quicker retry underneath
+
+
+def test_semantic_scholar_still_busy_after_three_tries_says_so(monkeypatch):
+    waits, retried = _busy_then(monkeypatch, [429] * 4)
+    with pytest.raises(RuntimeError, match="still was after three tries"):
+        A.search_semantic_scholar("glioma", 10, None, None)
+    assert len(waits) == 3 and len(retried) == 4
 
 
 # ── CORE ────────────────────────────────────────────────────────────────────
@@ -539,3 +571,20 @@ def test_the_scholar_button_sits_in_the_databases_panel_and_opens_a_window():
     # nothing to search for (no words, no author) is a popup, not a blank Scholar page
     assert re.search(r"if \(!q && !author\) \{\s*fail\(", fn)
     assert "google" not in [k for k, *_ in A.SOURCES]      # not a source: nothing is merged from it
+
+
+@pytest.mark.parametrize("retry, opened, waits", [(True, 2, [1.0]), (False, 1, [])])
+def test_the_quick_second_try_on_a_429_is_left_to_the_caller_when_asked(monkeypatch, retry, opened, waits):
+    """Semantic Scholar waits by its own rule (exponential backoff), so the
+    HTTP helper must not also try again a second later underneath it."""
+    import io
+    import urllib.error
+    tries, slept = [], []
+
+    def refuse(req, timeout=None):
+        tries.append(req.full_url)
+        raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, io.BytesIO(b"{}"))
+    monkeypatch.setattr(A.urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(A.time, "sleep", slept.append)
+    assert A.http_get("https://api.example.org/x", retry=retry) == (None, 429)
+    assert (len(tries), slept) == (opened, waits)
