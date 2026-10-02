@@ -555,7 +555,12 @@ body {
   background: var(--bg2);
   flex-shrink: 0;
 }
+/* Two equal halves (his pick, 2 Oct 2026): the frame spans its row and the
+   halves fill it, so no empty box sits beside them, and a half no longer
+   grows when its word turns bold, which made the switch jump. */
 .sort-opt {
+  flex: 1 1 0;
+  text-align: center;
   border: none;
   background: none;
   cursor: pointer;
@@ -564,8 +569,11 @@ body {
   color: var(--text3);
   padding: 6px 12px;
   white-space: nowrap;
-  transition: all var(--transition);
+  transition: background var(--transition), color var(--transition);
 }
+/* A half of a switch changes colour when pressed; shrinking (every other
+   button's press) moved it inside its frame. */
+.sort-toggle .sort-opt:active { transform: none; }
 .sort-opt:hover { color: var(--text2); background: var(--bg3); }
 .sort-opt.active {
   background: var(--accent-tint);
