@@ -525,3 +525,16 @@ def test_every_keyed_source_has_its_prompt_badge_and_settings_field():
     for secret in A.SECRET_KEYS:
         assert re.search(rf"{secret}:\s+'set_\w+'", js), secret                    # loaded
         assert re.search(rf"{secret}:\s+document\.getElementById\('set_\w+'\)", js), secret  # saved
+
+
+# ── Google Scholar: opened, not asked ───────────────────────────────────────
+
+def test_the_scholar_button_sits_in_the_databases_panel_and_opens_a_window():
+    html = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    panel = re.search(r'<div class="dock-panel" id="panelSources".*?\n</div>', html, re.S).group(0)
+    assert 'onclick="openGoogleScholar()"' in panel
+    fn = re.search(r"\nfunction openGoogleScholar\(\) \{.*?\n\}", js, re.S).group(0)
+    assert "openInAppBrowser(scholarUrl(" in fn          # its own window, never the main one
+    assert re.search(r"if \(!q\) \{\s*fail\(", fn)        # an empty box is a popup, not a blank search
+    assert "google" not in [k for k, *_ in A.SOURCES]      # not a source: nothing is merged from it
