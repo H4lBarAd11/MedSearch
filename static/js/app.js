@@ -1685,7 +1685,7 @@ function openCitations(idx) {
   document.getElementById('citeTitle').textContent =
     'Citation graph · ' + (a.title.length > 70 ? a.title.slice(0,70)+'…' : a.title);
   document.getElementById('citeBody').innerHTML =
-    '<div class="cite-loading">Fetching references & citing papers (PubMed, Scopus, OpenCitations)…</div>';
+    '<div class="cite-loading">Fetching references & citing papers (PubMed, Scopus, OpenAlex, OpenCitations)…</div>';
   openOverlay('citeOverlay');
 
   fetch('/citations/' + idx)
