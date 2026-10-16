@@ -448,12 +448,98 @@ def test_open_at_login_writes_and_removes_the_agent(tmp_path, monkeypatch):
 
 
 @_launch_agent
-def test_open_at_login_from_source_runs_this_folder(tmp_path, monkeypatch):
+def test_open_at_login_from_source_runs_this_folder_only_with_no_app_installed(tmp_path, monkeypatch):
     agent = tmp_path / "com.halbarad.medsearch.plist"
     monkeypatch.setattr(A, "_LOGIN_AGENT", agent)
     monkeypatch.setattr(A, "_app_bundle_id", lambda: "")
+    monkeypatch.setattr(A, "_installed_mac_app", lambda: False)
     A._set_open_at_login(True)
-    assert str(A.APP_DIR_PATH / "app.py") in agent.read_text()
+    text = agent.read_text()
+    assert str(A.APP_DIR_PATH / "app.py") in text
+    assert f"<key>WorkingDirectory</key><string>{A.APP_DIR_PATH}</string>" in text
+
+
+def _login_args(agent):
+    import plistlib
+    return plistlib.loads(agent.read_bytes())
+
+
+OPEN_THE_APP = ["/usr/bin/open", "-b", "com.halbarad.medsearch", "--args", "--background"]
+
+
+@_launch_agent
+def test_open_at_login_from_source_starts_the_installed_app_when_there_is_one(tmp_path, monkeypatch):
+    # Started at login, a copy run from source is Python to macOS: its name and
+    # icon in the Dock, and Python's permission for the menu bar.
+    agent = tmp_path / "com.halbarad.medsearch.plist"
+    monkeypatch.setattr(A, "_LOGIN_AGENT", agent)
+    monkeypatch.setattr(A, "_app_bundle_id", lambda: "")
+    monkeypatch.setattr(A, "_installed_mac_app", lambda: True)
+    A._set_open_at_login(True)
+    item = _login_args(agent)
+    assert item["ProgramArguments"] == OPEN_THE_APP and item["RunAtLoad"] is True
+    assert "WorkingDirectory" not in item          # a folder moved later would stop it
+
+
+@_launch_agent
+def test_a_login_item_left_by_a_source_run_is_pointed_at_the_installed_app(tmp_path, monkeypatch):
+    agent = tmp_path / "com.halbarad.medsearch.plist"
+    monkeypatch.setattr(A, "_LOGIN_AGENT", agent)
+    monkeypatch.setattr(A, "_app_bundle_id", lambda: "")
+    monkeypatch.setattr(A, "_installed_mac_app", lambda: False)
+    A._set_open_at_login(True)                      # as a source run wrote it
+    monkeypatch.setattr(A, "_installed_mac_app", lambda: True)
+    A._repair_login_item()
+    assert _login_args(agent)["ProgramArguments"] == OPEN_THE_APP
+
+
+@_launch_agent
+def test_the_repair_changes_nothing_else(tmp_path, monkeypatch):
+    agent = tmp_path / "com.halbarad.medsearch.plist"
+    monkeypatch.setattr(A, "_LOGIN_AGENT", agent)
+    monkeypatch.setattr(A, "_app_bundle_id", lambda: "")
+    monkeypatch.setattr(A, "_installed_mac_app", lambda: True)
+    A._repair_login_item()
+    assert not agent.exists()                       # no item: none is made
+    agent.write_text("not a plist")
+    A._repair_login_item()
+    assert agent.read_text() == "not a plist"       # unreadable: left alone
+    A._set_open_at_login(True)
+    before = agent.read_bytes()
+    A._repair_login_item()
+    assert agent.read_bytes() == before             # already the app: untouched
+    monkeypatch.setattr(A, "_installed_mac_app", lambda: False)
+    agent.unlink()
+    A._set_open_at_login(True)
+    source_item = agent.read_bytes()
+    A._repair_login_item()
+    assert agent.read_bytes() == source_item        # no app installed: the source run stays
+    other = source_item.replace(str(A.APP_DIR_PATH / "app.py").encode(), b"/elsewhere/app.py")
+    agent.write_bytes(other)
+    A._repair_login_item()
+    assert agent.read_bytes() == other              # nor another copy's, with no app to point at
+
+
+@_launch_agent
+def test_an_installed_apps_own_login_item_is_left_as_it_wrote_it(tmp_path, monkeypatch):
+    # As the installed 2.1 wrote it: the app, and the folder inside the app.
+    agent = tmp_path / "com.halbarad.medsearch.plist"
+    monkeypatch.setattr(A, "_LOGIN_AGENT", agent)
+    monkeypatch.setattr(A, "_app_bundle_id", lambda: "")
+    monkeypatch.setattr(A, "_installed_mac_app", lambda: True)
+    import plistlib
+    agent.write_bytes(plistlib.dumps({"Label": A._LOGIN_LABEL, "ProgramArguments": OPEN_THE_APP,
+                                      "WorkingDirectory": "/Applications/MedSearch.app/Contents/MacOS",
+                                      "RunAtLoad": True}))
+    before = agent.read_bytes()
+    A._repair_login_item()
+    assert agent.read_bytes() == before
+
+
+def test_every_start_repairs_the_login_item_before_handing_over():
+    src = (Path(A.__file__)).read_text(encoding="utf-8")
+    main = src[src.index('if __name__ == "__main__":'):]
+    assert main.index("_repair_login_item()") < main.index("_existing_instance()")
 
 
 def _installed_app(monkeypatch, exe="/Applications/MedSearch.app/Contents/MacOS/MedSearch"):

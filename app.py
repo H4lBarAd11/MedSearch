@@ -5134,9 +5134,11 @@ def export_zotero_single():
 
 # ── Open at login ────────────────────────────────────────────────────────────
 # macOS: a LaunchAgent that starts MedSearch in the menu bar, window hidden.
-# Launched through the installed MedSearch.app when that is what runs (so it is
-# MedSearch in the Dock), else straight from this folder. A LaunchAgent works
-# on every macOS the app supports; the newer login-item API needs macOS 13.
+# Launched through the installed MedSearch.app whenever there is one, also when
+# a copy run from source turns it on: a Python started at login is Python to
+# macOS, by name and icon in the Dock and in the menu bar's permissions. Only
+# with no app installed does it start this folder. A LaunchAgent works on
+# every macOS the app supports; the newer login-item API needs macOS 13.
 # Windows: the same command under the user's Run key, which starts it by the
 # clock and lists it in Task Manager's Startup apps; no administrator needed.
 _LOGIN_LABEL = "com.halbarad.medsearch"
@@ -5177,6 +5179,24 @@ def _set_run_key(on):
             except FileNotFoundError:
                 pass
 
+def _installed_mac_app():
+    """Whether macOS knows an installed MedSearch.app, wherever it is."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        from AppKit import NSWorkspace
+        return NSWorkspace.sharedWorkspace().URLForApplicationWithBundleIdentifier_(APP_ID) is not None
+    except Exception:
+        return any(p.exists() for p in (Path("/Applications/MedSearch.app"),
+                                        Path.home() / "Applications" / "MedSearch.app"))
+
+def _login_command():
+    """What Open at login starts on a Mac: the installed app, through macOS's
+    own launcher, whenever there is one; else this copy."""
+    if _app_bundle_id() or _installed_mac_app():
+        return ["/usr/bin/open", "-b", APP_ID, "--args", "--background"]
+    return _self_command("--background")
+
 def _set_open_at_login(on):
     if sys.platform == "win32":
         _set_run_key(on)
@@ -5184,15 +5204,29 @@ def _set_open_at_login(on):
     if not on:
         _LOGIN_AGENT.unlink(missing_ok=True)
         return
-    bundle_id = _app_bundle_id()
-    if bundle_id:
-        args = ["/usr/bin/open", "-b", bundle_id, "--args", "--background"]
-    else:
-        args = _self_command("--background")
-    _write_login_agent(args)
+    _write_login_agent(_login_command())
+
+def _repair_login_item():
+    """A login item that starts a copy run from source while MedSearch.app is
+    installed is pointed at the app: started at login, that copy is Python to
+    macOS, and its menu bar item needs Python allowed there. Nothing else is
+    changed: no item, an unreadable one, or no app installed."""
+    if sys.platform != "darwin":
+        return
+    try:
+        args = plistlib.loads(_LOGIN_AGENT.read_bytes()).get("ProgramArguments")
+    except Exception:
+        return
+    want = _login_command()
+    if isinstance(args, list) and args != want and want[0] == "/usr/bin/open":
+        _write_login_agent(want)
 
 def _write_login_agent(args):
     items = "".join(f"<string>{escape_xml(a)}</string>" for a in args)
+    # Only a copy started directly needs its folder; macOS's launcher needs
+    # none, and a folder since moved or deleted would stop it from starting.
+    workdir = ("" if args[0] == "/usr/bin/open" else
+               f'<key>WorkingDirectory</key><string>{escape_xml(str(APP_DIR_PATH))}</string>')
     _LOGIN_AGENT.parent.mkdir(parents=True, exist_ok=True)
     _LOGIN_AGENT.write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -5201,7 +5235,7 @@ def _write_login_agent(args):
         '<plist version="1.0"><dict>'
         f'<key>Label</key><string>{_LOGIN_LABEL}</string>'
         f'<key>ProgramArguments</key><array>{items}</array>'
-        f'<key>WorkingDirectory</key><string>{escape_xml(str(APP_DIR_PATH))}</string>'
+        f'{workdir}'
         '<key>RunAtLoad</key><true/>'
         '</dict></plist>\n')
 
@@ -5560,6 +5594,12 @@ if __name__ == "__main__":
     # Opened at login: start in the menu bar with the window hidden.
     _parser.add_argument("--background", action="store_true")
     _args, _ = _parser.parse_known_args()
+
+    # Before anything else, so a copy that only hands over repairs it too.
+    try:
+        _repair_login_item()
+    except Exception:
+        pass
 
     # ONE WINDOW. A second double-click used to start a second server on a
     # random port with a second window. Now it hands its request to the copy
