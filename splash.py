@@ -16,6 +16,15 @@ window's whole frame, swallowing the lines as they spread beneath it. Only then
 is the real window made visible underneath, identical, while the splash fades
 off. Resizing the real window instead would lay the page out on every frame.
 
+IT PLAYS WHERE THE WINDOW OPENS. An app in full screen has its Space to itself,
+so a window opened from it lands on a desktop. The splash is bound to one Space,
+as a normal window is, and comes forward unseen with MedSearch: macOS places it
+on a desktop and takes the user there, as switching to an app does. The pen sets
+out only once the user has arrived. On every Space, it would play over the app in
+full screen, and the window would then open on a desktop out of sight. With
+Spaces set not to follow an app (Desktop & Dock) there is no arrival: no splash,
+and the window opens plainly.
+
 DRAWN BY CORE ANIMATION, NOT IN A WEB PAGE. BIDS's splash is a page in a
 transparent window. MedSearch's was not, because of what a git clone's
 launcher stub did (up to 2.0): about a second after the stub exited, macOS's
@@ -245,6 +254,19 @@ def disc(rect, cx, cy):
     return x, y, math.ceil(far) + 1
 
 
+# ── where it plays ───────────────────────────────────────────────────────────
+#: NSWindowCollectionBehavior: managed (on one Space, as a normal window is) and
+#: ignoresCycle (not in ⌘`). Not canJoinAllSpaces, stationary or transient: on
+#: every Space, or on whichever is in front, the drawing is shown over an app in
+#: full screen, whose Space the main window can't join. A floating window is
+#: transient unless told otherwise.
+ONE_SPACE = 1 << 2 | 1 << 6
+PLACED_S = 0.2                # s macOS takes to give a new window its Space
+ARRIVAL_S = 2.0               # s the switch to that Space may take, when it is another
+ARRIVAL_POLL_S = 0.05         # s between looks while it is under way
+SLIDE_S = 0.25                # s more, for the slide between Spaces to end
+
+
 # ── the window's look, for the pane that becomes it ──────────────────────────
 TITLE_BAR = {"light": (0xE8, 0xE7, 0xE4), "dark": (0x33, 0x35, 0x31)}   # measured for BIDS
 GROUND = {"light": (0xF9, 0xF8, 0xEF), "dark": (0x1B, 0x1A, 0x17)}      # app.css --bg
@@ -271,7 +293,9 @@ class Splash:
 
     # ── on screen ────────────────────────────────────────────────────────────
     def open(self) -> None:
-        """Put the drawing up and start the pen. On the main thread."""
+        """Put the drawing's window up, unseen, and bring MedSearch forward. The
+        pen waits for the user to be on its Space (`hand_over`). On the main
+        thread, before the run loop turns."""
         from AppKit import (NSApplication, NSBackingStoreBuffered, NSColor, NSFloatingWindowLevel,
                             NSScreen, NSView, NSWindow, NSWorkspace)
         from Quartz import CALayer, CATransaction
@@ -289,7 +313,7 @@ class Splash:
         # the mouse would be an invisible pane over the desktop.
         w.setIgnoresMouseEvents_(True)
         w.setLevel_(NSFloatingWindowLevel)
-        w.setCollectionBehavior_(1 | 16 | 64)   # every Space, stationary, not in ⌘`
+        w.setCollectionBehavior_(ONE_SPACE)     # one Space, the window's; not in ⌘`
         try:
             self._reduced = bool(NSWorkspace.sharedWorkspace()
                                  .accessibilityDisplayShouldReduceMotion())
@@ -316,9 +340,13 @@ class Splash:
         self._window, self._screen = w, frame
         self._layers = {"root": root, "stage": stage, "art": art, "strokes": strokes,
                         "size": size}
+        # Unseen until the user is on its Space. Coming forward is what takes the
+        # user there when the Space in front is an app's in full screen; on a
+        # desktop it changes nothing. MedSearch is a regular app by now (pywebview
+        # makes it one on import), and pywebview activates it as it starts.
+        w.setAlphaValue_(0.0)
         w.orderFrontRegardless()
-        self._t0 = time.monotonic()
-        self._start_pen()
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
         CATransaction.flush()
 
     def _drawing(self, scale):
@@ -385,8 +413,9 @@ class Splash:
 
     def _start_pen(self):
         """Each stroke's share of the one clock, as keyframes: the pen is eased
-        over the whole drawing, not stroke by stroke."""
-        from Quartz import CAKeyframeAnimation
+        over the whole drawing, not stroke by stroke. Sent to the screen at once,
+        so the window, made visible next, shows the pen's first frame."""
+        from Quartz import CAKeyframeAnimation, CATransaction
 
         total = BLOOM_START + BLOOM_TIME
         times = [k / SAMPLES for k in range(SAMPLES + 1)]
@@ -403,18 +432,72 @@ class Splash:
                     a.setDuration_(total)
                     a.setCalculationMode_("linear")
                     layer.addAnimation_forKey_(a, "pen-" + key)
+        CATransaction.flush()
+
+    # ── the user arriving on its Space ───────────────────────────────────────
+    def _arrive(self) -> None:
+        """Show the drawing once the user is on its Space, and start its clock;
+        if the user never gets there, take it away unseen. On the hand-over's
+        thread, so the run loop turns while it waits.
+
+        A new window counts as on the Space in front until macOS has placed it.
+        From an app in full screen it is then on a desktop, and the switch there
+        follows, the slide between Spaces still running as it ends.
+
+        THE WAITS COUNT FROM THE RUN LOOP. The drawing is put up before it turns,
+        and macOS places a window only once MedSearch has finished launching:
+        timed from before, a slow start would use up the wait for the switch."""
+        if self._window is None:
+            return
+        if _on_main_wait(lambda: True, timeout=READY_TIMEOUT_S) is None:
+            return
+        time.sleep(PLACED_S)
+        here = _on_main_wait(self._on_active_space)
+        if not here:
+            since = time.monotonic()
+            while not here and time.monotonic() - since < ARRIVAL_S:
+                time.sleep(ARRIVAL_POLL_S)
+                here = _on_main_wait(self._on_active_space)
+            if not here:
+                print("  (splash: its Space was never reached; the window opens without it)")
+                _on_main_wait(self._drop)
+                return
+            time.sleep(SLIDE_S)
+        _on_main_wait(self._appear)
+
+    def _on_active_space(self) -> bool:
+        return bool(self._window.isOnActiveSpace())
+
+    def _appear(self) -> None:
+        """The pen set out, then the window made visible: the clock starts here."""
+        w = self._window
+        if w is None:
+            return
+        self._start_pen()
+        w.setAlphaValue_(1.0)
+        self._t0 = time.monotonic()
+
+    def _drop(self) -> None:
+        """No splash: its window goes without ever being seen, and the main window
+        opens plainly once the page is ready."""
+        w, self._window = self._window, None
+        if w is not None:
+            w.orderOut_(None)
+            w.close()
 
     # ── the hand-over ────────────────────────────────────────────────────────
     def hand_over(self, main) -> None:
-        """Wait for the page; put the main window where the system wants it,
-        unseen; let the window open out of the drawing; then make the real one
-        visible underneath and take the splash away. Runs on its own thread.
+        """Show the drawing once the user is on its Space; wait for the page; put
+        the main window where the system wants it, unseen; let the window open
+        out of the drawing; then make the real one visible underneath and take
+        the splash away. Runs on its own thread.
 
         WHATEVER GOES WRONG, MEDSEARCH OPENS: the last step, showing the main
         window, runs in every case."""
         try:
+            self._arrive()
             self.ready.wait(READY_TIMEOUT_S)
-            if self._window is None:
+            if self._window is None or self._t0 is None:    # never shown
                 return
             _on_main_wait(lambda: self._place_unseen(main))
             # STAGE MANAGER, AND ANYTHING ELSE THAT ARRANGES WINDOWS, acts as the
@@ -432,6 +515,8 @@ class Splash:
             _on_main(lambda: self._finish(main), otherwise=lambda: _show_plainly(main))
 
     def _place_unseen(self, main):
+        """Coming forward also takes the user back to the drawing's desktop from
+        wherever they have gone meanwhile: the window opens there too."""
         from AppKit import NSApplication
         ns = main.native
         ns.setAlphaValue_(0.0)

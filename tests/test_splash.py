@@ -2,6 +2,7 @@
 splash does. No window is opened here; the hand-over runs against a stand-in
 for the main window, with the main-thread calls made inline.
 """
+import inspect
 import math
 import re
 from pathlib import Path
@@ -152,6 +153,28 @@ class _Main:
         self.native.visible = True
 
 
+class _Panel:
+    """The splash's own window as `open` leaves it: ordered in, unseen. On the
+    Space in front or not, as `here` says look after look (its last answer
+    repeats); what is done to it is written down in `log`."""
+    def __init__(self, here=(True,)):
+        self.here, self.alpha, self.log = list(here), 0.0, []
+
+    def isOnActiveSpace(self):
+        self.log.append("asked")
+        return self.here.pop(0) if len(self.here) > 1 else self.here[0]
+
+    def setAlphaValue_(self, a):
+        self.alpha = a
+        self.log.append(f"alpha {a:g}")
+
+    def orderOut_(self, _):
+        self.log.append("out")
+
+    def close(self):
+        self.log.append("closed")
+
+
 @pytest.fixture
 def inline(monkeypatch):
     """Main-thread calls made on the spot, and no real waiting."""
@@ -166,6 +189,7 @@ def inline(monkeypatch):
                 otherwise()
     monkeypatch.setattr(S, "_on_main", on_main)
     monkeypatch.setattr(S.time, "sleep", slept.append)
+    monkeypatch.setattr(S.Splash, "_start_pen", lambda self: self._window.log.append("pen"))
     monkeypatch.setattr(S.Splash, "_place_unseen",
                         lambda self, main: (main.native.setAlphaValue_(0.0),
                                             main.native.makeKeyAndOrderFront_(None)))
@@ -173,9 +197,29 @@ def inline(monkeypatch):
     return slept
 
 
-def _opened(monkeypatch, opened_out):
+class _Clock:
+    """splash.py's `time`: sleeping moves it on, and nothing really waits."""
+    def __init__(self):
+        self.now, self.slept = 1000.0, []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, s):
+        self.slept.append(s)
+        self.now += s
+
+
+@pytest.fixture
+def clock(inline, monkeypatch):
+    c = _Clock()
+    monkeypatch.setattr(S, "time", c)
+    return c
+
+
+def _opened(monkeypatch, opened_out, here=(True,)):
     sp = S.Splash()
-    sp._window, sp._screen, sp._t0 = object(), _Rect(0, 0, 1728, 1117), S.time.monotonic()
+    sp._window, sp._screen = _Panel(here), _Rect(0, 0, 1728, 1117)
     monkeypatch.setattr(S.Splash, "_open_out", lambda self, rect: opened_out.append(rect))
     return sp
 
@@ -194,7 +238,7 @@ def test_it_waits_out_the_drawing_before_opening(inline, monkeypatch):
     sp, main = _opened(monkeypatch, opened), _Main()
     sp.ready.set()
     sp.hand_over(main)
-    waited = [s for s in inline if s not in (S.SETTLE_PLACE_S, S.SPLASH_OUT)]
+    waited = [s for s in inline if s not in (S.PLACED_S, S.SETTLE_PLACE_S, S.SPLASH_OUT)]
     assert waited and waited[0] == pytest.approx(S.leave_at(), abs=0.1)
 
 
@@ -202,8 +246,7 @@ def test_the_window_waits_for_the_page(inline, monkeypatch):
     import threading
     import time as real_time
     events = []
-    sp, main = S.Splash(), _Main()
-    sp._window, sp._screen, sp._t0 = object(), _Rect(0, 0, 1728, 1117), S.time.monotonic()
+    sp, main = _opened(monkeypatch, []), _Main()
     monkeypatch.setattr(S.Splash, "_open_out", lambda self, rect: events.append("opened"))
     monkeypatch.setattr(S.Splash, "_place_unseen", lambda self, m: events.append("placed"))
 
@@ -233,8 +276,7 @@ def test_a_page_that_never_says_ready_does_not_keep_medsearch_shut(inline, monke
 
 
 def test_a_failure_while_opening_out_still_shows_the_window(inline, monkeypatch):
-    sp, main = S.Splash(), _Main()
-    sp._window, sp._screen, sp._t0 = object(), _Rect(0, 0, 1728, 1117), S.time.monotonic()
+    sp, main = _opened(monkeypatch, []), _Main()
 
     def broken(self, rect):
         raise RuntimeError("the window server said no")
@@ -254,6 +296,110 @@ def test_showing_plainly_survives_a_window_without_its_native_half():
     bare = Bare()
     S._show_plainly(bare)
     assert bare.shown == 1
+
+
+# ── where it plays ───────────────────────────────────────────────────────────
+
+def test_the_splash_stays_on_one_space():
+    """On every Space, or on whichever is in front, the drawing is shown over an
+    app in full screen, while the window opens on a desktop out of sight."""
+    every, to_front, managed, transient, stationary, cycle, auxiliary = (
+        1 << 0, 1 << 1, 1 << 2, 1 << 3, 1 << 4, 1 << 6, 1 << 8)
+    assert S.ONE_SPACE & managed and S.ONE_SPACE & cycle
+    assert not S.ONE_SPACE & (every | to_front | transient | stationary | auxiliary)
+    assert "setCollectionBehavior_(ONE_SPACE)" in inspect.getsource(S.Splash.open)
+
+
+def test_the_splash_comes_forward_unseen_and_its_pen_waits():
+    src = inspect.getsource(S.Splash.open)
+    assert src.index("setAlphaValue_(0.0)") < src.index("orderFrontRegardless()") \
+        < src.index("activateIgnoringOtherApps_(True)")
+    assert "_start_pen" not in src and "_t0" not in src
+
+
+def test_on_the_space_in_front_the_pen_sets_out_once_the_window_is_placed(clock, monkeypatch):
+    opened = []
+    sp, main = _opened(monkeypatch, opened), _Main()
+    sp.ready.set()
+    sp.hand_over(main)
+    assert clock.slept[:2] == [S.PLACED_S, S.SETTLE_PLACE_S]
+    assert sp._window.log == ["asked", "pen", "alpha 1"]
+    assert sp._t0 == pytest.approx(1000 + S.PLACED_S)
+    assert opened and main.native.alpha == 1.0 and main.native.visible
+
+
+def test_from_an_app_in_full_screen_the_pen_waits_for_the_user_to_arrive(clock, monkeypatch):
+    """Placed on a desktop, the splash stays unseen until the switch there is
+    done, and only then does its clock start."""
+    opened = []
+    sp, main = _opened(monkeypatch, opened, here=[False] * 8 + [True]), _Main()
+    sp.ready.set()
+    sp.hand_over(main)
+    assert sp._window.log == ["asked"] * 9 + ["pen", "alpha 1"]
+    assert clock.slept[:10] == [S.PLACED_S] + [S.ARRIVAL_POLL_S] * 8 + [S.SLIDE_S]
+    assert sp._t0 == pytest.approx(1000 + S.PLACED_S + 8 * S.ARRIVAL_POLL_S + S.SLIDE_S)
+    assert opened and main.native.alpha == 1.0 and main.native.visible
+
+
+def test_the_waits_count_from_the_run_loop(clock, monkeypatch):
+    """The drawing goes up before the run loop turns, and macOS places it only
+    once MedSearch has finished launching: the first wait is for the main
+    thread, as long as the page is given, and the clock starts after it."""
+    events = []
+
+    def on_main_wait(fn, timeout=2.0):
+        events.append(("main", timeout))
+        return fn()
+    monkeypatch.setattr(S, "_on_main_wait", on_main_wait)
+    monkeypatch.setattr(clock, "sleep", lambda s: (events.append(("sleep", s)), _Clock.sleep(clock, s)))
+    sp, main = _opened(monkeypatch, []), _Main()
+    sp.ready.set()
+    sp.hand_over(main)
+    assert events[:2] == [("main", S.READY_TIMEOUT_S), ("sleep", S.PLACED_S)]
+
+
+def test_a_main_thread_that_never_answers_still_opens_the_window(clock, monkeypatch):
+    monkeypatch.setattr(S, "_on_main_wait", lambda fn, timeout=2.0: None)
+    opened = []
+    sp, main = _opened(monkeypatch, opened), _Main()
+    sp.ready.set()
+    sp.hand_over(main)
+    assert sp._t0 is None and S.PLACED_S not in clock.slept and not opened
+    assert main.native.alpha == 1.0 and main.native.visible
+
+
+def test_a_space_never_reached_opens_the_window_without_the_splash(clock, monkeypatch):
+    opened = []
+    sp, main = _opened(monkeypatch, opened, here=[False]), _Main()
+    panel = sp._window
+    sp.ready.set()
+    sp.hand_over(main)
+    assert panel.log[-2:] == ["out", "closed"] and sp._window is None
+    assert "pen" not in panel.log and panel.alpha == 0.0
+    looks = round(S.ARRIVAL_S / S.ARRIVAL_POLL_S)               # the whole wait, and no more
+    assert looks <= clock.slept.count(S.ARRIVAL_POLL_S) <= looks + 1
+    assert S.SLIDE_S not in clock.slept and not opened
+    assert main.native.alpha == 1.0 and main.native.visible and main.shown == 1
+
+
+def test_a_splash_that_could_not_be_shown_opens_nothing_out(clock, monkeypatch):
+    """The main thread's calls fail quietly, as `_on_main_wait` makes them."""
+    def quietly(fn, timeout=2.0):
+        try:
+            return fn()
+        except Exception:
+            return None
+    monkeypatch.setattr(S, "_on_main_wait", quietly)
+
+    def broken(self):
+        raise RuntimeError("the window server said no")
+    monkeypatch.setattr(S.Splash, "_start_pen", broken)
+    opened = []
+    sp, main = _opened(monkeypatch, opened), _Main()
+    sp.ready.set()
+    sp.hand_over(main)
+    assert not opened and sp._window.alpha == 0.0
+    assert main.native.alpha == 1.0 and main.native.visible
 
 
 # ── the page's side ──────────────────────────────────────────────────────────
