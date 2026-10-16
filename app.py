@@ -162,6 +162,9 @@ DEFAULTS = {
     # institution_proxies: list of {"label","url"}; active_proxy: index into it.
     "institution_proxies": [],
     "active_proxy":     0,
+    # Library resources: the ready-made ones ticked in Settings (ids from
+    # LIBRARY_RESOURCES) and the user's own, {"name", "url"} with {q} in it.
+    "library_resources": {"on": [], "own": []},
     # Selected national guideline body (country code, e.g. "it"). Used by the
     # "National guidelines" button to open the right authority's search.
     "guideline_country": "",
@@ -3789,6 +3792,9 @@ def index():
                            has_semanticscholar=bool(_key("semantic_scholar_api_key")),
                            has_googlebooks=bool(_key("google_books_api_key")),
                            institution_proxies=CONFIG.get("institution_proxies", []),
+                           library_resources=library_resources(),
+                           active_resources=active_resources(),
+                           library_resource_presets=LIBRARY_RESOURCES,
                            active_proxy=CONFIG.get("active_proxy", 0),
                            sources=_start_sources(),
                            auto_query=auto_query,
@@ -5079,10 +5085,72 @@ def _write_login_agent(args):
         '<key>RunAtLoad</key><true/>'
         '</dict></plist>\n')
 
+# ── Library resources ────────────────────────────────────────────────────────
+# Platforms a library subscribes to that no other app can search (ClinicalKey,
+# AccessMedicine, UpToDate…). Each is the address of one search, with {q}
+# where the words go; the page opens it through the active library, in a
+# MedSearch window, as it does Google Scholar.
+LIBRARY_RESOURCES = [
+    {"id": "clinicalkey", "name": "ClinicalKey",
+     "url": "https://www.clinicalkey.com/#!/search/{q}"},
+    {"id": "accessmedicine", "name": "AccessMedicine",
+     "url": "https://accessmedicine.mhmedical.com/SearchResults.aspx?q={q}"},
+    {"id": "uptodate", "name": "UpToDate",
+     "url": "https://www.uptodate.com/contents/search?search={q}&source=USER_INPUT"},
+]
+_MAX_OWN_RESOURCES = 20
+
+def library_resources():
+    """The library resources as saved, read defensively: {"on": [ids], "own": [...]}."""
+    saved = CONFIG.get("library_resources")
+    saved = saved if isinstance(saved, dict) else {}
+    ids = {r["id"] for r in LIBRARY_RESOURCES}
+    return {"on": [i for i in saved.get("on") or [] if i in ids],
+            "own": [r for r in saved.get("own") or [] if isinstance(r, dict)
+                    and isinstance(r.get("name"), str) and isinstance(r.get("url"), str)]}
+
+def active_resources():
+    """The resources with a Search button, in the page's order: the ready-made
+    ones ticked, in their own order, then the user's own."""
+    saved = library_resources()
+    return [r for r in LIBRARY_RESOURCES if r["id"] in saved["on"]] + saved["own"]
+
+def _clean_library_resources(given):
+    """What Settings sent, checked. Raises ValueError, saying why, for one of
+    the user's own that is not a web address of a search with {q} in it."""
+    if not isinstance(given, dict):
+        raise ValueError("The library resources were not sent as a list.")
+    ids = [r["id"] for r in LIBRARY_RESOURCES]
+    on = [i for i in ids if i in (given.get("on") or [])]
+    own = []
+    for r in given.get("own") or []:
+        name = " ".join(str((r or {}).get("name") or "").split())[:60] if isinstance(r, dict) else ""
+        url = str((r or {}).get("url") or "").strip() if isinstance(r, dict) else ""
+        if not name:
+            raise ValueError("A library resource has no name.")
+        if not re.match(r"https?://[^\s/]+\.[^\s]+$", url) or len(url) > 1000:
+            raise ValueError(f"{name}: the search address must be a web address, "
+                             "beginning https://, with no spaces.")
+        if "{q}" not in url:
+            raise ValueError(f"{name}: the search address needs {{q}} where the words go. "
+                             "Search the site for one word, copy the address, and put {q} "
+                             "in place of the word.")
+        own.append({"name": name, "url": url})
+    if len(own) > _MAX_OWN_RESOURCES:
+        raise ValueError(f"Keep at most {_MAX_OWN_RESOURCES} library resources of your own.")
+    return {"on": on, "own": own}
+
 @app.route("/settings", methods=["GET","POST"])
 def settings():
     if request.method == "POST":
         data = _json_body()
+        # Checked before anything is saved: a refused one saves nothing.
+        resources = None
+        if "library_resources" in data:
+            try:
+                resources = _clean_library_resources(data["library_resources"])
+            except ValueError as e:
+                return jsonify({"ok": False, "message": str(e)}), 400
         secret_fields = SECRET_KEYS + ("unpaywall_email",)
         # A blank field means "keep what's saved" (the field shows a masked
         # placeholder), so removing a key is an explicit request.
@@ -5112,6 +5180,8 @@ def settings():
                         entry["remember_signin"] = True
                     cleaned.append(entry)
             CONFIG["institution_proxies"] = cleaned
+        if resources is not None:
+            CONFIG["library_resources"] = resources
         if "ai_monthly_cap" in data:
             try:
                 CONFIG["ai_monthly_cap"] = max(0.0, float(data["ai_monthly_cap"] or 0))
@@ -5154,6 +5224,7 @@ def settings():
             safe[k] = "set" if v else ""
     # Non-string settings the UI needs back in full
     safe["institution_proxies"] = CONFIG.get("institution_proxies", [])
+    safe["library_resources"] = library_resources()
     safe["active_proxy"] = CONFIG.get("active_proxy", 0)
     safe["ai_monthly_cap"] = ai_cap()
     safe["can_open_at_login"] = _open_at_login_supported()

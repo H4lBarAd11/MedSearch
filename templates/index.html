@@ -18,6 +18,8 @@
     autoQuery:          {{ auto_query | tojson }},
     autoSource:         {{ auto_source | tojson }},
     institutionProxies: {{ institution_proxies | tojson }},
+    libraryResources:   {{ library_resources | tojson }},
+    resourcePresets:    {{ library_resource_presets | tojson }},
     activeProxy:        {{ active_proxy | tojson }},
     hasScopus:          {{ 'true' if has_scopus else 'false' }},
     hasWos:             {{ 'true' if has_wos else 'false' }},
@@ -247,6 +249,7 @@
   </button>
   <div class="natl-guideline-hint">Google Scholar can't be searched from MedSearch, so it opens in its
     own window with your search and the years from Options filled in.</div>
+  <div id="resourceButtons">{% for r in active_resources %}<button class="select-all-btn scholar-btn" type="button" onclick="openLibraryResource({{ loop.index0 }})"><svg class="ico" aria-hidden="true"><use href="#i-external"/></svg> Search {{ r.name }}</button>{% endfor %}</div>
 </div>
 
 <div class="dock-panel" id="panelOptions" role="dialog" aria-label="Search options" hidden>
@@ -474,6 +477,14 @@
         <div id="proxyList"></div>
         <button class="btn-secondary proxy-add-btn" onclick="openProxyEditor()">+ Add another institution</button>
         <div class="settings-hint">Pick the library you have access to (also switchable under Options in the bottom bar). UniTN is pre-configured; set up ASUIT or FBK with their proxy address, or add another institution. DOI links then open through that library so subscribed papers load with your access.</div>
+      </div>
+      <div class="settings-field">
+        <label>Library resources <span style="font-weight:normal;color:var(--text3)">— search them from the Databases panel</span></label>
+        <div id="resourceList"></div>
+        <input type="text" id="resourceName" class="resource-input" placeholder="Name, e.g. Thieme MedOne" maxlength="60">
+        <input type="url" id="resourceUrl" class="resource-input" placeholder="Search address, with {q} where the words go">
+        <button class="btn-secondary proxy-add-btn" type="button" onclick="addOwnResource()">+ Add your own</button>
+        <div class="settings-hint">Platforms your library subscribes to that can't be searched from MedSearch. Each ticked one gets a Search button under Search Google Scholar, which opens it through your library with your search filled in. To add another, search it for one word, copy the address, and put {q} in place of the word.</div>
       </div>
       <div class="settings-field" id="aiSpendField">
         <label>AI spending this month</label>

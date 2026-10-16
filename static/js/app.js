@@ -686,6 +686,101 @@ function openGoogleScholar() {
                               document.getElementById('yearTo').value, author), 'Google Scholar');
 }
 
+// ── Library resources ─────────────────────────────────────────────────────
+// Platforms a library subscribes to that no other app can search: ClinicalKey,
+// UpToDate… Each is the address of one search with {q} where the words go,
+// opened through the active library in a MedSearch window, as Scholar is.
+let libraryResources = MS.libraryResources || {on: [], own: []};
+let resourceDraft = null;          // Settings' working copy, saved with Save
+
+// The resources with a Search button: the ready-made ones ticked, in their
+// own order, then the user's own.
+function activeResources(saved, presets) {
+  return [...presets.filter(p => (saved.on || []).includes(p.id)), ...(saved.own || [])];
+}
+
+function resourceUrl(template, query) {
+  return template.split('{q}').join(encodeURIComponent(query));
+}
+
+// Why an address of one's own can't be used, or ''. The server says the same.
+function resourceProblem(name, url) {
+  if (!name) return 'A library resource has no name.';
+  if (!/^https?:\/\/[^\s/]+\.\S+$/.test(url) || url.length > 1000)
+    return `${name}: the search address must be a web address, beginning https://, with no spaces.`;
+  if (!url.includes('{q}'))
+    return `${name}: the search address needs {q} where the words go. Search the site for one word, ` +
+           'copy the address, and put {q} in place of the word.';
+  return '';
+}
+
+// The page arrives with them drawn (index.html); they are drawn again here
+// after Settings are saved, in the same form.
+function renderResourceButtons() {
+  const wrap = document.getElementById('resourceButtons');
+  if (!wrap) return;
+  wrap.innerHTML = activeResources(libraryResources, MS.resourcePresets || []).map((r, i) =>
+    `<button class="select-all-btn scholar-btn" type="button" onclick="openLibraryResource(${i})">` +
+    `${ico('external')} Search ${escHtml(r.name)}</button>`).join('');
+}
+
+function openLibraryResource(i) {
+  const r = activeResources(libraryResources, MS.resourcePresets || [])[i];
+  if (!r) return;
+  const q = (document.getElementById('searchInput').value || '').trim();
+  if (!q) {
+    fail(`Type what to look for in the search box, then open ${r.name}.`, 'Nothing to search for');
+    return;
+  }
+  closePanels(true);
+  if (people.author || people.institution)
+    showToast(`${r.name} can't be narrowed to an author or an institution: it opens with the words only.`, '');
+  openInAppBrowser(proxify(resourceUrl(r.url, q)), r.name);
+}
+
+// Settings: the ready-made ones to tick, then the user's own, each removable.
+function renderResourceList() {
+  const wrap = document.getElementById('resourceList');
+  if (!wrap || !resourceDraft) return;
+  const presets = (MS.resourcePresets || []).map(p => `
+    <div class="proxy-row">
+      <input type="checkbox" class="proxy-active" ${resourceDraft.on.includes(p.id) ? 'checked' : ''}
+             onchange="toggleResource('${escAttr(p.id)}', this.checked)" title="Show Search ${escHtml(p.name)}">
+      <span class="proxy-name">${escHtml(p.name)}</span>
+    </div>`);
+  const own = resourceDraft.own.map((r, i) => `
+    <div class="proxy-row">
+      <input type="checkbox" class="proxy-active" checked disabled title="Added by you">
+      <span class="proxy-name">${escHtml(r.name)}</span>
+      <button class="proxy-del" type="button" onclick="removeOwnResource(${i})" title="Remove">${ico('close')}</button>
+      <div class="resource-address">${escHtml(r.url)}</div>
+    </div>`);
+  wrap.innerHTML = [...presets, ...own].join('');
+}
+
+function toggleResource(id, on) {
+  resourceDraft.on = resourceDraft.on.filter(x => x !== id).concat(on ? [id] : []);
+}
+
+// Adds what is typed in the two fields. False, with a popup saying why, when it
+// can't be used; true when added or when both fields are empty.
+function addOwnResource() {
+  const nameEl = document.getElementById('resourceName'), urlEl = document.getElementById('resourceUrl');
+  const name = nameEl.value.split(/\s+/).filter(Boolean).join(' '), url = urlEl.value.trim();
+  if (!name && !url) return true;
+  const problem = resourceProblem(name, url);
+  if (problem) { fail(problem, "Couldn't add the library resource"); return false; }
+  resourceDraft.own.push({name, url});
+  nameEl.value = urlEl.value = '';
+  renderResourceList();
+  return true;
+}
+
+function removeOwnResource(i) {
+  resourceDraft.own.splice(i, 1);
+  renderResourceList();
+}
+
 // Wrap a URL in the active institutional proxy so paywalled-but-subscribed
 // papers open through the user's library. No-op if no proxy is active.
 // Handles two EZProxy modes plus OpenAthens:
@@ -2456,8 +2551,13 @@ async function openSettings() {
     if (Array.isArray(s.institution_proxies)) savedProxies = s.institution_proxies;
     if (typeof s.active_proxy === 'number') activeProxy = s.active_proxy;
     institutionProxies = buildInstitutions();
+    if (s.library_resources) libraryResources = s.library_resources;
   } catch(e) {}
   renderProxyRows();
+  resourceDraft = {on: [...(libraryResources.on || [])],
+                   own: (libraryResources.own || []).map(r => ({...r}))};
+  document.getElementById('resourceName').value = document.getElementById('resourceUrl').value = '';
+  renderResourceList();
 }
 // A blank field means "keep the saved key", so removing one is its own action,
 // applied when Settings is saved.
@@ -2677,6 +2777,11 @@ async function saveSettings() {
     }));
   payload.institution_proxies = cleanProxies;
   payload.active_proxy = activeProxy;
+  // A resource typed but not added with its button is added now, or nothing saves.
+  if (resourceDraft) {
+    if (!addOwnResource()) return;
+    payload.library_resources = resourceDraft;
+  }
   if (!document.getElementById('loginField').hidden)
     payload.open_at_login = document.getElementById('set_open_at_login').checked;
   payload.ai_monthly_cap = parseFloat(document.getElementById('set_ai_cap').value) || 0;
@@ -2693,6 +2798,10 @@ async function saveSettings() {
   savedProxies = cleanProxies;
   institutionProxies = buildInstitutions();
   renderProxyPicker();
+  if (payload.library_resources) {
+    libraryResources = payload.library_resources;
+    renderResourceButtons();
+  }
   // Refresh the badges of the keyed databases for any newly-added (or removed) keys
   try {
     const s = await (await fetch('/settings')).json();

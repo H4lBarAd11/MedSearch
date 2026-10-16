@@ -708,3 +708,69 @@ def test_every_settings_field_the_page_reads_is_on_the_page():
     ids |= set(re.findall(r"^\s+\w+:\s+'(set_[a-z_]+)',", js, re.M))
     assert "set_googlebooks" in ids
     assert {i for i in ids if f'id="{i}"' not in html} == set()
+
+
+# ── Library resources: platforms searched in their own window ───────────────
+
+def test_the_ready_made_library_resources_and_their_search_addresses():
+    assert {r["id"]: r["url"] for r in A.LIBRARY_RESOURCES} == {
+        "clinicalkey": "https://www.clinicalkey.com/#!/search/{q}",
+        # As Zotero's translator for McGraw Hill's Access sites knows it.
+        "accessmedicine": "https://accessmedicine.mhmedical.com/SearchResults.aspx?q={q}",
+        # As UpToDate's own search box sends it.
+        "uptodate": "https://www.uptodate.com/contents/search?search={q}&source=USER_INPUT"}
+
+
+def test_settings_keeps_the_ticked_resources_and_ones_own(client, auth):
+    sent = {"on": ["uptodate", "clinicalkey", "unknown"],
+            "own": [{"name": "  Example   Platform ", "url": "https://example.org/find?words={q}"}]}
+    r = client.post("/settings", json={"library_resources": sent}, headers=auth, base_url=BASE)
+    assert r.status_code == 200 and r.json["ok"]
+    kept = {"on": ["clinicalkey", "uptodate"],
+            "own": [{"name": "Example Platform", "url": "https://example.org/find?words={q}"}]}
+    assert A.CONFIG["library_resources"] == kept
+    assert client.get("/settings", headers=auth, base_url=BASE).json["library_resources"] == kept
+    page = client.get("/", base_url=BASE).get_data(as_text=True)
+    assert f'libraryResources:   {json.dumps(kept)}' in page
+    assert '"id": "accessmedicine"' in page and 'id="resourceButtons"' in page
+
+
+@pytest.mark.parametrize("own, says", [
+    ({"name": "Example", "url": "https://example.org/find?words=glioma"}, "needs {q} where the words go"),
+    ({"name": "Example", "url": "example.org/find?q={q}"}, "must be a web address, beginning https://"),
+    ({"name": "Example", "url": "https://example.org/find?q={q} more"}, "with no spaces"),
+    ({"name": "  ", "url": "https://example.org/find?q={q}"}, "has no name"),
+])
+def test_a_resource_that_cannot_be_used_is_refused_and_nothing_is_saved(client, auth, own, says):
+    r = client.post("/settings", json={"library_resources": {"on": [], "own": [own]},
+                                       "pubmed_api_key": "pm-key-1234"}, headers=auth, base_url=BASE)
+    assert r.status_code == 400 and not r.json["ok"] and says in r.json["message"]
+    assert A.CONFIG["library_resources"] == {"on": [], "own": []} and A.CONFIG["pubmed_api_key"] == ""
+
+
+def test_at_most_twenty_resources_of_ones_own(client, auth):
+    own = [{"name": f"R{i}", "url": f"https://example.org/{i}?q={{q}}"} for i in range(21)]
+    r = client.post("/settings", json={"library_resources": {"on": [], "own": own}},
+                    headers=auth, base_url=BASE)
+    assert r.status_code == 400 and "at most 20" in r.json["message"]
+
+
+def test_resources_saved_badly_by_hand_are_read_without_failing():
+    A.CONFIG["library_resources"] = {"on": ["uptodate", "nope", 3], "own": [{"name": "X"}, "junk", None]}
+    assert A.library_resources() == {"on": ["uptodate"], "own": []}
+    A.CONFIG["library_resources"] = "junk"
+    assert A.library_resources() == {"on": [], "own": []}
+
+
+def test_the_page_arrives_with_the_search_buttons_drawn_as_the_page_draws_them(client, auth):
+    A.CONFIG["library_resources"] = {"on": ["uptodate", "clinicalkey"],
+                                     "own": [{"name": "Example <Platform>", "url": "https://example.org/?q={q}"}]}
+    page = client.get("/", base_url=BASE).get_data(as_text=True)
+    drawn = re.search(r'<div id="resourceButtons">(.*?)</div>', page, re.S).group(1)
+    assert re.findall(r'onclick="openLibraryResource\((\d)\)"><svg class="ico" aria-hidden="true">'
+                      r'<use href="#i-external"/></svg> Search ([^<]+)</button>', drawn) == [
+        ("0", "ClinicalKey"), ("1", "UpToDate"), ("2", "Example &lt;Platform&gt;")]
+    js = (Path(A.__file__).parent / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    # The same button as the page draws after a save.
+    assert ('`<button class="select-all-btn scholar-btn" type="button" onclick="openLibraryResource(${i})">` +\n'
+            "    `${ico('external')} Search ${escHtml(r.name)}</button>`") in js
