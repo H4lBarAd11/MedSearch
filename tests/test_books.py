@@ -470,3 +470,110 @@ def test_the_merged_list_tells_books_apart_the_same_way():
                                ("Other", [book("Glioma", "Doe, J.", "2012")])])
     assert [(m["author_list"][0], m["found_in"]) for m in merged] == [
         ("Doe, Jane", ["Open Library", "Other"]), ("Roe, Richard", ["Open Library"])]
+
+
+# ── The books OpenAlex and Crossref return ──────────────────────────────────
+
+def oa_work(type_, locations=(), **kw):
+    return {"id": "https://openalex.org/W1", "display_name": "Example Handbook", "type": type_,
+            "publication_year": 2016, "doi": "https://doi.org/10.9/book",
+            "authorships": [{"author": {"display_name": "Jane Doe"}}],
+            "primary_location": {"source": {"display_name": "Example eBooks",
+                                            "host_organization_name": "Example Publishing"}},
+            "locations": list(locations), **kw}
+
+
+LANDING_ONLY = {"is_oa": True, "license": "cc-by-nc-nd", "pdf_url": None, "version": "publishedVersion",
+                "landing_page_url": "https://doi.org/10.9/another-book", "source": {"type": "ebook platform"}}
+WITH_PDF = {"is_oa": True, "license": "cc-by", "pdf_url": "https://repository.example.edu/book.pdf",
+            "landing_page_url": "https://repository.example.edu/book", "source": {"type": "repository"}}
+
+
+def test_an_openalex_book_is_a_book_with_its_publisher():
+    a = A._openalex_article(oa_work("book"))
+    assert a["pub_types"] == ["Book"] and a["journal"] == "Example eBooks"
+    assert a["book"] == {"kind": "book", "title": "Example Handbook", "publisher": "Example Publishing",
+                         "place": "", "isbn": [], "editors": [], "bookshelf": None}
+
+
+def test_an_openalex_chapter_does_not_know_its_book():
+    a = A._openalex_article(oa_work("book-chapter"))
+    assert (a["book"]["kind"], a["book"]["title"]) == ("chapter", "")
+
+
+def test_a_book_is_free_only_with_a_link_to_a_pdf_of_it():
+    # OpenAlex calls paid books open on the strength of a landing page.
+    assert A._openalex_article(oa_work("book", [LANDING_ONLY]))["access_kind"] is None
+    a = A._openalex_article(oa_work("book", [LANDING_ONLY, WITH_PDF]))
+    assert (a["access_kind"], a["access_link"]) == ("open", "https://repository.example.edu/book.pdf")
+    # A paper's openly licensed landing page still counts.
+    paper = A._openalex_article(oa_work("article", [LANDING_ONLY]))
+    assert paper["book"] is None and paper["pub_types"] == []
+    assert (paper["access_kind"], paper["access_link"]) == ("open", "https://doi.org/10.9/another-book")
+
+
+def test_unpaywall_and_the_openalex_fallback_ask_a_book_for_a_pdf_too(monkeypatch):
+    A.CONFIG["unpaywall_email"] = "reader@example.org"
+    unpaywall = {"is_oa": True, "oa_locations": [
+        {"url": "https://doi.org/10.9/another-book", "url_for_pdf": None, "license": "cc-by",
+         "url_for_landing_page": "https://doi.org/10.9/another-book", "host_type": "publisher"}]}
+    monkeypatch.setattr(A, "fetch_json", lambda url, *a, **k: (unpaywall, 200))
+    assert A.check_oa("10.9/book", book=True) is None
+    assert A.check_oa("10.9/paper") == "https://doi.org/10.9/another-book"
+    A.CONFIG["unpaywall_email"] = ""
+    monkeypatch.setattr(A, "fetch_json", lambda url, *a, **k: ({"locations": [LANDING_ONLY]}, 200))
+    assert A.check_oa("10.9/book", book=True) is None
+
+
+def test_enrichment_tells_the_free_copy_check_which_is_a_book(monkeypatch):
+    asked = []
+    monkeypatch.setattr(A, "check_oa", lambda doi, book=False: asked.append((doi, book)))
+    monkeypatch.setattr(A, "pmcids_for_dois", lambda dois: {})
+    monkeypatch.setattr(A, "retraction_status", lambda doi: None)
+    A.enrich_access([A._openalex_article(oa_work("book")),
+                     A._article(doi="10.9/paper", source="Scopus")])
+    assert sorted(asked) == [("10.9/book", True), ("10.9/paper", False)]
+
+
+def test_a_free_copy_saved_under_the_rules_before_books_is_looked_up_again(monkeypatch):
+    asked = []
+    monkeypatch.setattr(A, "check_oa", lambda doi, book=False: asked.append(doi))
+    monkeypatch.setattr(A, "pmcids_for_dois", lambda dois: {})
+    monkeypatch.setattr(A, "retraction_status", lambda doi: None)
+    A._DOI_CACHE["10.9/book"] = {"t": A.time.time(), "rules": 2, "kind": "open",
+                                 "link": "https://doi.org/10.9/another-book", "retraction": None}
+    a = A._openalex_article(oa_work("book"))
+    A.enrich_access([a])
+    assert asked == ["10.9/book"] and a["access_kind"] == "doi"
+
+
+def cr_item(type_, **kw):
+    return {"DOI": "10.9/cr", "type": type_, "title": ["Awake mapping"],
+            "author": [{"family": "Doe", "given": "Jane"}], "issued": {"date-parts": [[2021]]},
+            "publisher": "Example Publishing", "publisher-location": "Example City",
+            "ISBN": ["0-306-40615-2", "9780804429573"],
+            "editor": [{"family": "Moe", "given": "Mary"}, {"family": "Roe"}], **kw}
+
+
+def test_a_crossref_chapter_names_its_book_not_its_series():
+    a = A._crossref_article(cr_item("book-chapter",
+                                    **{"container-title": ["Example Series", "Example Atlas"]}))
+    assert a["journal"] == "Example Atlas" and a["pub_types"] == ["Book"]
+    assert a["book"] == {"kind": "chapter", "title": "Example Atlas", "publisher": "Example Publishing",
+                         "place": "Example City", "isbn": ["9780306406157", "9780804429573"],
+                         "editors": ["Moe, Mary", "Roe"], "bookshelf": None}
+
+
+def test_a_crossref_book_shows_its_publisher():
+    a = A._crossref_article(cr_item("edited-book", **{"container-title": ["Example Online"]}))
+    assert a["journal"] == "Example Publishing"
+    assert (a["book"]["kind"], a["book"]["title"]) == ("book", "Awake mapping")
+
+
+@pytest.mark.parametrize("type_, kind", [("book-part", "chapter"), ("book-section", "chapter"),
+                                         ("reference-entry", "chapter"), ("monograph", "book"),
+                                         ("reference-book", "book"), ("journal-article", None)])
+def test_crossref_types_of_book(type_, kind):
+    a = A._crossref_article(cr_item(type_, **{"container-title": ["Example"]}))
+    assert (a["book"] or {}).get("kind") == kind
+    assert ("Book" in a["pub_types"]) == bool(kind)

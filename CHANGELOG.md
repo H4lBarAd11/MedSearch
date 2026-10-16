@@ -13,6 +13,9 @@ one line per change, in plain words, no internals.
 - Exports and Zotero: a chapter is saved as a chapter of its book, with the book's title, editors and publisher, and a whole book as a book, with its ISBN.
 - New database, free: Open Library, the Internet Archive's catalogue of books. A book in the public domain is read free (Read free); many others can be borrowed for an hour or for two weeks with a free Internet Archive account (Borrow). Find in a library looks the book up in WorldCat, the shared catalogue of libraries worldwide, and Open Library opens its page there. Each opens in a MedSearch window, which keeps your sign-in.
 - Books that share a short title, such as "Glioma", are no longer taken for one another: a book is shown once only when the same book, by the same first author and from the same year, is found twice.
+- The books and chapters OpenAlex and Crossref find are tagged Book and exported as books, with the book's title, editors, publisher and ISBN where Crossref has them. Find in a library looks them up in WorldCat, a chapter as its book.
+- Crossref also finds whole books: books, monographs, edited books and reference books.
+- A book is called free only when there is a PDF of it. OpenAlex and Unpaywall list some paid books as free because of a web page that is not the book, and those now open through your library instead.
 
 ## 2.1
 

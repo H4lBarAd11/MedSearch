@@ -129,3 +129,26 @@ test("a paper's row is as it was", () => {
                                scihub: ["https://sci-hub.example/10.1/x"]}),
                    ["Read PDF", "Sci-Hub", "PubMed", "Citations", "Explain", "Zotero"]);
 });
+
+// ── Books from OpenAlex and Crossref ────────────────────────────────────────
+
+test("a chapter is looked up in WorldCat as its book, and not at all when its book is unknown", () => {
+  const byBook = worldcatUrl({title: "Awake mapping", author_list: ["Doe, Jane"],
+                              book: {kind: "chapter", title: "Example Atlas", isbn: []}});
+  assert.equal(new URL(byBook).searchParams.get("q"), "Example Atlas");
+  const byIsbn = worldcatUrl({title: "Awake mapping", book: {kind: "chapter", title: "Example Atlas",
+                                                             isbn: ["9780306406157"]}});
+  assert.equal(new URL(byIsbn).searchParams.get("q"), "bn:9780306406157");
+  const unknown = {title: "Awake mapping", author_list: ["Doe, Jane"],
+                   book: {kind: "chapter", title: "", isbn: [], openlibrary: null}};
+  assert.equal(worldcatUrl(unknown), "");
+  assert.equal(libraryButtons(unknown), "");
+});
+
+test("a Crossref chapter's row: DOI, Sci-Hub as now, then Find in a library", () => {
+  assert.deepEqual(rowButtons({title: "Awake mapping", doi: "10.9/cr", access_kind: "doi",
+                               access_link: "https://doi.org/10.9/cr",
+                               scihub: ["https://sci-hub.example/10.9/cr"],
+                               book: {kind: "chapter", title: "Example Atlas", isbn: ["9780306406157"]}}),
+                   ["DOI", "Sci-Hub", "Find in a library", "Citations", "Explain", "Zotero"]);
+});

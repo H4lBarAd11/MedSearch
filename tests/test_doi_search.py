@@ -157,7 +157,9 @@ def test_a_crossref_record_reads_as_an_article(crossref):
     assert (a["year"], a["journal"], a["source"]) == ("2020", "Lecture Notes in Computer Science",
                                                       "Crossref")
     assert a["abstract"] == "Background: CO2 & more."
-    assert a["doi"] == "10.1007/978-3-030-58452-8_13" and a["pub_types"] == []
+    # A chapter: Crossref names only its series here, so that stands for its book.
+    assert a["doi"] == "10.1007/978-3-030-58452-8_13" and a["pub_types"] == ["Book"]
+    assert (a["book"]["kind"], a["book"]["title"]) == ("chapter", "Lecture Notes in Computer Science")
 
 
 def test_a_crossref_preprint_is_marked_as_one(crossref):

@@ -1483,12 +1483,17 @@ function borrowButton(a) {
 }
 
 // WorldCat, the libraries' shared catalogue, on this book: by its ISBN when it
-// has one, else by its title and first author, which finds every edition.
+// has one, else by its title and first author, which finds every edition. A
+// chapter is catalogued as its book, so by the book's title; '' when that is
+// not known either.
 function worldcatUrl(a) {
-  const isbn = (a.book && a.book.isbn || [])[0];
+  const b = a.book || {};
+  const isbn = (b.isbn || [])[0];
   const first = ((a.author_list || [])[0] || '').split(',')[0].trim();
-  const q = isbn ? `bn:${isbn}` : [a.title || '', first].join(' ').trim();
-  return 'https://search.worldcat.org/search?' + new URLSearchParams({q});
+  const q = isbn ? `bn:${isbn}`
+          : b.kind === 'chapter' ? (b.title || '').trim()
+          : [a.title || '', first].join(' ').trim();
+  return q ? 'https://search.worldcat.org/search?' + new URLSearchParams({q}) : '';
 }
 
 // A book's ways to a copy beyond the free one: the libraries that hold it, and
@@ -1496,7 +1501,8 @@ function worldcatUrl(a) {
 function libraryButtons(a) {
   if (!a.book || a.book.bookshelf) return '';
   const title = escAttr(a.title || 'Book');
-  let out = `<button class="link-btn doi" onclick="openInAppBrowser('${escAttr(worldcatUrl(a))}', '${title}')">${ico('globe')} Find in a library</button>`;
+  const worldcat = worldcatUrl(a);
+  let out = worldcat ? `<button class="link-btn doi" onclick="openInAppBrowser('${escAttr(worldcat)}', '${title}')">${ico('globe')} Find in a library</button>` : '';
   if (a.book.openlibrary)
     out += `<button class="link-btn doi" onclick="openInAppBrowser('${escAttr(a.book.openlibrary)}', '${title}')">${ico('external')} Open Library</button>`;
   return out;

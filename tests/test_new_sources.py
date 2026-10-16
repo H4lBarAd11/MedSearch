@@ -217,7 +217,7 @@ def test_a_europe_pmc_refusal_says_what_it_said(answer):
 
 # ── Crossref ────────────────────────────────────────────────────────────────
 
-def test_crossref_asks_for_papers_only_with_years_order_and_offset(answer):
+def test_crossref_asks_for_papers_and_books_with_years_order_and_offset(answer):
     A.CONFIG["unpaywall_email"] = "someone@example.org"
     calls = answer({"message": {"total-results": 99, "items": [
         {"DOI": "10.1000/c.1", "title": ["A paper"], "type": "journal-article",
@@ -225,10 +225,11 @@ def test_crossref_asks_for_papers_only_with_years_order_and_offset(answer):
     arts, total = A.search_crossref("glioma", 10, 2019, None, sort="date", offset=30)
     p = calls.params()
     assert p["filter"] == ("type:journal-article,type:posted-content,type:proceedings-article,"
-                           "type:book-chapter,from-pub-date:2019")
+                           "type:book-chapter,type:book,type:monograph,type:edited-book,"
+                           "type:reference-book,from-pub-date:2019")
     assert (p["query"], p["rows"], p["offset"], p["sort"], p["order"]) == \
         ("glioma", "10", "30", "published", "desc")
-    assert "abstract" in p["select"].split(",")
+    assert {"abstract", "ISBN", "publisher", "publisher-location", "editor"} <= set(p["select"].split(","))
     assert "institution" not in p["select"].split(",")     # Crossref refuses it in a search
     assert "mailto:someone@example.org" in calls[-1]["headers"]["User-Agent"]
     assert total == 99 and (arts[0]["doi"], arts[0]["cited_by"], arts[0]["year"]) == ("10.1000/c.1", 7, "2020")

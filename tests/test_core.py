@@ -327,7 +327,7 @@ def test_pubmed_articles_skip_the_slow_crossref_retraction_call(monkeypatch):
 
 def test_enrichment_is_cached_per_doi(monkeypatch):
     calls = []
-    monkeypatch.setattr(A, "check_oa", lambda doi: calls.append(doi) or "https://oa.example/x.pdf")
+    monkeypatch.setattr(A, "check_oa", lambda doi, book=False: calls.append(doi) or "https://oa.example/x.pdf")
     monkeypatch.setattr(A, "retraction_status", lambda doi: None)
     for _ in range(2):
         a = A._article(doi="10.1/cached", source="Scopus")
@@ -441,7 +441,7 @@ def test_openalex_is_asked_only_when_unpaywall_cannot_answer(monkeypatch):
 
 def test_an_answer_cached_under_the_old_rules_is_looked_up_again(monkeypatch):
     calls = []
-    monkeypatch.setattr(A, "check_oa", lambda doi: calls.append(doi) or None)
+    monkeypatch.setattr(A, "check_oa", lambda doi, book=False: calls.append(doi) or None)
     monkeypatch.setattr(A, "pmcids_for_dois", lambda dois: {})
     monkeypatch.setattr(A, "retraction_status", lambda doi: None)
     A._DOI_CACHE[GARYFALLIDIS] = {"t": A.time.time(), "kind": "open",     # as 1.25 left it

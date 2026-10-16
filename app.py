@@ -593,7 +593,7 @@ def _is_full_text(url):
     except Exception:
         return False
 
-def _best_oa_url(locations):
+def _best_oa_url(locations, pdf_only=False):
     """
     Given a list of Unpaywall oa_location dicts, pick the URL most likely to
     actually fetch as a PDF. Publisher copies (Elsevier, Wiley, Springer...)
@@ -606,6 +606,10 @@ def _best_oa_url(locations):
     without one the free picture was the whole reason it was called open.
     A DOAJ record is the directory's page about the article, not the article,
     so it comes last.
+
+    pdf_only (for a book): only a link to a PDF is a copy. The indexes call
+    paid books open on the strength of a landing page, a library catalogue's
+    record, or another book's DOI.
     """
     if not locations:
         return None
@@ -627,10 +631,10 @@ def _best_oa_url(locations):
 
     def score(loc):
         pdf = loc.get("url_for_pdf")
-        url = loc.get("url")
+        url = None if pdf_only else loc.get("url")
         if pdf and not _is_full_text(pdf): pdf = None
         if url and not _is_full_text(url): url = None
-        if not (pdf or url) and loc.get("license"):
+        if not (pdf or url) and loc.get("license") and not pdf_only:
             url = loc.get("url_for_landing_page")
         target = pdf or url
         if not target or not _is_full_text(target):
@@ -665,12 +669,12 @@ def _openalex_locations(work):
                                  == "repository" else "publisher"})
     return out
 
-def check_oa(doi):
+def check_oa(doi, book=False):
     """
     Find a free full-text URL for a DOI. Tries Unpaywall first (preferring an OA
     copy that will actually fetch — PMC/repository over publisher, which often
     403s); falls back to OpenAlex when Unpaywall can't answer. Both answers are
-    ranked by _best_oa_url. Returns URL or None.
+    ranked by _best_oa_url, for a book only its PDFs. Returns URL or None.
     """
     if not doi:
         return None
@@ -688,14 +692,14 @@ def check_oa(doi):
                 locs = data.get("oa_locations") or []
                 if not locs and data.get("best_oa_location"):
                     locs = [data["best_oa_location"]]
-                u = _best_oa_url(locs)
+                u = _best_oa_url(locs, pdf_only=book)
                 if u:
                     return u
     # ── OpenAlex fallback ──────────────────────────────────────────────────
     if not unpaywall_answered:
         data2, _ = fetch_json(f"https://api.openalex.org/works/doi:{urllib.parse.quote(doi)}")
         if data2:
-            return _best_oa_url(_openalex_locations(data2))
+            return _best_oa_url(_openalex_locations(data2), pdf_only=book)
     return None
 
 def _pmc_pdf_url(pmcid):
@@ -795,8 +799,9 @@ DOI_CACHE_FILE = CONFIG_DIR / "doi_cache.json"
 _DOI_CACHE_TTL = 3 * 24 * 3600
 _DOI_CACHE_MAX = 5000
 # The rules an entry was chosen by. An entry from older rules is looked up
-# again: before 2, a picture could be cached as the open copy (1.26).
-_DOI_CACHE_RULES = 2
+# again: before 2, a picture could be cached as the open copy (1.26); before
+# 3, a book's landing page, which is no copy of it (2.2).
+_DOI_CACHE_RULES = 3
 _DOI_CACHE_LOCK = threading.Lock()
 
 def _load_doi_cache():
@@ -862,7 +867,7 @@ def enrich_access(articles):
         return articles
 
     need_oa = [a for a in todo if a.get("access_kind") is None]
-    oa_f  = {_ENRICH_POOL.submit(check_oa, a["doi"]): a for a in need_oa}
+    oa_f  = {_ENRICH_POOL.submit(check_oa, a["doi"], bool(a.get("book"))): a for a in need_oa}
     # PubMed records already say "Retracted Publication" themselves, and a
     # Crossref call costs ~2 s, so Crossref is asked only about papers from
     # sources that carry no retraction data (Scopus, Web of Science).
@@ -2237,6 +2242,7 @@ OPENALEX = "https://api.openalex.org"
 _OPENALEX_FIELDS = ("id,doi,display_name,publication_year,authorships,primary_location,"
                     "abstract_inverted_index,cited_by_count,ids,type,is_retracted,locations")
 _OPENALEX_TYPES = {"review": ["Review"], "preprint": ["Preprint"]}
+_OPENALEX_BOOKS = {"book": "book", "book-chapter": "chapter"}
 
 def _openalex_get(path, params, missing=None, timeout=TIMEOUT):
     """One OpenAlex answer as JSON. Raises, saying why, when refused; a 404
@@ -2276,18 +2282,26 @@ def _openalex_article(w):
              for au in w.get("authorships") or []]
     names = [n for n in names if n]
     pmid = ((w.get("ids") or {}).get("pmid") or "").rstrip("/").rsplit("/", 1)[-1]
-    oa = _best_oa_url(_openalex_locations(w))
+    kind = _OPENALEX_BOOKS.get(w.get("type"))
+    oa = _best_oa_url(_openalex_locations(w), pdf_only=bool(kind))
+    title = _jats_text(w.get("display_name") or "") or "No title"
+    source = (w.get("primary_location") or {}).get("source") or {}
+    # OpenAlex names a chapter's e-book platform ("Springer eBooks"), not
+    # its book, and keeps no ISBNs.
+    book = {"kind": kind, "title": title if kind == "book" else "",
+            "publisher": source.get("host_organization_name") or "", "place": "",
+            "isbn": [], "editors": [], "bookshelf": None} if kind else None
     return _article(
-        title=_jats_text(w.get("display_name") or "") or "No title",
-        authors=_short_authors(names), author_list=names,
+        title=title, authors=_short_authors(names), author_list=names,
         year=str(w.get("publication_year") or "n.d."),
-        journal=((w.get("primary_location") or {}).get("source") or {}).get("display_name") or "",
+        journal=source.get("display_name") or "",
         doi=_clean_doi(w.get("doi")) or None, pmid=pmid if pmid.isdigit() else None,
         cited_by=w.get("cited_by_count") or None,
         abstract=_openalex_abstract(w.get("abstract_inverted_index")), source="OpenAlex",
         access_kind="open" if oa else None, access_link=oa,
         retraction="retracted" if w.get("is_retracted") else None,
-        pub_types=_OPENALEX_TYPES.get(w.get("type"), []))
+        pub_types=(["Book"] if kind else []) + _OPENALEX_TYPES.get(w.get("type"), []),
+        book=book)
 
 def _openalex_people(people):
     """A picked author or institution exactly, by OpenAlex's ids (an
@@ -2450,10 +2464,15 @@ def search_europepmc(query, max_r, y_from, y_to, strict=True, sort="relevance", 
 # built to match citations, so it ranks topics loosely; abstracts are missing
 # for many papers (PubMed fills those it has).
 CROSSREF = "https://api.crossref.org/works"
-_CROSSREF_TYPES = ("journal-article", "posted-content", "proceedings-article", "book-chapter")
+_CROSSREF_TYPES = ("journal-article", "posted-content", "proceedings-article", "book-chapter",
+                   "book", "monograph", "edited-book", "reference-book")
+# Crossref's names for a part of a book, and for a whole one.
+_CROSSREF_CHAPTERS = {"book-chapter", "book-part", "book-section", "reference-entry"}
+_CROSSREF_BOOKS = {"book", "monograph", "edited-book", "reference-book"}
 # "institution" is refused here (HTTP 400): a search may not select it.
 _CROSSREF_FIELDS = ("DOI,title,author,container-title,published-print,"
-                    "published-online,issued,created,abstract,type,is-referenced-by-count")
+                    "published-online,issued,created,abstract,type,is-referenced-by-count,"
+                    "ISBN,publisher,publisher-location,editor")
 
 def _crossref_headers():
     return {"User-Agent": "MedSearch/1.0" +
@@ -3221,12 +3240,34 @@ def _crossref_article(msg):
              for fam, given, name in people if fam or name][:3]
     journal = ((msg.get("container-title") or [""])[0]
                or ((msg.get("institution") or [{}])[0].get("name") or ""))
-    return _article(title=_jats_text((msg.get("title") or [""])[0]) or "No title",
+    title = _jats_text((msg.get("title") or [""])[0]) or "No title"
+    kind = ("chapter" if msg.get("type") in _CROSSREF_CHAPTERS
+            else "book" if msg.get("type") in _CROSSREF_BOOKS else None)
+    book = None
+    if kind:
+        # A chapter's containers are its series, if any, then its book; a
+        # whole book's, a series or a platform, so a book shows its
+        # publisher where a paper shows its journal.
+        if kind == "chapter":
+            journal = (msg.get("container-title") or [journal])[-1]
+        publisher = (msg.get("publisher") or "").strip()
+        book = {"kind": kind, "title": journal if kind == "chapter" else title,
+                "publisher": publisher, "place": (msg.get("publisher-location") or "").strip(),
+                "isbn": list(dict.fromkeys(filter(None, map(_isbn13, msg.get("ISBN") or [])))),
+                "editors": [f"{e['family'].strip()}, {e['given'].strip()}" if e.get("given")
+                            else e["family"].strip()
+                            for e in msg.get("editor") or [] if (e.get("family") or "").strip()],
+                "bookshelf": None}
+        if kind == "book":
+            journal = publisher
+    return _article(title=title,
                     authors="; ".join(short) + (" et al." if len(names) > 3 else ""),
                     author_list=names, year=_crossref_year(msg) or "n.d.",
                     journal=journal, doi=msg.get("DOI"), abstract=_jats_text(msg.get("abstract")),
                     cited_by=msg.get("is-referenced-by-count") or None, source="Crossref",
-                    pub_types=["Preprint"] if msg.get("type") == "posted-content" else [])
+                    pub_types=["Book"] if kind else
+                              ["Preprint"] if msg.get("type") == "posted-content" else [],
+                    book=book)
 
 def crossref_records(dois, report=None):
     """
