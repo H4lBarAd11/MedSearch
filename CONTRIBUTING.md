@@ -1,0 +1,1 @@
+MedSearch is a completely free and open source tool written under the spirit of the Open Science concept. Any contribution in that very spirit is welcome, while contributions with the goal of closing source or obstructing access to knowledge is strongly disincentivized and will be rejected.
