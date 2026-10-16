@@ -1465,6 +1465,11 @@ body {
                                font-size: 0.7rem; color: var(--text3); overflow-wrap: anywhere; }
 .proxy-row .proxy-del .ico { width: 12px; height: 12px; }
 .settings-field .resource-input { margin-top: 8px; }
+/* Options › Languages: the chips set, or "Any", then the menu to add one. */
+.language-field { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.language-list { display: contents; }
+.language-any { font-size: 0.8rem; color: var(--text3); }
+.language-field .language-add { flex: 1 1 140px; min-width: 0; }
 .proxy-add-btn, .update-check-btn { margin-top: 10px; font-size: 0.8rem; padding: 6px 12px; }
 /* Settings ▸ Updates: the running version, above the button that checks. */
 .settings-version { font-size: 0.88rem; color: var(--text); }

@@ -162,6 +162,9 @@ DEFAULTS = {
     # institution_proxies: list of {"label","url"}; active_proxy: index into it.
     "institution_proxies": [],
     "active_proxy":     0,
+    # The languages searches are narrowed to (two-letter codes, English first),
+    # set under Options; none means any language.
+    "languages": [],
     # Library resources: the ready-made ones ticked in Settings (ids from
     # LIBRARY_RESOURCES) and the user's own, {"name", "url"} with {q} in it.
     "library_resources": {"on": [], "own": []},
@@ -1473,7 +1476,10 @@ def _article(**fields):
          # A book or a chapter: {"kind": "book" | "chapter", "title" (the book's),
          # "publisher", "place", "isbn": [...], "editors": [...], "bookshelf"
          # (its NCBI Bookshelf id, or None)}. None for everything else.
-         "book": None}
+         "book": None,
+         # The languages it is written in, as two-letter codes, when its
+         # source says; [] when it doesn't.
+         "languages": []}
     a.update(fields)
     if a["doi"] and not a["scihub"]:
         a["scihub"] = scihub_links(a["doi"])
@@ -1582,9 +1588,70 @@ def people_filter(author=None, institution=None):
                                   "names": _institution_names(oid, name) if oid else [name]}
     return out or None
 
-def describe_search(query, people):
+# ── LANGUAGES ────────────────────────────────────────────────────────────────
+# The languages a search can be narrowed to, by their two-letter (ISO 639-1)
+# code, which OpenAlex and Google Books use: (name, the three letters MEDLINE
+# and library catalogues use (PubMed [la], Europe PMC LANG, Open Library),
+# and the other three-letter form some records carry).
+LANGUAGES = {
+    "en": ("English", "eng", "eng"), "it": ("Italian", "ita", "ita"),
+    "de": ("German", "ger", "deu"), "fr": ("French", "fre", "fra"),
+    "es": ("Spanish", "spa", "spa"), "pt": ("Portuguese", "por", "por"),
+    "nl": ("Dutch", "dut", "nld"), "sv": ("Swedish", "swe", "swe"),
+    "da": ("Danish", "dan", "dan"), "no": ("Norwegian", "nor", "nor"),
+    "fi": ("Finnish", "fin", "fin"), "pl": ("Polish", "pol", "pol"),
+    "cs": ("Czech", "cze", "ces"), "hu": ("Hungarian", "hun", "hun"),
+    "ro": ("Romanian", "rum", "ron"), "el": ("Greek", "gre", "ell"),
+    "ru": ("Russian", "rus", "rus"), "uk": ("Ukrainian", "ukr", "ukr"),
+    "tr": ("Turkish", "tur", "tur"), "ar": ("Arabic", "ara", "ara"),
+    "he": ("Hebrew", "heb", "heb"), "fa": ("Persian", "per", "fas"),
+    "zh": ("Chinese", "chi", "zho"), "ja": ("Japanese", "jpn", "jpn"),
+    "ko": ("Korean", "kor", "kor"),
+}
+_LANGUAGE_CODE = {alias: code for code, (name, b, t) in LANGUAGES.items()
+                  for alias in (code, b, t, name.lower())}
+
+def language_code(value):
+    """The two-letter code of a language however a record writes it ("en",
+    "eng", "English", "deu"), or None when it isn't one MedSearch knows."""
+    return _LANGUAGE_CODE.get(str(value or "").strip().lower())
+
+def language_filter(given):
+    """The languages a search is narrowed to, checked: known codes, each once,
+    English first when it is one of them. [] means any language."""
+    out = []
+    for c in given if isinstance(given, list) else []:
+        c = language_code(c)
+        if c and c not in out:
+            out.append(c)
+    return (["en"] if "en" in out else []) + [c for c in out if c != "en"]
+
+def _language_names(languages):
+    names = [LANGUAGES[c][0] for c in languages]
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+def by_language(arts, languages):
+    """The results in the languages asked for, English first and then in the
+    order asked; a result whose source doesn't say its language is kept,
+    after them. No languages asked for: the results as they are."""
+    if not languages:
+        return arts
+    rank = {c: i for i, c in enumerate(languages)}
+    kept = [a for a in arts if not a.get("languages") or any(c in rank for c in a["languages"])]
+    return sorted(kept, key=lambda a: min((rank[c] for c in a.get("languages") or [] if c in rank),
+                                          default=len(languages)))
+
+# The databases that are asked for the languages themselves; the others can't
+# be (Web of Science Starter has no language field, Crossref no language in a
+# search), so only what their records say narrows their results.
+_LANGUAGE_SOURCES = {"pubmed", "cochrane", "guidelines", "bookshelf", "europepmc", "openalex",
+                     "openlibrary", "googlebooks", "scopus"}
+
+def describe_search(query, people, languages=None):
     """The search in words, for the AI, the export and the history."""
     said = [f"{w}: {people[w]['name']}" for w in ("author", "institution") if (people or {}).get(w)]
+    if languages:
+        said.append(f"in {_language_names(languages)}")
     if not said:
         return query
     return f"{query} ({'; '.join(said)})" if query else "; ".join(said)
@@ -1647,7 +1714,8 @@ def _ncbi_key_param():
     return f"&api_key={CONFIG['pubmed_api_key']}" if CONFIG.get("pubmed_api_key") else ""
 
 def search_pubmed(query, max_r, y_from, y_to, strict=True, extra_filter=None,
-                  source_label="PubMed", sort="relevance", offset=0, people=None, books=False):
+                  source_label="PubMed", sort="relevance", offset=0, people=None, books=False,
+                  languages=None):
     """
     PubMed. `books` says which records: False (PubMed itself) the papers only,
     the books being NCBI Bookshelf's; True the books only (NCBI Bookshelf);
@@ -1658,7 +1726,8 @@ def search_pubmed(query, max_r, y_from, y_to, strict=True, extra_filter=None,
     dp   = (f"&mindate={y_from or 1900}/01/01&maxdate={y_to or 2099}/12/31&datetype=pdat"
             if y_from or y_to else "")
     term = build_pubmed_term(query, strict=strict)
-    for extra in [extra_filter, PUBMED_BOOKS if books else None, *_pubmed_people(people)]:
+    langs = _either([f"{LANGUAGES[c][1]}[la]" for c in languages]) if languages else None
+    for extra in [extra_filter, PUBMED_BOOKS if books else None, *_pubmed_people(people), langs]:
         if extra:
             term = f"({term}) AND {extra}" if term else extra
     if books is False and term:
@@ -1747,13 +1816,18 @@ def pubmed_records(ids, source_label="PubMed", y_from=None, y_to=None):
         a = _article(title=title, authors=authors, author_list=names, year=year,
                      journal=journal, doi=doi, pmid=pmid,
                      abstract=_pubmed_abstract(art_el), source=source_label,
-                     pub_types=_pub_type_badges(raw_types), retraction=retraction)
+                     pub_types=_pub_type_badges(raw_types), retraction=retraction,
+                     languages=_record_languages(l.text for l in art_el.findall("Language")))
         # A PMC id in the record means the full text is free in PubMed Central:
         # link its PDF directly, with no extra lookup.
         if pmcid:
             a["access_kind"], a["access_link"] = "open", _pmc_pdf_url(pmcid)
         results.append(a)
     return results
+
+def _record_languages(values):
+    """A record's languages as two-letter codes, each once, in its order."""
+    return list(dict.fromkeys(filter(None, map(language_code, values))))
 
 def _pubmed_authors(els):
     """A PubMed author list as (full names "Family, Given", the short form the
@@ -1829,7 +1903,8 @@ def _pubmed_book(art, pmid, source_label):
     a = _article(title=chapter or book_title or "No title", authors=authors, author_list=names,
                  year=year, journal=book_title if chapter else publisher, doi=doi, pmid=pmid,
                  abstract=_pubmed_abstract(doc), source=source_label,
-                 pub_types=["Book"] + _pub_type_badges(raw_types),
+                  pub_types=["Book"] + _pub_type_badges(raw_types),
+                 languages=_record_languages(l.text for l in doc.findall("Language")),
                  book={"kind": "chapter" if chapter else "book", "title": book_title,
                        "publisher": publisher,
                        "place": (book.findtext("Publisher/PublisherLocation") or "").strip(),
@@ -1915,7 +1990,7 @@ def fill_abstracts_from_pubmed(articles):
     return articles
 
 def search_cochrane(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0,
-                    people=None):
+                    people=None, languages=None):
     """
     Cochrane systematic reviews are indexed in PubMed under the journal
     'Cochrane Database of Systematic Reviews'. We search PubMed restricted to
@@ -1925,26 +2000,26 @@ def search_cochrane(query, max_r, y_from, y_to, strict=True, sort="relevance", o
     return search_pubmed(query, max_r, y_from, y_to, strict=strict,
                          extra_filter='"Cochrane Database Syst Rev"[ta]',
                          source_label="Cochrane", sort=sort, offset=offset, people=people,
-                         books=None)
+                         books=None, languages=languages)
 
 def search_guidelines(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0,
-                      people=None):
+                      people=None, languages=None):
     # Clinical practice guidelines: PubMed restricted to guideline publication
     # types. Captures national/society guidelines from many countries; NICE's
     # and WHO's are NCBI Bookshelf books, so books are asked for too.
     return search_pubmed(query, max_r, y_from, y_to, strict=strict,
                          extra_filter='(Guideline[ptyp] OR "Practice Guideline"[ptyp])',
                          source_label="Guidelines", sort=sort, offset=offset, people=people,
-                         books=None)
+                         books=None, languages=languages)
 
 def search_bookshelf(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0,
-                     people=None):
+                     people=None, languages=None):
     # NCBI Bookshelf's books and chapters (StatPearls, GeneReviews, NICE and
     # WHO guidelines, health technology assessments…), through PubMed, which
     # indexes them: the same search, years and filters as PubMed.
     return search_pubmed(query, max_r, y_from, y_to, strict=strict,
                          source_label="NCBI Bookshelf", sort=sort, offset=offset, people=people,
-                         books=True)
+                         books=True, languages=languages)
 
 def _arxiv_author(au):
     """arXiv keeps names as written ("Jane A. Doe"): the family name, and the
@@ -2050,7 +2125,7 @@ def search_clinicaltrials(query, max_r, y_from, y_to, sort="relevance", offset=0
             nct_id=nct, abstract=proto.get("descriptionModule", {}).get("briefSummary", ""),
             source="ClinicalTrials", access_kind="open",
             access_link=f"https://clinicaltrials.gov/study/{nct}",
-            pub_types=["Registered trial"]))
+            pub_types=["Registered trial"], languages=["en"]))
     return results, 0
 
 # NOTE: medRxiv/bioRxiv were removed — their official API has no keyword-search
@@ -2162,9 +2237,13 @@ def _scopus_people(people):
         out.append(_either([f'AFFIL("{n}")' for n in inst["names"]]))
     return out
 
-def search_scopus(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
+def search_scopus(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None,
+                  languages=None):
     if people:
         query = " AND ".join(([f"({query})"] if query.strip() else []) + _scopus_people(people))
+    if languages:
+        query = f"({query}) AND " + _either([f"LANGUAGE({LANGUAGES[c][0].lower()})"
+                                             for c in languages])
     dr = (f" AND PUBYEAR > {(y_from or 1900)-1} AND PUBYEAR < {(y_to or 2099)+1}"
           if y_from or y_to else "")
     entries, total = scopus_entries(query + dr, max_r, offset, sort)
@@ -2247,7 +2326,8 @@ def _strict_terms(query, field):
 # up by its DOI or id is free. The allowance renews at midnight UTC.
 OPENALEX = "https://api.openalex.org"
 _OPENALEX_FIELDS = ("id,doi,display_name,publication_year,authorships,primary_location,"
-                    "abstract_inverted_index,cited_by_count,ids,type,is_retracted,locations")
+                    "abstract_inverted_index,cited_by_count,ids,type,is_retracted,locations,"
+                    "language")
 _OPENALEX_TYPES = {"review": ["Review"], "preprint": ["Preprint"]}
 _OPENALEX_BOOKS = {"book": "book", "book-chapter": "chapter"}
 
@@ -2308,7 +2388,7 @@ def _openalex_article(w):
         access_kind="open" if oa else None, access_link=oa,
         retraction="retracted" if w.get("is_retracted") else None,
         pub_types=(["Book"] if kind else []) + _OPENALEX_TYPES.get(w.get("type"), []),
-        book=book)
+        book=book, languages=_record_languages([w.get("language")]))
 
 def _openalex_people(people):
     """A picked author or institution exactly, by OpenAlex's ids (an
@@ -2325,7 +2405,7 @@ def _openalex_people(people):
     return out
 
 def search_openalex(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0,
-                    people=None):
+                    people=None, languages=None):
     q = query.strip()
     filters = _openalex_people(people)
     params = {"per-page": max_r, "page": offset // max_r + 1 if max_r else 1,
@@ -2343,6 +2423,8 @@ def search_openalex(query, max_r, y_from, y_to, strict=True, sort="relevance", o
         filters.append(f"from_publication_date:{y_from}-01-01")
     if y_to:
         filters.append(f"to_publication_date:{y_to}-12-31")
+    if languages:
+        filters.append("language:" + "|".join(languages))
     if filters:
         params["filter"] = ",".join(filters)
     if sort == "date":
@@ -2435,7 +2517,7 @@ def _europepmc_article(r):
         year=str(r.get("pubYear") or "n.d."), journal=journal,
         doi=r.get("doi"), pmid=r.get("pmid"), cited_by=r.get("citedByCount") or None,
         abstract=_jats_text(r.get("abstractText") or ""), source="Europe PMC",
-        pub_types=_pub_type_badges(types),
+        pub_types=_pub_type_badges(types), languages=_record_languages([r.get("language")]),
         retraction="retracted" if any(t.lower() == "retracted publication" for t in types) else None)
     # An open-access paper in PubMed Central: its PDF, with no extra lookup.
     if r.get("pmcid") and r.get("isOpenAccess") == "Y":
@@ -2452,10 +2534,14 @@ def _europepmc_people(people):
     return out
 
 def search_europepmc(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0,
-                     people=None):
+                     people=None, languages=None):
     term = _europepmc_term(query, strict)
     if people:
         term = " AND ".join(([f"({term})"] if term else []) + _europepmc_people(people))
+    if languages:
+        # Most records carry MEDLINE's three letters ("ger"), some the other form ("deu").
+        codes = dict.fromkeys(x for c in languages for x in LANGUAGES[c][1:])
+        term = f"({term}) AND " + _either([f'LANG:"{x}"' for x in codes])
     if y_from or y_to:
         term = f"({term}) AND PUB_YEAR:[{y_from or 1000} TO {y_to or 3000}]"
     # Europe PMC pages by an opaque cursor, not by number, so "load more"
@@ -2725,7 +2811,9 @@ def _core_article(r):
         authors=_short_authors(names), author_list=names, year=year, journal=journal,
         doi=r.get("doi") or None, pmid=pmid if pmid.isdigit() else None,
         cited_by=r.get("citationCount") or None, abstract=(r.get("abstract") or "").strip(),
-        source="CORE", access_kind="open" if pdf else None, access_link=pdf)
+        source="CORE", access_kind="open" if pdf else None, access_link=pdf,
+        languages=_record_languages([(r.get("language") or {}).get("code")
+                                     if isinstance(r.get("language"), dict) else r.get("language")]))
 
 def search_core(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
     _cannot("CORE", people, institution=False)
@@ -2761,7 +2849,7 @@ def search_core(query, max_r, y_from, y_to, sort="relevance", offset=0, people=N
 # account. Books lent only to readers with a print disability get no Borrow.
 OPENLIBRARY = "https://openlibrary.org"
 _OPENLIBRARY_FIELDS = ("key,title,subtitle,author_name,first_publish_year,isbn,publisher,"
-                       "ebook_access,ia,lending_edition_s,lending_identifier_s")
+                       "ebook_access,ia,lending_edition_s,lending_identifier_s,language")
 
 def _openlibrary_headers():
     # Open Library asks an app to name itself and give a contact.
@@ -2797,7 +2885,7 @@ def _openlibrary_article(d):
     a = _article(title=title, authors=authors, author_list=names,
                  year=str(d["first_publish_year"]) if d.get("first_publish_year") else "n.d.",
                  journal=publishers[0] if len(publishers) == 1 else "", source="Open Library",
-                 pub_types=["Book"],
+                 pub_types=["Book"], languages=_record_languages(d.get("language") or []),
                  book={"kind": "book", "title": title, "publisher": publishers[0] if len(publishers) == 1 else "",
                        "place": "", "isbn": isbns if len(isbns) == 1 else [], "editors": [],
                        "bookshelf": None, "openlibrary": work,
@@ -2809,13 +2897,15 @@ def _openlibrary_article(d):
         a["access_kind"], a["access_link"] = "none", None
     return a
 
-def search_openlibrary(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
+def search_openlibrary(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None,
+                       languages=None):
     _cannot("Open Library", people, institution=False)
     au = (people or {}).get("author")
     q = query.strip()
-    if y_from or y_to:
-        years = f"first_publish_year:[{y_from or '*'} TO {y_to or '*'}]"
-        q = f"({q}) AND {years}" if q else years
+    # A work is in a language when one of its editions is.
+    for part in ([f"first_publish_year:[{y_from or '*'} TO {y_to or '*'}]"] if y_from or y_to else []) + \
+                ([f"language:({' OR '.join(LANGUAGES[c][1] for c in languages)})"] if languages else []):
+        q = f"({q}) AND {part}" if q else part
     params = {"limit": max_r, "offset": offset, "fields": _OPENLIBRARY_FIELDS}
     if q:
         params["q"] = q
@@ -2879,6 +2969,7 @@ def _googlebooks_article(item):
     a = _article(title=title, authors=authors, author_list=names, year=year or "n.d.",
                  journal=publisher, abstract=_jats_text(v.get("description") or ""),
                  source="Google Books", pub_types=["Book"],
+                 languages=_record_languages([v.get("language")]),
                  book={"kind": "book", "title": title, "publisher": publisher, "place": "",
                        "isbn": isbns, "editors": [], "bookshelf": None,
                        "google": v.get("infoLink") or v.get("canonicalVolumeLink") or None,
@@ -2891,7 +2982,8 @@ def _googlebooks_article(item):
         a["access_kind"], a["access_link"] = "none", None
     return a
 
-def search_googlebooks(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
+def search_googlebooks(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None,
+                       languages=None):
     _cannot("Google Books", people, institution=False)
     au = (people or {}).get("author")
     # Google matches inauthor: on the words of a name; each book is checked
@@ -2901,6 +2993,9 @@ def search_googlebooks(query, max_r, y_from, y_to, sort="relevance", offset=0, p
     params = {"q": q, "maxResults": min(max_r, 40), "startIndex": offset, "printType": "books"}
     if sort == "date":
         params["orderBy"] = "newest"
+    # Google is asked for one language at most; with more, each book is checked.
+    if languages and len(languages) == 1:
+        params["langRestrict"] = languages[0]
     data = _googlebooks_get(params)
     arts = [_googlebooks_article(i) for i in data.get("items") or [] if isinstance(i, dict)]
     arts = [a for a in arts if within_range(a["year"], y_from, y_to) and (not au or _wrote(a, au))]
@@ -3759,6 +3854,16 @@ def _start_sources():
     ticked = [k for k in saved if k in known] if isinstance(saved, list) else []
     return ticked or ["pubmed"]
 
+@app.route("/languages", methods=["POST"])
+def remember_languages():
+    """The languages set under Options, kept for the next start."""
+    given = _json_body().get("languages")
+    if not isinstance(given, list):
+        return jsonify({"ok": False, "message": "No list of languages was sent."}), 400
+    CONFIG["languages"] = language_filter(given)
+    save_config(CONFIG)
+    return jsonify({"ok": True, "languages": CONFIG["languages"]})
+
 @app.route("/sources", methods=["POST"])
 def remember_sources():
     """The user's own ticks in the Databases panel, kept for the next start."""
@@ -3793,6 +3898,8 @@ def index():
                            has_googlebooks=bool(_key("google_books_api_key")),
                            institution_proxies=CONFIG.get("institution_proxies", []),
                            library_resources=library_resources(),
+                           languages=language_filter(CONFIG.get("languages")),
+                           language_names=[[c, n] for c, (n, _b, _t) in LANGUAGES.items()],
                            active_resources=active_resources(),
                            library_resource_presets=LIBRARY_RESOURCES,
                            active_proxy=CONFIG.get("active_proxy", 0),
@@ -4264,10 +4371,13 @@ def search_stream():
     # An author or an institution narrows the search; either alone, with the
     # box empty, lists their papers.
     people  = people_filter(data.get("author"), data.get("institution"))
+    # The languages asked for, English first; none means any language.
+    languages = language_filter(data.get("languages"))
     # "Find more" must ask for the same search: compared as the window asked
     # for it, not with the names OpenAlex adds, which may come and go.
     search_key = json.dumps([query, _saved_person(data.get("author"), "author"),
-                             _saved_person(data.get("institution"), "institution")], sort_keys=True)
+                             _saved_person(data.get("institution"), "institution"), languages],
+                            sort_keys=True)
 
     def one_event(obj):
         return Response(_sse(obj), mimetype="text/event-stream")
@@ -4292,7 +4402,8 @@ def search_stream():
     if not load_more:
         SESSION["articles"] = []
         # What the AI and the export are told was searched, filters included.
-        SESSION["query"]    = describe_search(query, None if dois else people)
+        SESSION["query"]    = describe_search(query, None if dois else people,
+                                              None if dois else languages)
         SESSION["search_key"] = search_key
         SESSION["last_synthesis"] = ""
         SESSION["offsets"]  = {}
@@ -4308,6 +4419,7 @@ def search_stream():
         starts[key] = SESSION["offsets"].get(key, 0) if load_more else 0
         SESSION["offsets"][key] = starts[key] + max_r
     registry = {}          # what Crossref said about the DOIs no source returned
+    language_notes = {}    # key → why its results are not narrowed to the languages
 
     def run_source(key, fn, takes_strict):
         if dois:
@@ -4317,7 +4429,15 @@ def search_stream():
             kwargs["strict"] = strict
         if people:
             kwargs["people"] = people
-        return fn(query, max_r, y_from, y_to, **kwargs)
+        if languages and key in _LANGUAGE_SOURCES:
+            kwargs["languages"] = languages
+        arts, total = fn(query, max_r, y_from, y_to, **kwargs)
+        arts = by_language(arts, languages)
+        if languages and key not in _LANGUAGE_SOURCES and any(not a.get("languages") for a in arts):
+            label = next(l for k, l, *_ in SOURCES if k == key)
+            language_notes[key] = (f"{label} can't be searched by language, so its results are not "
+                                   f"narrowed to {_language_names(languages)}.")
+        return arts, total
 
     def generate():
         seen = set()
@@ -4427,7 +4547,7 @@ def search_stream():
                     elif tag[0] == "src":
                         try:
                             res, total = fut.result()
-                            finished[tag[1]] = (res, total, None, None)
+                            finished[tag[1]] = (res, total, None, language_notes.get(tag[1]))
                         except SourceCannotAnswer as e:
                             finished[tag[1]] = ([], 0, None, str(e))
                         except Exception as e:

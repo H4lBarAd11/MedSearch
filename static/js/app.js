@@ -527,6 +527,53 @@ function renderPeopleChips() {
     </span>`).join('');
 }
 
+// ── Languages ─────────────────────────────────────────────────────────────
+// The languages searches are narrowed to, two-letter codes with English first,
+// kept for the next start. None means any language.
+let languages = MS.languages || [];
+const LANGUAGE_NAMES = Object.fromEntries(MS.languageNames || []);
+
+// The list after adding one: the first one added brings English with it, and
+// English always comes first.
+function languagesAfterAdding(list, code) {
+  if (!code || list.includes(code)) return list;
+  const out = list.length ? [...list, code] : ['en', code];
+  return [...out.filter(c => c === 'en'), ...out.filter(c => c !== 'en')].filter((c, i, a) => a.indexOf(c) === i);
+}
+
+function languageLabel(list) {
+  return list.map(c => LANGUAGE_NAMES[c] || c).join(', ');
+}
+
+function setLanguages(list) {
+  languages = list;
+  renderLanguages();
+  fetch('/languages', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                       body: JSON.stringify({languages})}).catch(() => {});
+}
+
+function addLanguage(code) { setLanguages(languagesAfterAdding(languages, code)); }
+function removeLanguage(code) { setLanguages(languages.filter(c => c !== code)); }
+
+// Options' chips and menu, and the chip beside the search bar while any is set.
+function renderLanguages() {
+  const list = document.getElementById('languageList');
+  const add = document.getElementById('languageAdd');
+  const chip = document.getElementById('languageChip');
+  if (list) list.innerHTML = languages.length ? languages.map(c => `
+    <span class="sources-chip people-chip"><span class="people-chip-name"><span>${escHtml(LANGUAGE_NAMES[c] || c)}</span></span>
+      <button type="button" class="people-chip-x" onclick="removeLanguage('${escAttr(c)}')" aria-label="Stop searching in ${escHtml(LANGUAGE_NAMES[c] || c)}">${ico('close')}</button>
+    </span>`).join('') : '<span class="language-any">Any</span>';
+  if (add) add.innerHTML = '<option value="">Add a language…</option>' +
+    Object.keys(LANGUAGE_NAMES).filter(c => !languages.includes(c))
+      .map(c => `<option value="${escHtml(c)}">${escHtml(LANGUAGE_NAMES[c])}</option>`).join('');
+  if (chip) chip.innerHTML = !languages.length ? '' : `
+    <span class="sources-chip people-chip" title="Searching in ${escHtml(languageLabel(languages))} only">
+      <button type="button" class="people-chip-name" onclick="openOptionsPanel()"><span>${escHtml(languageLabel(languages))}</span></button>
+      <button type="button" class="people-chip-x" onclick="setLanguages([])" aria-label="Search in any language">${ico('close')}</button>
+    </span>`;
+}
+
 function openOptionsPanel() {
   const panel = document.getElementById('panelOptions');
   if (panel.hidden) togglePanel('panelOptions', document.getElementById('dockOptions'));
@@ -903,6 +950,7 @@ function updateSourcesSummary() {
 new MutationObserver(updateSourcesSummary)
   .observe(document.getElementById('dbList'), {subtree: true, attributes: true, attributeFilter: ['class']});
 updateSourcesSummary();
+renderLanguages();
 
 // ── API key prompt for premium databases ────────────────────────────────────
 const DB_KEY_INFO = {
@@ -1079,6 +1127,7 @@ function runSearch(isLoadMore) {
     sort:        sortMode,
     author:      who.author,
     institution: who.institution,
+    languages:   [...languages],
     // The server keeps each source's own position, so "load more" asks every
     // source for its next batch rather than skipping by the combined count.
     load_more:   isLoadMore,
@@ -1088,7 +1137,8 @@ function runSearch(isLoadMore) {
     const prev = window._lastFullParams || {};
     Object.assign(lastSearchParams, {year_from: prev.year_from, year_to: prev.year_to,
                                      strict: prev.strict, sort: prev.sort,
-                                     author: prev.author, institution: prev.institution});
+                                     author: prev.author, institution: prev.institution,
+                                     languages: prev.languages});
   } else {
     window._lastFullParams = Object.assign({}, lastSearchParams);
   }
@@ -1473,6 +1523,9 @@ function finalizeSourceGroup(source, count, errorText, note) {
   if (spin) spin.outerHTML = `<span class="source-count">${count}</span>`;
   if (count === 0 && body) {
     body.innerHTML = `<div class="source-empty">${escHtml(note || 'No results from this source.')}</div>`;
+  } else if (note && body) {
+    // Said above the results it is about (a database that can't be asked for the languages).
+    body.insertAdjacentHTML('afterbegin', `<div class="source-empty source-note">${escHtml(note)}</div>`);
   }
 }
 

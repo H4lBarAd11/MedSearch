@@ -19,6 +19,8 @@
     autoSource:         {{ auto_source | tojson }},
     institutionProxies: {{ institution_proxies | tojson }},
     libraryResources:   {{ library_resources | tojson }},
+    languages:          {{ languages | tojson }},
+    languageNames:      {{ language_names | tojson }},
     resourcePresets:    {{ library_resource_presets | tojson }},
     activeProxy:        {{ active_proxy | tojson }},
     hasScopus:          {{ 'true' if has_scopus else 'false' }},
@@ -113,6 +115,7 @@
   </div>
   <!-- The author and institution the search is narrowed to (Options), one chip each. -->
   <div class="people-chips" id="peopleChips"></div>
+  <div class="people-chips" id="languageChip"></div>
   <button class="sources-chip" type="button" id="dockSources" aria-haspopup="dialog" aria-expanded="false"
           onclick="togglePanel('panelSources', this)" title="Choose which databases to search">
     <svg class="ico" aria-hidden="true"><use href="#i-sources"/></svg>
@@ -274,6 +277,11 @@
              role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="institutionList" aria-label="Institution">
       <div class="people-list" id="institutionList" role="listbox" aria-label="Institutions" hidden></div>
     </div>
+    <span class="filter-label">Languages</span>
+    <div class="language-field">
+      <span class="language-list" id="languageList"></span>
+      <select class="filter-input language-add" id="languageAdd" onchange="addLanguage(this.value)" aria-label="Add a language"></select>
+    </div>
     <span class="filter-label">Results per source</span>
     <div><input class="max-results-input" type="number" id="maxResults" value="10" min="1" max="50" aria-label="Results per source"></div>
     <span class="filter-label">Order</span>
@@ -305,9 +313,13 @@
        differently. A name you don't pick is searched as typed. Leave the search box empty to list
        everything by that author or institution. Databases that keep no authors or no
        institutions say so and are left out.</p>
+    <p><b>Languages:</b> add one and each database is asked for English and that language only,
+       English first. Those that can't be asked (Web of Science, Crossref, CORE, arXiv, IEEE Xplore,
+       Semantic Scholar) say so, and leave out only the papers they say are in another language.
+       Remove them all to search in any language again.</p>
     <p><b>DOI:</b> paste one or more DOIs, doi.org links or links to the articles, and each ticked
-       database looks those papers up. Years, Strict, author and institution don't apply; a paper
-       none of them has is shown from Crossref.</p>
+       database looks those papers up. Years, Strict, author, institution and languages don't apply;
+       a paper none of them has is shown from Crossref.</p>
   </details>
 </div>
 
