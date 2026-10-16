@@ -52,7 +52,8 @@ test("Book is offered in the type filter, last, only when books are listed", () 
 // ── Open Library ────────────────────────────────────────────────────────────
 
 const { borrowButton, libraryButtons, worldcatUrl } =
-  load(["escAttr", "ico", "borrowButton", "worldcatUrl", "libraryButtons"]);
+  load(["escAttr", "escHtml", "ico", "borrowButton", "worldcatUrl", "libraryOpenUrl", "libraryButtons"]);
+globalThis.activeLibrary = () => null;   // No library, unless a test picks one
 const WORK = "https://openlibrary.org/works/OL1W";
 
 test("a free Open Library book is read in a MedSearch window", () => {
@@ -99,10 +100,11 @@ test("a book has Find in a library and its Open Library page; a Bookshelf book a
 // ── A book's row, as the results list draws it ──────────────────────────────
 
 const { makeCard } = load(["escHtml", "escAttr", "ico", "freeCopyButton", "borrowButton",
-                           "worldcatUrl", "libraryButtons", "makeCard"]);
+                           "worldcatUrl", "libraryOpenUrl", "libraryButtons", "makeCard"]);
 
-function rowButtons(a) {
+function rowButtons(a, library = null) {
   globalThis.document = {createElement: () => ({classList: {add() {}}, innerHTML: ""})};
+  globalThis.activeLibrary = () => library;
   globalThis.currentProxyUrl = () => "";
   globalThis.proxify = (u) => u;
   const html = makeCard({_idx: 0, pub_types: ["Book"], scihub: [], ...a}).innerHTML;
@@ -174,4 +176,121 @@ test("a Google book's row: Preview, then Find in a library by its ISBN", () => {
                                       google: "https://books.google.example/info",
                                       preview: "https://books.google.example/preview"}}),
                    ["Preview", "Find in a library", "Explain", "Zotero"]);
+});
+
+// ── The user's own library: Get it at … ────────────────────────────────────
+
+const { libraryOpenUrl, openUrlToSave, buildInstitutions } =
+  load(["libraryOpenUrl", "openUrlToSave", "buildInstitutions"]);
+const SRC = readFileSync(new URL("../../static/js/app.js", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+globalThis.PREDEFINED_INSTITUTIONS =
+  new Function(`return ${SRC.match(/const PREDEFINED_INSTITUTIONS = (\[[\s\S]*?\n\]);/)[1]}`)();
+const UNITN_CATALOGUE = "https://strutture-provincia.primo.exlibrisgroup.com/discovery/openurl" +
+                        "?institution=39SBT_INST&vid=39SBT_INST:39SBT_UNI_TN";
+const LIB = {label: "Example Uni", url: "https://ezp.example.edu", openurl: "https://find.example.edu/openurl?vid=X"};
+
+/** The OpenURL's fields, in order, as the library's catalogue reads them. */
+function asked(url) {
+  const u = new URL(url);
+  return {base: u.origin + u.pathname, fields: [...u.searchParams]};
+}
+
+test("a whole book is asked by its ISBN, title, first author, year and publisher", () => {
+  const {base, fields} = asked(libraryOpenUrl(
+    {title: "Example Handbook: Second Edition", author_list: ["Doe, Jane", "Roe, R"], year: "2016",
+     doi: "10.1000/xyz123", book: {kind: "book", isbn: ["9780306406157", "0306406152"], publisher: "Example & Sons"}}, LIB));
+  assert.equal(base, "https://find.example.edu/openurl");
+  assert.deepEqual(fields, [
+    ["vid", "X"], ["url_ver", "Z39.88-2004"], ["ctx_ver", "Z39.88-2004"],
+    ["rft_val_fmt", "info:ofi/fmt:kev:mtx:book"], ["rft.genre", "book"],
+    ["rft.btitle", "Example Handbook: Second Edition"], ["rft.isbn", "9780306406157"],
+    ["rft.aulast", "Doe"], ["rft.date", "2016"], ["rft.pub", "Example & Sons"],
+    ["rft_id", "info:doi/10.1000/xyz123"]]);
+});
+
+test("a chapter is asked as a chapter of its book; a year that isn't one is left out", () => {
+  const {fields} = asked(libraryOpenUrl(
+    {title: "Awake mapping", author_list: [], year: "n.d.",
+     book: {kind: "chapter", title: "Example Atlas", isbn: []}}, LIB));
+  assert.deepEqual(fields.slice(4), [["rft.genre", "bookitem"], ["rft.atitle", "Awake mapping"],
+                                     ["rft.btitle", "Example Atlas"]]);
+});
+
+test("no address, or nothing to find the book by: no link", () => {
+  const book = {title: "Example Handbook", book: {kind: "book", isbn: []}};
+  assert.equal(libraryOpenUrl(book, {...LIB, openurl: ""}), "");
+  assert.equal(libraryOpenUrl(book, {...LIB, openurl: undefined}), "");
+  assert.equal(libraryOpenUrl(book, null), "");
+  assert.equal(libraryOpenUrl({title: "Awake mapping", book: {kind: "chapter", title: "", isbn: []}}, LIB), "");
+  assert.equal(libraryOpenUrl({title: " ", book: {kind: "book", isbn: []}}, LIB), "");
+  assert.notEqual(libraryOpenUrl({title: "Awake mapping", book: {kind: "chapter", isbn: ["9780306406157"]}}, LIB), "");
+});
+
+test("the fields join the address however it ends", () => {
+  const book = {title: "T", book: {kind: "book"}};
+  assert.ok(libraryOpenUrl(book, {openurl: "https://r.example.edu/openurl"}).startsWith("https://r.example.edu/openurl?url_ver="));
+  assert.ok(libraryOpenUrl(book, {openurl: "https://r.example.edu/sfx?"}).startsWith("https://r.example.edu/sfx?url_ver="));
+  assert.ok(libraryOpenUrl(book, {openurl: "https://r.example.edu/o?a=1&"}).startsWith("https://r.example.edu/o?a=1&url_ver="));
+  assert.ok(libraryOpenUrl(book, {openurl: " https://r.example.edu/o?a=1 "}).startsWith("https://r.example.edu/o?a=1&url_ver="));
+});
+
+test("Get it at the library comes first, opens in a MedSearch window, and shows its name safely", () => {
+  globalThis.activeLibrary = () => ({...LIB, label: "Uni <Example>"});
+  const html = libraryButtons({title: "Example Handbook", author_list: [], book: {kind: "book", isbn: []}});
+  globalThis.activeLibrary = () => null;
+  assert.deepEqual([...html.matchAll(/<\/svg> ([^<]+)<\/button>/g)].map(m => m[1]),
+                   ["Get it at Uni &lt;Example&gt;", "Find in a library"]);
+  assert.ok(html.includes("openInAppBrowser('https://find.example.edu/openurl?vid=X&url_ver=Z39.88-2004&ctx_ver="));
+  assert.ok(html.includes("rft.btitle=Example%20Handbook', 'Example Handbook')"));
+});
+
+test("a book's row with the library picked: Get it at, then WorldCat; a paper's row has neither", () => {
+  const unitn = {label: "UniTN", url: "https://ezp.biblio.unitn.it", openurl: UNITN_CATALOGUE};
+  assert.deepEqual(rowButtons({title: "Example Handbook", access_kind: "none", access_link: null,
+                               book: {kind: "book", isbn: ["9780306406157"]}}, unitn),
+                   ["Get it at UniTN", "Find in a library", "Explain", "Zotero"]);
+  assert.deepEqual(rowButtons({title: "Example Handbook", access_kind: "none", access_link: null,
+                               book: {kind: "book", isbn: ["9780306406157"]}}, {...unitn, openurl: ""}),
+                   ["Find in a library", "Explain", "Zotero"]);
+  assert.deepEqual(rowButtons({title: "A paper", doi: "10.1/x", pmid: "1", pub_types: [], book: null,
+                               access_kind: "none", access_link: null, scihub: []}, unitn),
+                   ["PubMed", "Citations", "Explain", "Zotero"]);
+});
+
+test("UniTN's catalogue is built in; the others have none until set", () => {
+  globalThis.savedProxies = [];
+  const libs = buildInstitutions();
+  assert.deepEqual(libs.map(l => [l.label, l.openurl]),
+                   [["UniTN", UNITN_CATALOGUE], ["ASUIT", ""], ["FBK", ""]]);
+});
+
+test("a built-in catalogue is saved only when changed, so emptying it hides the button", () => {
+  globalThis.savedProxies = [{id: "unitn", label: "UniTN", url: "https://ezp.biblio.unitn.it", openurl: ""},
+                             {label: "Mine", url: "https://ezp.example.edu", openurl: LIB.openurl}];
+  const [unitn, , , mine] = buildInstitutions();
+  assert.equal(unitn.openurl, "");
+  assert.equal(mine.openurl, LIB.openurl);
+  assert.deepEqual(openUrlToSave({id: "unitn", openurl: UNITN_CATALOGUE}), {});
+  assert.deepEqual(openUrlToSave({id: "unitn", openurl: ""}), {openurl: ""});
+  assert.deepEqual(openUrlToSave({id: "unitn", openurl: " https://x.example.edu/o "}), {openurl: "https://x.example.edu/o"});
+  assert.deepEqual(openUrlToSave({id: null, openurl: ""}), {});
+  assert.deepEqual(openUrlToSave({id: null, openurl: LIB.openurl}), {openurl: LIB.openurl});
+});
+
+test("the library editor's Save keeps the catalogue address, for a library edited or added", () => {
+  const { saveProxyEditor } = load(["saveProxyEditor"]);
+  const fields = {proxyEditorUrl: {value: " https://ezp.example.edu "},
+                  proxyEditorOpenUrl: {value: ` ${LIB.openurl} `}, proxyEditorLabel: {value: "Mine"}};
+  globalThis.document = {getElementById: (id) => fields[id]};
+  for (const f of ["closeProxyEditor", "renderProxyRows", "renderProxyPicker"]) globalThis[f] = () => {};
+  globalThis.activeProxy = 0;
+  globalThis.institutionProxies = [{id: "unitn", label: "UniTN", url: "", openurl: UNITN_CATALOGUE, predefined: true}];
+  globalThis.editingProxyIndex = 0;
+  saveProxyEditor();
+  assert.equal(institutionProxies[0].openurl, LIB.openurl);
+  globalThis.editingProxyIndex = null;
+  fields.proxyEditorOpenUrl.value = "";
+  saveProxyEditor();
+  assert.deepEqual(institutionProxies[1], {id: null, label: "Mine", url: "https://ezp.example.edu",
+                                           openurl: "", predefined: false});
 });

@@ -678,6 +678,11 @@
       <label>Proxy address</label>
       <input type="text" id="proxyEditorUrl" placeholder="https://ezp.biblio.example.edu">
     </div>
+    <div class="settings-field">
+      <label>Catalogue address for books (OpenURL), optional</label>
+      <input type="text" id="proxyEditorOpenUrl" placeholder="https://example.primo.exlibrisgroup.com/discovery/openurl?institution=…&amp;vid=…">
+      <div class="settings-hint">With it, books and chapters get a <strong>Get it at</strong> button: your library's own page for the book, which says whether it has the book or the e-book and lets you request it or ask for an interlibrary loan. Libraries call it their OpenURL or link resolver address; ask yours if unsure. Left empty, there is no button.</div>
+    </div>
     <div class="proxy-editor-actions">
       <button class="btn-secondary" onclick="closeProxyEditor()">Close</button>
       <button class="btn-primary" onclick="saveProxyEditor()">Save</button>

@@ -159,7 +159,8 @@ DEFAULTS = {
     "ai_enabled":        True,
     # Optional institutional proxy (EZProxy / OpenAthens). Paywalled-but-
     # subscribed papers can be opened through the user's library login.
-    # institution_proxies: list of {"label","url"}; active_proxy: index into it.
+    # institution_proxies: list of {"label","url"} (+ "openurl", the catalogue
+    # address for books); active_proxy: index into it.
     "institution_proxies": [],
     "active_proxy":     0,
     # The languages searches are narrowed to (two-letter codes, English first),
@@ -5454,17 +5455,50 @@ def _clean_library_resources(given):
         raise ValueError(f"Keep at most {_MAX_OWN_RESOURCES} library resources of your own.")
     return {"on": on, "own": own}
 
+def _clean_libraries(given):
+    """The libraries Settings sends, as saved: {label, url, id?, openurl?,
+    remember_signin?} with a proxy address each. ValueError for a catalogue
+    address (OpenURL) that is not a web address, before anything is saved."""
+    cleaned = []
+    for p in given:
+        if not isinstance(p, dict):
+            continue
+        url = (p.get("url") or "").strip()
+        label = (p.get("label") or "").strip() or "Institution"
+        if not url:
+            continue
+        entry = {"label": label, "url": url}
+        # Preserve the stable id for predefined institutions so the
+        # URL rehydrates into the right slot (UniTN/ASUIT/FBK) on load.
+        if p.get("id"):
+            entry["id"] = str(p["id"])
+        # The catalogue address for books. Empty is kept too: it hides a
+        # predefined library's built-in one.
+        if isinstance(p.get("openurl"), str):
+            openurl = p["openurl"].strip()
+            if openurl and (not re.match(r"https?://[^\s/]+\.[^\s]+$", openurl) or len(openurl) > 1000):
+                raise ValueError(f"{label}: the catalogue address for books must be a web "
+                                 "address, beginning https://, with no spaces.")
+            entry["openurl"] = openurl
+        # "Remember sign-in": only an explicit yes, never a default.
+        if p.get("remember_signin") is True:
+            entry["remember_signin"] = True
+        cleaned.append(entry)
+    return cleaned
+
 @app.route("/settings", methods=["GET","POST"])
 def settings():
     if request.method == "POST":
         data = _json_body()
         # Checked before anything is saved: a refused one saves nothing.
-        resources = None
-        if "library_resources" in data:
-            try:
+        resources = libraries = None
+        try:
+            if "library_resources" in data:
                 resources = _clean_library_resources(data["library_resources"])
-            except ValueError as e:
-                return jsonify({"ok": False, "message": str(e)}), 400
+            if isinstance(data.get("institution_proxies"), list):
+                libraries = _clean_libraries(data["institution_proxies"])
+        except ValueError as e:
+            return jsonify({"ok": False, "message": str(e)}), 400
         secret_fields = SECRET_KEYS + ("unpaywall_email",)
         # A blank field means "keep what's saved" (the field shows a masked
         # placeholder), so removing a key is an explicit request.
@@ -5474,26 +5508,10 @@ def settings():
         for k in secret_fields:
             if isinstance(data.get(k), str) and data[k].strip():
                 CONFIG[k] = data[k].strip()
-        # Institutional proxies: list of {label, url}; active index.
+        # Institutional proxies: list of {label, url, ...}; active index.
         libraries_before = list(CONFIG.get("institution_proxies") or [])
-        if "institution_proxies" in data and isinstance(data["institution_proxies"], list):
-            cleaned = []
-            for p in data["institution_proxies"]:
-                if not isinstance(p, dict):
-                    continue
-                url = (p.get("url") or "").strip()
-                label = (p.get("label") or "").strip() or "Institution"
-                if url:
-                    entry = {"label": label, "url": url}
-                    # Preserve the stable id for predefined institutions so the
-                    # URL rehydrates into the right slot (UniTN/ASUIT/FBK) on load.
-                    if p.get("id"):
-                        entry["id"] = str(p["id"])
-                    # "Remember sign-in": only an explicit yes, never a default.
-                    if p.get("remember_signin") is True:
-                        entry["remember_signin"] = True
-                    cleaned.append(entry)
-            CONFIG["institution_proxies"] = cleaned
+        if libraries is not None:
+            CONFIG["institution_proxies"] = libraries
         if resources is not None:
             CONFIG["library_resources"] = resources
         if "ai_monthly_cap" in data:

@@ -72,8 +72,8 @@ Crossref return books and chapters too. Each is tagged *Book*, with the ways to 
 has: *Read on Bookshelf*, *Read free* for a book in the public domain, *Borrow* for one Open
 Library lends (for an hour or two weeks, with a free Internet Archive account), *Preview*
 for the pages a publisher allows on Google Books, *DOI (via library)* for one your library
-may hold, and *Find in a library*, which looks it up in WorldCat, the shared catalogue of
-libraries worldwide. A book is called free only when there is a copy of it to read, never
+may hold, *Get it at* your library, which opens your library's own page for it, and *Find
+in a library*, which looks it up in WorldCat, the shared catalogue of libraries worldwide. A book is called free only when there is a copy of it to read, never
 for a web page about it. *Book* is also a choice in the study-type filter.
 
 **What a result tells you.** Study design (meta-analysis, systematic review, RCT, …),
@@ -214,6 +214,12 @@ off-campus and copy what appears in front of the publisher's address, for exampl
 `ezproxy.library.example.edu`. Both the host-rewriting kind and a `…?url=` login prefix
 work. Several libraries can be saved; the active one is chosen under **Options**.
 
+**Books at your library.** A library can also have a catalogue address for books, its
+OpenURL (or link resolver) address; UniTN's is built in. Books and chapters then get a
+*Get it at* button with the library's name, which opens the library's own page for the book
+in a MedSearch window: whether it has the book or the e-book, and a request or an
+interlibrary loan when it hasn't. Without the address there is no button.
+
 **Your library's platforms.** Some of what a library subscribes to can't be searched by
 another program: ClinicalKey, AccessMedicine, UpToDate and the like. In **Settings → Library
 resources**, tick the ones you have, or add another with its name and the address of one of
@@ -254,7 +260,8 @@ own API key in its own Anthropic console workspace and set the spend limit there
 Everything runs on your machine. Searches, keys, history and saved searches stay in
 `~/.medsearch/` (on Windows, `.medsearch` in your user folder). The only traffic out is to
 the literature services you search (including OpenAlex, for the suggestions while you type
-an author or institution, and WorldCat when you look for a book in a library) and, with AI
+an author or institution, WorldCat when you look for a book in a library, and your
+library's catalogue when you ask it for a book) and, with AI
 on, to the Anthropic API. The email address set for Unpaywall goes to Unpaywall, Crossref,
 NCBI and Open Library, as the contact they ask apps for, and nowhere else.
 

@@ -795,3 +795,47 @@ def test_the_page_arrives_with_the_search_buttons_drawn_as_the_page_draws_them(c
     # The same button as the page draws after a save.
     assert ('`<button class="select-all-btn scholar-btn" type="button" onclick="openLibraryResource(${i})">` +\n'
             "    `${ico('external')} Search ${escHtml(r.name)}</button>`") in js
+
+
+# ── The user's own library: its catalogue address for books ─────────────────
+
+CATALOGUE = "https://find.example.edu/openurl?vid=X"
+
+
+def test_settings_keeps_a_librarys_catalogue_address_an_emptied_one_too(client, auth):
+    sent = [{"id": "unitn", "label": "UniTN", "url": "https://ezp.biblio.unitn.it", "openurl": ""},
+            {"label": "Mine", "url": "https://ezp.example.edu", "openurl": f"  {CATALOGUE} "},
+            {"label": "Other", "url": "https://ezp.other.example.edu"}]
+    r = client.post("/settings", json={"institution_proxies": sent}, headers=auth, base_url=BASE)
+    assert r.status_code == 200 and r.json["ok"]
+    kept = [{"label": "UniTN", "url": "https://ezp.biblio.unitn.it", "id": "unitn", "openurl": ""},
+            {"label": "Mine", "url": "https://ezp.example.edu", "openurl": CATALOGUE},
+            {"label": "Other", "url": "https://ezp.other.example.edu"}]
+    assert A.CONFIG["institution_proxies"] == kept
+    assert client.get("/settings", headers=auth, base_url=BASE).json["institution_proxies"] == kept
+    page = client.get("/", base_url=BASE).get_data(as_text=True)
+    assert json.loads(re.search(r"institutionProxies: (.*),\n", page).group(1)) == kept
+
+
+@pytest.mark.parametrize("openurl", ["find.example.edu/openurl", "https://find.example.edu/open url",
+                                     "https://" + "x" * 1000 + ".example.edu"])
+def test_a_catalogue_address_that_cannot_be_used_is_refused_and_nothing_is_saved(client, auth, openurl):
+    A.CONFIG["institution_proxies"] = [{"label": "Mine", "url": "https://ezp.example.edu"}]
+    r = client.post("/settings", json={"institution_proxies": [{"label": "Mine", "url": "https://ezp.example.edu",
+                                                                "openurl": openurl}],
+                                       "pubmed_api_key": "pm-key-1234"}, headers=auth, base_url=BASE)
+    assert r.status_code == 400 and not r.json["ok"]
+    assert r.json["message"] == ("Mine: the catalogue address for books must be a web address, "
+                                 "beginning https://, with no spaces.")
+    assert A.CONFIG["institution_proxies"] == [{"label": "Mine", "url": "https://ezp.example.edu"}]
+    assert A.CONFIG["pubmed_api_key"] == ""
+
+
+def test_the_library_editor_has_the_catalogue_field_the_page_reads():
+    js = (Path(A.__file__).parent / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    html = (Path(A.__file__).parent / "templates" / "index.html").read_text(encoding="utf-8")
+    assert js.count("getElementById('proxyEditorOpenUrl')") == 2
+    assert 'id="proxyEditorOpenUrl"' in html
+    # Settings' Save sends each library's address as openUrlToSave decides.
+    save = js[js.index("async function saveSettings()"):]
+    assert "...openUrlToSave(p),\n" in save[:save.index("payload.institution_proxies = cleanProxies;")]

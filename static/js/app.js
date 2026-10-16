@@ -407,14 +407,17 @@ let lastSearchParams = null;   // for saving searches
 let sortMode = 'relevance';    // 'relevance' (default) or 'date'
 
 // Predefined Trentino research institutions (always shown, in this order).
-// URLs are filled in by the user; UniTN's is known and pre-filled.
+// URLs are filled in by the user; UniTN's is known and pre-filled. openurl is
+// the library's own catalogue, asked about a book (see libraryOpenUrl): UniTN's
+// is its Primo discovery service; the others' aren't known.
 const PREDEFINED_INSTITUTIONS = [
-  {id: 'unitn', label: 'UniTN', url: 'https://ezp.biblio.unitn.it', predefined: true},
-  {id: 'asuit', label: 'ASUIT', url: '', predefined: true},
-  {id: 'fbk',   label: 'FBK',   url: '', predefined: true},
+  {id: 'unitn', label: 'UniTN', url: 'https://ezp.biblio.unitn.it', predefined: true,
+   openurl: 'https://strutture-provincia.primo.exlibrisgroup.com/discovery/openurl?institution=39SBT_INST&vid=39SBT_INST:39SBT_UNI_TN'},
+  {id: 'asuit', label: 'ASUIT', url: '', predefined: true, openurl: ''},
+  {id: 'fbk',   label: 'FBK',   url: '', predefined: true, openurl: ''},
 ];
 
-// Saved proxies from config: a list of {id?, label, url}. Custom ones have no id.
+// Saved proxies from config: a list of {id?, label, url, openurl?}. Custom ones have no id.
 let savedProxies = MS.institutionProxies;
 let activeProxy = MS.activeProxy;
 
@@ -429,6 +432,9 @@ function buildInstitutions() {
       id: base.id,
       label: base.label,
       url: saved && saved.url != null ? saved.url : base.url,
+      // Saved only when changed from the built-in one, so a corrected
+      // built-in address reaches everyone who left it alone.
+      openurl: saved && saved.openurl != null ? saved.openurl : base.openurl,
       predefined: true,
       remember: !!(saved && saved.remember_signin === true),
     };
@@ -436,6 +442,7 @@ function buildInstitutions() {
   // Append custom (non-predefined) institutions
   (savedProxies || []).forEach(p => {
     if (!p.id) merged.push({id: null, label: p.label || 'Institution', url: p.url || '',
+                            openurl: p.openurl || '',
                             predefined: false, remember: p.remember_signin === true});
   });
   return merged;
@@ -458,6 +465,12 @@ function signinDomain(url) {
 }
 
 let institutionProxies = buildInstitutions();
+
+// The library picked under Options, or null for No library.
+function activeLibrary() {
+  if (activeProxy === -1) return null;
+  return institutionProxies[activeProxy] || null;
+}
 
 // The currently-active proxy URL (or '' if none / disabled / unset)
 function currentProxyUrl() {
@@ -1663,13 +1676,46 @@ function worldcatUrl(a) {
   return q ? 'https://search.worldcat.org/search?' + new URLSearchParams({q}) : '';
 }
 
-// A book's ways to a copy beyond the free one: the libraries that hold it, and
-// its Open Library page. Bookshelf's books are free online, so they have none.
+// The book in the catalogue of the user's own library, through the library's
+// OpenURL address (its link resolver or discovery service): the library's page
+// for it, which says whether the library holds it or has the e-book, and offers
+// a request or an interlibrary loan when it hasn't. A chapter is asked as a
+// chapter of its book, '' when neither the book's title nor its ISBN is known.
+// '' too when the library has no such address.
+function libraryOpenUrl(a, lib) {
+  const b = a.book || {};
+  const base = ((lib && lib.openurl) || '').trim();
+  const chapter = b.kind === 'chapter';
+  const isbn = (b.isbn || [])[0];
+  const bookTitle = (chapter ? b.title : a.title) || '';
+  if (!base || (!isbn && !bookTitle.trim())) return '';
+  const first = ((a.author_list || [])[0] || '').split(',')[0].trim();
+  const year = /^\d{4}$/.test(String(a.year || '')) ? String(a.year) : '';
+  const fields = [
+    ['url_ver', 'Z39.88-2004'], ['ctx_ver', 'Z39.88-2004'],
+    ['rft_val_fmt', 'info:ofi/fmt:kev:mtx:book'],
+    ['rft.genre', chapter ? 'bookitem' : 'book'],
+    ['rft.atitle', chapter ? a.title : ''], ['rft.btitle', bookTitle],
+    ['rft.isbn', isbn], ['rft.aulast', first], ['rft.date', year],
+    ['rft.pub', b.publisher], ['rft_id', a.doi ? `info:doi/${a.doi}` : ''],
+  ].filter(([, v]) => v && String(v).trim())
+   .map(([k, v]) => `${k}=${encodeURIComponent(String(v).trim())}`).join('&');
+  const glue = !base.includes('?') ? '?' : /[?&]$/.test(base) ? '' : '&';
+  return base + glue + fields;
+}
+
+// A book's ways to a copy beyond the free one: the user's own library, the
+// libraries that hold it, and its Open Library page. Bookshelf's books are free
+// online, so they have none.
 function libraryButtons(a) {
   if (!a.book || a.book.bookshelf) return '';
   const title = escAttr(a.title || 'Book');
+  const lib = activeLibrary();
+  const own = libraryOpenUrl(a, lib);
+  let out = own ? `<button class="link-btn doi" onclick="openInAppBrowser('${escAttr(own)}', '${title}')">${ico('library')} Get it at ${escHtml(lib.label || 'your library')}</button>` : '';
   const worldcat = worldcatUrl(a);
-  let out = worldcat ? `<button class="link-btn doi" onclick="openInAppBrowser('${escAttr(worldcat)}', '${title}')">${ico('globe')} Find in a library</button>` : '';
+  if (worldcat)
+    out += `<button class="link-btn doi" onclick="openInAppBrowser('${escAttr(worldcat)}', '${title}')">${ico('globe')} Find in a library</button>`;
   if (a.book.openlibrary)
     out += `<button class="link-btn doi" onclick="openInAppBrowser('${escAttr(a.book.openlibrary)}', '${title}')">${ico('external')} Open Library</button>`;
   return out;
@@ -2715,6 +2761,7 @@ function openProxyEditor(i) {
     labelInput.value = isEdit ? (inst.label || '') : '';
   }
   document.getElementById('proxyEditorUrl').value = isEdit ? (inst.url || '') : '';
+  document.getElementById('proxyEditorOpenUrl').value = isEdit ? (inst.openurl || '') : '';
   openOverlay('proxyEditorOverlay');
   setTimeout(() => document.getElementById('proxyEditorUrl').focus(), 50);
 }
@@ -2726,10 +2773,12 @@ function closeProxyEditor() {
 
 function saveProxyEditor() {
   const url = document.getElementById('proxyEditorUrl').value.trim();
+  const openurl = document.getElementById('proxyEditorOpenUrl').value.trim();
   const labelInput = document.getElementById('proxyEditorLabel');
   if (editingProxyIndex !== null) {
     // Editing an existing institution
     institutionProxies[editingProxyIndex].url = url;
+    institutionProxies[editingProxyIndex].openurl = openurl;
     if (!institutionProxies[editingProxyIndex].predefined) {
       institutionProxies[editingProxyIndex].label = labelInput.value.trim() || 'Institution';
     }
@@ -2738,7 +2787,8 @@ function saveProxyEditor() {
   } else {
     // Adding a new custom institution
     if (!url) { closeProxyEditor(); return; }
-    institutionProxies.push({id: null, label: labelInput.value.trim() || 'Institution', url: url, predefined: false});
+    institutionProxies.push({id: null, label: labelInput.value.trim() || 'Institution', url: url,
+                             openurl: openurl, predefined: false});
     if (activeProxy === -1) activeProxy = institutionProxies.length - 1;
   }
   closeProxyEditor();
@@ -2795,6 +2845,16 @@ function rerenderVisibleCards() {
   applyResultFilters();
 }
 
+// A library's OpenURL address as saved: a predefined library's only when it
+// differs from the built-in one (an emptied one included, which hides its
+// button), so the built-in one can be corrected later; another's when set.
+function openUrlToSave(p) {
+  const openurl = (p.openurl || '').trim();
+  const preset = PREDEFINED_INSTITUTIONS.find(x => p.id && x.id === p.id);
+  if (preset) return openurl === preset.openurl ? {} : {openurl};
+  return openurl ? {openurl} : {};
+}
+
 async function saveSettings() {
   const raw = {
     anthropic_api_key: document.getElementById('set_anthropic').value.trim(),
@@ -2826,6 +2886,7 @@ async function saveSettings() {
       ...(p.id ? {id: p.id} : {}),
       label: (p.label || '').trim() || 'Institution',
       url: (p.url || '').trim(),
+      ...openUrlToSave(p),
       ...(p.remember ? {remember_signin: true} : {}),
     }));
   payload.institution_proxies = cleanProxies;

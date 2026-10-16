@@ -4,6 +4,10 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 2.3
+
+- Get it at your library: books and chapters have a button with your library's name, which opens the library's own page for the book in a MedSearch window. It says whether the library has the book or the e-book, and lets you request it or ask for an interlibrary loan when it hasn't. UniTN's catalogue is built in; for another library, add its catalogue address (OpenURL) in Settings, where its proxy is. Without one there is no button.
+
 ## 2.2
 
 - New database, free: NCBI Bookshelf. Its books and chapters (StatPearls, GeneReviews, NICE and WHO guidelines, health technology assessments and many more) are found with the same search, years, Strict, author and institution as PubMed, and by DOI. Each is tagged Book, and Read on Bookshelf opens it in a MedSearch window.
