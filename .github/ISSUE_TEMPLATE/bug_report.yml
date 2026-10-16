@@ -1,0 +1,62 @@
+name: Report a problem
+description: Something in MedSearch doesn't work as it should.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, and what MedSearch did.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to see it again
+      placeholder: |
+        1. Tick PubMed and Open Library
+        2. Search for …
+        3. …
+  - type: input
+    id: version
+    attributes:
+      label: MedSearch version
+      description: Shown in Settings ▸ Updates.
+      placeholder: "2.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - macOS
+        - Windows
+        - Run from source
+    validations:
+      required: true
+  - type: input
+    id: system_version
+    attributes:
+      label: System version
+      placeholder: "macOS 15.4, Windows 11 24H2, …"
+  - type: input
+    id: databases
+    attributes:
+      label: Databases ticked
+      description: When it is about a search.
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: >-
+        The lines from around the problem in medsearch.log, in the .medsearch folder of your
+        home folder. Web addresses in it are cut short, but read it before posting: it can
+        contain the words you searched for.
+      render: text

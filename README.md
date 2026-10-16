@@ -275,7 +275,7 @@ MedSearch/
 ├── static/css, static/js     its style and behaviour
 ├── static/fonts, vendor/     DM Sans (OFL) and PDF.js, bundled so it works offline
 ├── tests/                    pytest suite  (pip install -r requirements-dev.txt)
-├── scripts/make-readme-art.py  draws docs/readme/banner.svg from the app's own style
+├── scripts/make-readme-art.py  draws the README banner and the social preview from the app's own style
 ├── render_icon.py            draws the app icon's artwork (icon.icns and icon.ico)
 ├── render_menubar_icon.py    draws the menu bar glyph's variants (menubar_icon.png)
 ├── packaging/                the installers: build spec, build scripts, Windows Setup
