@@ -791,7 +791,7 @@ const _DB_SHORT = {pubmed: 'PubMed', cochrane: 'Cochrane', guidelines: 'Guidelin
                    clinicaltrials: 'ClinicalTrials.gov', arxiv: 'arXiv', scopus: 'Scopus',
                    wos: 'Web of Science', europepmc: 'Europe PMC', openalex: 'OpenAlex',
                    crossref: 'Crossref', core: 'CORE', ieee: 'IEEE Xplore',
-                   semanticscholar: 'Semantic Scholar'};
+                   semanticscholar: 'Semantic Scholar', bookshelf: 'NCBI Bookshelf'};
 function updateSourcesSummary() {
   const dbs = getSelectedDBs();
   const label = document.getElementById('dockSourcesLabel');
@@ -1124,7 +1124,7 @@ function scaffoldResults() {
 // Filters hide cards; they never refetch, and "Find more" results are
 // filtered the same way as they arrive.
 const _TYPE_ORDER = ['Meta-analysis','Systematic review','Guideline','RCT','Clinical trial',
-                     'Observational','Review','Case report','Preprint','Registered trial'];
+                     'Observational','Review','Case report','Preprint','Registered trial','Book'];
 function _refreshTypeOptions() {
   const sel = document.getElementById('rfType');
   if (!sel) return;
@@ -1462,6 +1462,16 @@ function sourceIcon(s) {
   return `<svg class="ico" aria-hidden="true"><use href="#i-${icons[s] || 'journal'}"/></svg>`;
 }
 
+// The button to a free copy, or ''. A PDF opens in the viewer; a book on NCBI
+// Bookshelf opens at its Bookshelf page in a MedSearch window, as Bookshelf
+// is read as web pages and has no PDF of most of its books.
+function freeCopyButton(a) {
+  if (a.access_kind !== 'open' || !a.access_link) return '';
+  if (a.book && a.book.bookshelf)
+    return `<button class="link-btn open-access" onclick="openInAppBrowser('${escAttr(a.access_link)}', '${escAttr(a.title || 'Book')}')">${ico('preprint')} Read on Bookshelf</button>`;
+  return `<button class="link-btn open-access" onclick="openPdf('${escAttr(a.access_link)}', '${escAttr(a.title || 'PDF')}')">${ico('preprint')} Read PDF</button>`;
+}
+
 function makeCard(a) {
   const card = document.createElement('div');
   card.className = 'article-card';
@@ -1470,9 +1480,7 @@ function makeCard(a) {
   const qTag   = a.quartile ? `<span class="meta-tag ${qClass}">${escHtml(a.quartile)}</span>` : '';
   const cited  = a.cited_by ? `<span class="meta-tag cited">Cited: ${escHtml(a.cited_by)}</span>` : '';
 
-  let links = '';
-  if (a.access_kind === 'open' && a.access_link)
-    links += `<button class="link-btn open-access" onclick="openPdf('${escAttr(a.access_link)}', '${escAttr(a.title || 'PDF')}')">${ico('preprint')} Read PDF</button>`;
+  let links = freeCopyButton(a);
   if (a.access_kind === 'doi' && a.access_link) {
     const hasProxy = !!currentProxyUrl();
     const doiHref = proxify(a.access_link);

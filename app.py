@@ -1444,7 +1444,11 @@ def _article(**fields):
     a = {"title": "No title", "authors": "", "author_list": [], "year": "n.d.",
          "journal": "", "quartile": None, "doi": None, "pmid": None,
          "abstract": "", "source": "", "access_kind": None, "access_link": None,
-         "scihub": None, "oneliner": None, "pub_types": [], "retraction": None}
+         "scihub": None, "oneliner": None, "pub_types": [], "retraction": None,
+         # A book or a chapter: {"kind": "book" | "chapter", "title" (the book's),
+         # "publisher", "place", "isbn": [...], "editors": [...], "bookshelf"
+         # (its NCBI Bookshelf id, or None)}. None for everything else.
+         "book": None}
     a.update(fields)
     if a["doi"] and not a["scihub"]:
         a["scihub"] = scihub_links(a["doi"])
@@ -1608,19 +1612,32 @@ def _pubmed_people(people):
 
 EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
+# PubMed's book records: NCBI Bookshelf's books and chapters (StatPearls,
+# GeneReviews, NICE and WHO guidelines…). Bookshelf also hosts a few journals,
+# whose papers PubMed files in the same "pubmed books" subset; nearly all of
+# them are in MEDLINE, so leaving MEDLINE out keeps the subset to the books.
+PUBMED_BOOKS = '("pubmed books"[sb] NOT medline[sb])'
+
 def _ncbi_key_param():
     return f"&api_key={CONFIG['pubmed_api_key']}" if CONFIG.get("pubmed_api_key") else ""
 
 def search_pubmed(query, max_r, y_from, y_to, strict=True, extra_filter=None,
-                  source_label="PubMed", sort="relevance", offset=0, people=None):
+                  source_label="PubMed", sort="relevance", offset=0, people=None, books=False):
+    """
+    PubMed. `books` says which records: False (PubMed itself) the papers only,
+    the books being NCBI Bookshelf's; True the books only (NCBI Bookshelf);
+    None both (Guidelines, where NICE's and WHO's are books, and Cochrane).
+    """
     base = EUTILS
     kp   = _ncbi_key_param()
     dp   = (f"&mindate={y_from or 1900}/01/01&maxdate={y_to or 2099}/12/31&datetype=pdat"
             if y_from or y_to else "")
     term = build_pubmed_term(query, strict=strict)
-    for extra in [extra_filter, *_pubmed_people(people)]:
+    for extra in [extra_filter, PUBMED_BOOKS if books else None, *_pubmed_people(people)]:
         if extra:
             term = f"({term}) AND {extra}" if term else extra
+    if books is False and term:
+        term = f"({term}) NOT {PUBMED_BOOKS}"
     # sort=relevance → PubMed "Best Match"; sort=date → most recent first
     sort_param = "date" if sort == "date" else "relevance"
     data, _ = fetch_json(f"{base}/esearch.fcgi?db=pubmed&term={urllib.parse.quote(term)}"
@@ -1642,7 +1659,7 @@ def pubmed_records(ids, source_label="PubMed", y_from=None, y_to=None):
     why, when PubMed does not answer; no access enrichment here.
     """
     base, kp = EUTILS, _ncbi_key_param()
-    by_pmid = {}
+    by_pmid, books = {}, {}
     # efetch by GET takes a couple of hundred ids before the URL gets too long.
     for i in range(0, len(ids), 200):
         body, _ = http_get(f"{base}/efetch.fcgi?db=pubmed&id={','.join(ids[i:i + 200])}"
@@ -1657,11 +1674,21 @@ def pubmed_records(ids, source_label="PubMed", y_from=None, y_to=None):
             pmid_el = art.find(".//MedlineCitation/PMID")
             if pmid_el is not None and pmid_el.text:
                 by_pmid[pmid_el.text] = art
+        # NCBI Bookshelf's books and chapters come in a record of their own.
+        for art in root.findall(".//PubmedBookArticle"):
+            pmid = art.findtext("BookDocument/PMID")
+            if pmid:
+                books[pmid] = art
 
     # Keep the order of `ids` (the relevance order esearch returned)
 
     results = []
     for pmid in ids:
+        if pmid in books:
+            a = _pubmed_book(books[pmid], pmid, source_label)
+            if a and within_range(a["year"], y_from, y_to):
+                results.append(a)
+            continue
         art = by_pmid.get(pmid)
         med = art.find(".//MedlineCitation") if art is not None else None
         art_el = med.find("Article") if med is not None else None
@@ -1675,19 +1702,7 @@ def pubmed_records(ids, source_label="PubMed", y_from=None, y_to=None):
         if not within_range(year, y_from, y_to):
             continue
 
-        names = []
-        for au in art_el.findall(".//AuthorList/Author"):
-            last, fore = au.findtext("LastName"), au.findtext("ForeName")
-            if last:
-                names.append(f"{last}, {fore}" if fore else last)
-            elif au.findtext("CollectiveName"):
-                names.append(au.findtext("CollectiveName"))
-        short = []
-        for au in art_el.findall(".//AuthorList/Author")[:3]:
-            last, fore = au.findtext("LastName"), au.findtext("ForeName")
-            if last:
-                short.append(f"{last}, {fore[0]}." if fore else last)
-        authors = "; ".join(short) + (" et al." if len(names) > 3 else "")
+        names, authors = _pubmed_authors(art_el.findall(".//AuthorList/Author"))
 
         # Some records carry their DOI only as the article's electronic
         # location, and the DOI is what the other sources are matched on.
@@ -1698,12 +1713,6 @@ def pubmed_records(ids, source_label="PubMed", y_from=None, y_to=None):
         pmcid = next((a.text for a in art.findall(".//PubmedData/ArticleIdList/ArticleId")
                       if a.get("IdType") == "pmc"), None)
 
-        # Abstract may have multiple labelled sections — join them all
-        chunks = []
-        for ap in art_el.findall(".//Abstract/AbstractText"):
-            label, txt = ap.get("Label"), "".join(ap.itertext())
-            chunks.append(f"{label}: {txt}" if label else txt)
-
         raw_types = [pt.text or "" for pt in art_el.findall(".//PublicationTypeList/PublicationType")]
         retraction = "retracted" if "Retracted Publication" in raw_types else None
         if not retraction and any(c.get("RefType") == "ExpressionOfConcernIn"
@@ -1712,7 +1721,7 @@ def pubmed_records(ids, source_label="PubMed", y_from=None, y_to=None):
 
         a = _article(title=title, authors=authors, author_list=names, year=year,
                      journal=journal, doi=doi, pmid=pmid,
-                     abstract=" ".join(chunks).strip(), source=source_label,
+                     abstract=_pubmed_abstract(art_el), source=source_label,
                      pub_types=_pub_type_badges(raw_types), retraction=retraction)
         # A PMC id in the record means the full text is free in PubMed Central:
         # link its PDF directly, with no extra lookup.
@@ -1720,6 +1729,81 @@ def pubmed_records(ids, source_label="PubMed", y_from=None, y_to=None):
             a["access_kind"], a["access_link"] = "open", _pmc_pdf_url(pmcid)
         results.append(a)
     return results
+
+def _pubmed_authors(els):
+    """A PubMed author list as (full names "Family, Given", the short form the
+    results show: the first three as "Family, G.", then "et al.")."""
+    names, short = [], []
+    for au in els:
+        last, fore = au.findtext("LastName"), au.findtext("ForeName")
+        if last:
+            names.append(f"{last}, {fore}" if fore else last)
+        elif au.findtext("CollectiveName"):
+            names.append(au.findtext("CollectiveName"))
+    for au in els[:3]:
+        last, fore = au.findtext("LastName"), au.findtext("ForeName")
+        if last:
+            short.append(f"{last}, {fore[0]}." if fore else last)
+    return names, "; ".join(short) + (" et al." if len(names) > 3 else "")
+
+def _pubmed_abstract(el):
+    """The abstract under `el`, its labelled sections joined in order."""
+    chunks = []
+    for ap in el.findall(".//Abstract/AbstractText"):
+        label, txt = ap.get("Label"), "".join(ap.itertext())
+        chunks.append(f"{label}: {txt}" if label else txt)
+    return " ".join(chunks).strip()
+
+def _bookshelf_url(nbk):
+    return f"https://www.ncbi.nlm.nih.gov/books/{nbk}/"
+
+def _pubmed_book(art, pmid, source_label):
+    """
+    One NCBI Bookshelf record (PubMed's PubmedBookArticle) as a result: a
+    chapter, or a whole book when the record has no chapter title. A chapter
+    shows its book's title where a paper shows its journal, and a whole book
+    its publisher. Bookshelf's own copy is free to read, so it is the access
+    link. None when the record holds no book at all.
+    """
+    doc = art.find("BookDocument")
+    book = doc.find("Book") if doc is not None else None
+    if book is None:
+        return None
+    def text(el):
+        return " ".join("".join(el.itertext()).split()) if el is not None else ""
+    book_title, chapter = text(book.find("BookTitle")), text(doc.find("ArticleTitle"))
+    publisher = (book.findtext("Publisher/PublisherName") or "").strip()
+    year = "n.d."
+    for path in ("Book/PubDate", "Book/BeginningDate", "ContributionDate"):
+        m = re.search(r"\d{4}", doc.findtext(f"{path}/Year") or doc.findtext(f"{path}/MedlineDate") or "")
+        if m:
+            year = m.group(0)
+            break
+    # A chapter's own authors, else the book's; the book's editors apart.
+    lists = {(al.get("Type") or "authors", where): al.findall("Author")
+             for where, parent in (("doc", doc), ("book", book))
+             for al in parent.findall("AuthorList")}
+    names, authors = _pubmed_authors(lists.get(("authors", "doc")) or lists.get(("authors", "book")) or [])
+    editors, _ = _pubmed_authors(lists.get(("editors", "book")) or lists.get(("editors", "doc")) or [])
+    ids = {i.get("IdType"): (i.text or "").strip() for i in doc.findall("ArticleIdList/ArticleId")}
+    doi = ids.get("doi") or next((e.text.strip() for e in [*doc.findall("ELocationID"),
+                                                            *book.findall("ELocationID")]
+                                  if e.get("EIdType") == "doi" and e.text), None)
+    nbk = ids.get("bookaccession")
+    raw_types = [pt.text or "" for pt in doc.findall("PublicationType")]
+    a = _article(title=chapter or book_title or "No title", authors=authors, author_list=names,
+                 year=year, journal=book_title if chapter else publisher, doi=doi, pmid=pmid,
+                 abstract=_pubmed_abstract(doc), source=source_label,
+                 pub_types=["Book"] + _pub_type_badges(raw_types),
+                 book={"kind": "chapter" if chapter else "book", "title": book_title,
+                       "publisher": publisher,
+                       "place": (book.findtext("Publisher/PublisherLocation") or "").strip(),
+                       "isbn": [re.sub(r"[^\dX]", "", i.text.upper()) for i in book.findall("Isbn")
+                                if i.text and i.text.strip()],
+                       "editors": editors, "bookshelf": nbk})
+    if nbk:
+        a["access_kind"], a["access_link"] = "open", _bookshelf_url(nbk)
+    return a
 
 # DOIs per PubMed lookup. Each adds about 40 characters to the URL, and 50
 # keeps a lookup comfortably inside what NCBI accepts by GET.
@@ -1805,15 +1889,27 @@ def search_cochrane(query, max_r, y_from, y_to, strict=True, sort="relevance", o
     # [ta] = journal title abbreviation field; covers the current journal name.
     return search_pubmed(query, max_r, y_from, y_to, strict=strict,
                          extra_filter='"Cochrane Database Syst Rev"[ta]',
-                         source_label="Cochrane", sort=sort, offset=offset, people=people)
+                         source_label="Cochrane", sort=sort, offset=offset, people=people,
+                         books=None)
 
 def search_guidelines(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0,
                       people=None):
     # Clinical practice guidelines: PubMed restricted to guideline publication
-    # types. Captures national/society guidelines from many countries.
+    # types. Captures national/society guidelines from many countries; NICE's
+    # and WHO's are NCBI Bookshelf books, so books are asked for too.
     return search_pubmed(query, max_r, y_from, y_to, strict=strict,
                          extra_filter='(Guideline[ptyp] OR "Practice Guideline"[ptyp])',
-                         source_label="Guidelines", sort=sort, offset=offset, people=people)
+                         source_label="Guidelines", sort=sort, offset=offset, people=people,
+                         books=None)
+
+def search_bookshelf(query, max_r, y_from, y_to, strict=True, sort="relevance", offset=0,
+                     people=None):
+    # NCBI Bookshelf's books and chapters (StatPearls, GeneReviews, NICE and
+    # WHO guidelines, health technology assessments…), through PubMed, which
+    # indexes them: the same search, years and filters as PubMed.
+    return search_pubmed(query, max_r, y_from, y_to, strict=strict,
+                         source_label="NCBI Bookshelf", sort=sort, offset=offset, people=people,
+                         books=True)
 
 def _arxiv_author(au):
     """arXiv keeps names as written ("Jane A. Doe"): the family name, and the
@@ -2617,6 +2713,7 @@ SOURCES = [
     ("cochrane",        "Cochrane",            search_cochrane,         True),
     ("guidelines",      "Guidelines",          search_guidelines,       True),
     ("pubmed",          "PubMed",              search_pubmed,           True),
+    ("bookshelf",       "NCBI Bookshelf",      search_bookshelf,        True),
     ("europepmc",       "Europe PMC",          search_europepmc,        True),
     ("scopus",          "Scopus",              search_scopus,           False),
     ("wos",             "Web of Science",      search_wos,              False),
@@ -2969,7 +3066,7 @@ def doi_lookup(key, fn, dois, report=None):
             m = re.search(r"/pdf/(.+?)(?:v\d+)?$", a.get("access_link") or "")
             if m:
                 a["doi"] = f"10.48550/arXiv.{m.group(1)}"
-    elif key in ("pubmed", "cochrane", "guidelines"):
+    elif key in ("pubmed", "cochrane", "guidelines", "bookshelf"):
         arts, _ = fn(" OR ".join(f'"{d}"[AID]' for d in dois), min(10 * n, 500), None, None)
     elif key == "scopus":
         arts, _ = fn(" OR ".join(f"DOI({{{d}}})" for d in dois), 2 * n, None, None)
@@ -3161,6 +3258,18 @@ def do_export(articles, query, fmt, synthesis=""):
             if a.get("pub_types"):
                 lines.append(f"**Type:** {', '.join(a['pub_types'])}  \n")
             lines.append(f"**Authors:** {'; '.join(_author_names(a))}  \n")
+            bk = a.get("book")
+            if bk:
+                if bk["kind"] == "chapter" and bk.get("title"):
+                    lines.append(f"**In:** {bk['title']}  \n")
+                if bk.get("editors"):
+                    lines.append(f"**Editors:** {'; '.join(bk['editors'])}  \n")
+                if bk.get("publisher"):
+                    lines.append(f"**Publisher:** {bk['publisher']}  \n")
+                if bk.get("isbn"):
+                    lines.append(f"**ISBN:** {', '.join(bk['isbn'])}  \n")
+                if bk.get("bookshelf"):
+                    lines.append(f"**NCBI Bookshelf:** {_bookshelf_url(bk['bookshelf'])}  \n")
             if a.get("doi"): lines.append(f"**DOI:** https://doi.org/{a['doi']}  \n")
             if a.get("pmid"): lines.append(f"**PMID:** {a['pmid']}  \n")
             if a.get("oneliner"): lines.append(f"**Summary:** _{a['oneliner']}_  \n")
@@ -3171,27 +3280,53 @@ def do_export(articles, query, fmt, synthesis=""):
         p = base / f"medsearch_{safe}_{ts}.bib"
         entries, used = [], set()
         for i, a in enumerate(articles, 1):
+            bk = a.get("book")
             fields = [("title", "{" + _bib(a["title"]) + "}"),
                       # BibTeX separates authors with " and "; "; " made one garbled name
                       ("author", " and ".join(_bib(n) for n in _author_names(a))),
-                      ("year", _bib(re.sub(r"\D", "", str(a.get("year", "")))[:4])),
-                      ("journal", _bib(a.get("journal", "")))]
+                      ("year", _bib(re.sub(r"\D", "", str(a.get("year", "")))[:4]))]
+            if bk:
+                # A chapter is a part of a book (@incollection), with the book's
+                # title and editors; a whole book is a @book.
+                if bk["kind"] == "chapter":
+                    fields.append(("booktitle", "{" + _bib(bk.get("title") or "") + "}"
+                                   if bk.get("title") else ""))
+                    fields.append(("editor", " and ".join(_bib(n) for n in bk.get("editors") or [])))
+                fields += [("publisher", _bib(bk.get("publisher") or "")),
+                           ("address", _bib(bk.get("place") or "")),
+                           ("isbn", _bib(", ".join(bk.get("isbn") or [])))]
+                if bk.get("bookshelf"):
+                    fields.append(("url", _bib(_bookshelf_url(bk["bookshelf"]))))
+            else:
+                fields.append(("journal", _bib(a.get("journal", ""))))
             if a.get("doi"):  fields.append(("doi", _bib(a["doi"])))
             if a.get("pmid"): fields.append(("pmid", _bib(a["pmid"])))
             if a.get("abstract"): fields.append(("abstract", _bib(a["abstract"])))
             if a.get("retraction") == "retracted": fields.append(("note", "RETRACTED"))
             body = ",\n".join(f"  {k} = {{{v}}}" for k, v in fields if v)
-            entries.append(f"@article{{{_bib_key(a, i, used)},\n{body}\n}}")
+            kind = ("incollection" if bk["kind"] == "chapter" else "book") if bk else "article"
+            entries.append(f"@{kind}{{{_bib_key(a, i, used)},\n{body}\n}}")
         p.write_text("\n\n".join(entries) + "\n", encoding="utf-8"); paths.append(str(p))
     if fmt in ("ris", "all"):
         p = base / f"medsearch_{safe}_{ts}.ris"
         lines = []
         for a in articles:
-            lines += ["TY  - JOUR", f"TI  - {a['title']}"]
+            bk = a.get("book")
+            kind = ("CHAP" if bk["kind"] == "chapter" else "BOOK") if bk else "JOUR"
+            lines += [f"TY  - {kind}", f"TI  - {a['title']}"]
             # RIS takes one AU line per author
             lines += [f"AU  - {n}" for n in _author_names(a)]
-            lines += [f"PY  - {re.sub(r'[^0-9]', '', str(a.get('year', '')))[:4]}",
-                      f"T2  - {a.get('journal','')}"]
+            lines.append(f"PY  - {re.sub(r'[^0-9]', '', str(a.get('year', '')))[:4]}")
+            if not bk:
+                lines.append(f"T2  - {a.get('journal','')}")
+            else:
+                # T2 is a chapter's book; A2 its editors.
+                if bk["kind"] == "chapter" and bk.get("title"):
+                    lines.append(f"T2  - {bk['title']}")
+                lines += [f"A2  - {n}" for n in bk.get("editors") or []]
+                if bk.get("publisher"): lines.append(f"PB  - {bk['publisher']}")
+                if bk.get("place"):     lines.append(f"CY  - {bk['place']}")
+                lines += [f"SN  - {n}" for n in bk.get("isbn") or []]
             if a.get("doi"):      lines.append(f"DO  - {a['doi']}")
             if a.get("pmid"):     lines.append(f"AN  - {a['pmid']}")
             if a.get("access_link"): lines.append(f"UR  - {a['access_link']}")
@@ -3232,7 +3367,9 @@ def _parse_creators(authors_str):
     return creators
 
 def article_to_zotero_item(a):
-    """Map one of our article dicts to a Zotero journalArticle item."""
+    """Map one of our article dicts to a Zotero item: a journalArticle, or for
+    a book a book, and for a chapter a bookSection."""
+    bk = a.get("book")
     item = {
         "itemType":         "journalArticle",
         "title":            a.get("title",""),
@@ -3242,14 +3379,35 @@ def article_to_zotero_item(a):
         "abstractNote":     a.get("abstract","") or "",
         "tags":             [{"tag": "MedSearch"}],
     }
+    extra = []
+    if bk:
+        del item["publicationTitle"]
+        item["itemType"] = "bookSection" if bk["kind"] == "chapter" else "book"
+        if bk["kind"] == "chapter" and bk.get("title"):
+            item["bookTitle"] = bk["title"]
+        item["creators"] += [dict(c, creatorType="editor")
+                             for c in _parse_creators("; ".join(bk.get("editors") or []))]
+        for field, value in (("publisher", bk.get("publisher")), ("place", bk.get("place")),
+                             ("ISBN", " ".join(bk.get("isbn") or []))):
+            if value:
+                item[field] = value
     if a.get("doi"):
-        item["DOI"] = a["doi"]
+        # Zotero keeps a DOI field on articles only; elsewhere it reads one
+        # from the Extra field.
+        if bk:
+            extra.append(f"DOI: {a['doi']}")
+        else:
+            item["DOI"] = a["doi"]
         item["url"] = f"https://doi.org/{a['doi']}"
+    elif bk and bk.get("bookshelf"):
+        item["url"] = _bookshelf_url(bk["bookshelf"])
     elif a.get("pmid"):
         item["url"] = f"https://pubmed.ncbi.nlm.nih.gov/{a['pmid']}/"
     if a.get("pmid"):
         # store PMID in the Extra field, a common convention
-        item["extra"] = f"PMID: {a['pmid']}"
+        extra.append(f"PMID: {a['pmid']}")
+    if extra:
+        item["extra"] = "\n".join(extra)
     return item
 
 def zotero_ping():
@@ -3853,9 +4011,10 @@ def _self_command(*args):
     return [exe, str(APP_DIR_PATH / "app.py"), *args]
 
 # Sources that must be released before any later source, so the Cochrane /
-# Guidelines / PubMed labels win the dedup exactly as they did when the
-# sources ran one after another.
-_PRIORITY_SOURCES = {"cochrane", "guidelines", "pubmed"}
+# Guidelines / PubMed / NCBI Bookshelf labels win the dedup exactly as they did
+# when the sources ran one after another. A NICE guideline found by Guidelines
+# and by Bookshelf shows under Guidelines, which comes first.
+_PRIORITY_SOURCES = {"cochrane", "guidelines", "pubmed", "bookshelf"}
 
 @app.route("/search_stream", methods=["POST"])
 def search_stream():

@@ -25,6 +25,7 @@ SOURCES = [
     ("core",           "CORE"),
     ("ieee",           "IEEE Xplore"),
     ("semanticscholar", "Semantic Scholar"),
+    ("bookshelf",      "NCBI Bookshelf"),
     ("all",            "All sources"),
 ]
 LABELS = dict(SOURCES)

@@ -165,8 +165,9 @@ def test_pubmed_by_name_or_orcid_and_by_each_name_of_the_place(calls, both):
     calls.reply[0] = ({"esearchresult": {"idlist": [], "count": "0"}}, 200)
     A.search_pubmed("glioma", 10, None, None, people=both)
     assert params(calls[0])["term"] == (
-        f'((glioma[tiab]) AND (Doe J[au] OR {ORCID}[auid])) AND '
-        '("Example University Hospital"[ad] OR "Ospedale Universitario Esempio"[ad])')
+        f'(((glioma[tiab]) AND (Doe J[au] OR {ORCID}[auid])) AND '
+        '("Example University Hospital"[ad] OR "Ospedale Universitario Esempio"[ad])) '
+        f'NOT {A.PUBMED_BOOKS}')
 
 
 def test_cochrane_keeps_its_journal_and_an_empty_box_asks_only_for_the_author(calls):

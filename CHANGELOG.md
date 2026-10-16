@@ -4,6 +4,14 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 2.2
+
+- New database, free: NCBI Bookshelf. Its books and chapters (StatPearls, GeneReviews, NICE and WHO guidelines, health technology assessments and many more) are found with the same search, years, Strict, author and institution as PubMed, and by DOI. Each is tagged Book, and Read on Bookshelf opens it in a MedSearch window.
+- Guidelines now lists the NICE and WHO guidelines kept on NCBI Bookshelf. PubMed returned them, but MedSearch left them out.
+- PubMed lists papers only, and the books are under NCBI Bookshelf. A PubMed search showed fewer results than asked for when some of them were books.
+- Book is a choice in the results' study-type filter when the list has books.
+- Exports and Zotero: a chapter is saved as a chapter of its book, with the book's title, editors and publisher, and a whole book as a book, with its ISBN.
+
 ## 2.1
 
 - Six new databases. Free: Europe PMC (PubMed and PubMed Central, plus preprints from medRxiv, bioRxiv and other preprint servers), OpenAlex, Crossref and CORE. With a free key from each, added in Settings: IEEE Xplore and Semantic Scholar.
