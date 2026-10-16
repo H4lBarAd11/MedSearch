@@ -11,6 +11,8 @@ one line per change, in plain words, no internals.
 - PubMed lists papers only, and the books are under NCBI Bookshelf. A PubMed search showed fewer results than asked for when some of them were books.
 - Book is a choice in the results' study-type filter when the list has books.
 - Exports and Zotero: a chapter is saved as a chapter of its book, with the book's title, editors and publisher, and a whole book as a book, with its ISBN.
+- New database, free: Open Library, the Internet Archive's catalogue of books. A book in the public domain is read free (Read free); many others can be borrowed for an hour or for two weeks with a free Internet Archive account (Borrow). Find in a library looks the book up in WorldCat, the shared catalogue of libraries worldwide, and Open Library opens its page there. Each opens in a MedSearch window, which keeps your sign-in.
+- Books that share a short title, such as "Glioma", are no longer taken for one another: a book is shown once only when the same book, by the same first author and from the same year, is found twice.
 
 ## 2.1
 

@@ -1,6 +1,7 @@
 """Books: NCBI Bookshelf's books and chapters, which PubMed indexes as records
-of their own; which PubMed-based database asks for them; and books exported
-as books. Placeholder names only; nothing reaches the network."""
+of their own; which PubMed-based database asks for them; Open Library's books,
+read free, borrowed or found in a library; and books exported as books.
+Placeholder names only; nothing reaches the network."""
 import json
 import re
 import urllib.parse
@@ -270,3 +271,202 @@ def test_zotero_gets_a_book_section_and_a_book(monkeypatch):
     assert "DOI" not in book and book["extra"] == "DOI: 10.9/report\nPMID: 900002"
     assert paper["itemType"] == "journalArticle" and paper["publicationTitle"] == "Example Journal"
     assert paper["extra"] == "PMID: 900003"
+
+
+# ── Open Library ────────────────────────────────────────────────────────────
+
+def work(**kw):
+    """An Open Library search answer's work, with placeholder values."""
+    return {"key": "/works/OL1W", "title": "Example Handbook", "author_name": ["Jane A. Doe"],
+            "first_publish_year": 1990, **kw}
+
+
+@pytest.fixture
+def openlibrary(monkeypatch):
+    """A fake Open Library answering `docs[0]`; records the URLs and headers asked."""
+    asked, docs = Terms(), [[]]
+
+    def get(url, headers=None, **k):
+        asked.append((url, headers))
+        return {"numFound": 42, "docs": docs[0]}, 200
+    monkeypatch.setattr(A, "fetch_json", get)
+    asked.docs = docs
+    return asked
+
+
+@pytest.fixture
+def ol(openlibrary):
+    return openlibrary
+
+
+def ol_params(url):
+    return dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
+
+
+def test_an_open_library_work_is_read_as_a_book():
+    a = A._openlibrary_article(work(title="Example Handbook", subtitle=" a  guide ",
+                                    author_name=["Jane A. Doe", "Richard Roe", "Mary Moe", "Ann Poe"]))
+    assert a["title"] == "Example Handbook: a guide"
+    assert a["author_list"] == ["Doe, Jane A.", "Roe, Richard", "Moe, Mary", "Poe, Ann"]
+    assert a["authors"] == "Doe, J.; Roe, R.; Moe, M. et al."
+    assert (a["year"], a["source"], a["pub_types"]) == ("1990", "Open Library", ["Book"])
+    assert a["book"]["kind"] == "book" and a["book"]["openlibrary"] == "https://openlibrary.org/works/OL1W"
+    assert a["doi"] is None and a["scihub"] is None
+
+
+def test_an_isbn_and_a_publisher_are_kept_only_when_the_work_has_one_edition():
+    one = A._openlibrary_article(work(isbn=["0306406152", "9780306406157"], publisher=["Example Press"]))
+    assert one["book"]["isbn"] == ["9780306406157"]           # the same book, 10 and 13 digits
+    assert one["journal"] == one["book"]["publisher"] == "Example Press"
+    many = A._openlibrary_article(work(isbn=["9780306406157", "9780962638459"],
+                                       publisher=["Example Press", "Other Press"]))
+    assert many["book"]["isbn"] == [] and many["journal"] == many["book"]["publisher"] == ""
+
+
+@pytest.mark.parametrize("isbn, thirteen", [
+    ("0-306-40615-2", "9780306406157"), ("978-0-306-40615-7", "9780306406157"),
+    ("080442957X", "9780804429573"), ("12345", None), ("", None)])
+def test_an_isbn_10_becomes_its_isbn_13(isbn, thirteen):
+    assert A._isbn13(isbn) == thirteen
+
+
+def test_a_public_domain_book_is_read_free_in_the_internet_archives_reader():
+    a = A._openlibrary_article(work(ebook_access="public", ia=["first_scan", "lent_scan"],
+                                    lending_identifier_s="lent_scan"))
+    assert (a["access_kind"], a["access_link"]) == ("open", "https://archive.org/details/lent_scan")
+    assert a["book"]["borrow"] is None
+    plain = A._openlibrary_article(work(ebook_access="public", ia=["first_scan"]))
+    assert plain["access_link"] == "https://archive.org/details/first_scan"
+
+
+def test_a_lent_book_is_borrowed_at_its_editions_page():
+    a = A._openlibrary_article(work(ebook_access="borrowable", lending_edition_s="OL2M",
+                                    lending_identifier_s="lent_scan"))
+    assert a["book"]["borrow"] == "https://openlibrary.org/books/OL2M"
+    assert (a["access_kind"], a["access_link"]) == ("none", None)
+    no_edition = A._openlibrary_article(work(ebook_access="borrowable"))
+    assert no_edition["book"]["borrow"] == "https://openlibrary.org/works/OL1W"
+
+
+@pytest.mark.parametrize("access", ["printdisabled", "no_ebook", None])
+def test_a_book_lent_only_to_print_disabled_readers_or_not_at_all_has_no_borrow(access):
+    a = A._openlibrary_article(work(ebook_access=access, ia=["scan"], lending_edition_s="OL2M"))
+    assert a["book"]["borrow"] is None and a["access_kind"] == "none"
+
+
+def test_open_library_is_asked_with_years_order_page_and_author(ol):
+    ol.docs[0] = [work(author_name=["Jane A. Doe"], first_publish_year=2005),
+                  work(key="/works/OL2W", author_name=["John Roe"], first_publish_year=2005),
+                  work(key="/works/OL3W", author_name=["Jane A. Doe"], first_publish_year=1990)]
+    arts, total = A.search_openlibrary("glioma", 10, 2000, None, sort="date", offset=20,
+                                       people=A.people_filter("Jane Doe"))
+    url, headers = ol[0]
+    assert url.startswith("https://openlibrary.org/search.json?")
+    p = ol_params(url)
+    assert p["q"] == "(glioma) AND first_publish_year:[2000 TO *]"
+    assert (p["author"], p["sort"], p["offset"], p["limit"]) == ("Jane Doe", "new", "20", "10")
+    assert set(p["fields"].split(",")) >= {"ebook_access", "lending_edition_s", "lending_identifier_s", "isbn"}
+    # Open Library ranks by the name; a book by someone else is left out, and
+    # so is one outside the years.
+    assert [a["book"]["openlibrary"] for a in arts] == ["https://openlibrary.org/works/OL1W"]
+    assert total == 42
+
+
+def test_an_author_alone_asks_open_library_without_words(ol):
+    A.search_openlibrary("", 10, None, None, people=A.people_filter("Jane Doe"))
+    p = ol_params(ol[0][0])
+    assert "q" not in p and p["author"] == "Jane Doe" and "sort" not in p
+
+
+def test_open_library_is_told_who_asks_when_a_contact_is_set(ol):
+    A.search_openlibrary("glioma", 10, None, None)
+    A.CONFIG["unpaywall_email"] = "reader@example.org"
+    A.search_openlibrary("glioma", 10, None, None)
+    assert [h["User-Agent"] for _u, h in ol] == ["MedSearch/1.0", "MedSearch/1.0 (reader@example.org)"]
+
+
+def test_open_library_calls_are_spaced_as_it_asks(monkeypatch):
+    rates = []
+    monkeypatch.setattr(A._OPENLIBRARY_LIMITER, "wait", rates.append)
+    A._throttle("https://openlibrary.org/search.json?q=x")
+    A.CONFIG["unpaywall_email"] = "reader@example.org"
+    A._throttle("https://openlibrary.org/search.json?q=x")
+    A._throttle("https://archive.org/details/x")
+    assert rates == [0.9, 2.8]
+
+
+def test_open_library_cannot_be_narrowed_to_an_institution_or_asked_by_doi(ol):
+    with pytest.raises(A.SourceCannotAnswer, match="institution"):
+        A.search_openlibrary("glioma", 10, None, None, people=A.people_filter(None, "Example Hospital"))
+    with pytest.raises(A.SourceCannotAnswer):
+        A.doi_lookup("openlibrary", A.search_openlibrary, ["10.9/x"])
+    assert ol == []
+
+
+def test_open_library_failing_says_so(monkeypatch):
+    monkeypatch.setattr(A, "fetch_json", lambda *a, **k: (None, 0))
+    with pytest.raises(RuntimeError, match="didn't respond"):
+        A.search_openlibrary("glioma", 10, None, None)
+    monkeypatch.setattr(A, "fetch_json", lambda *a, **k: (None, 503))
+    with pytest.raises(RuntimeError, match="HTTP 503"):
+        A.search_openlibrary("glioma", 10, None, None)
+
+
+def test_open_library_is_a_database_after_bookshelf():
+    keys = [k for k, *_ in A.SOURCES]
+    assert keys.index("openlibrary") == keys.index("bookshelf") + 1
+    assert "openlibrary" not in A._PRIORITY_SOURCES
+
+
+def test_an_open_library_book_is_exported_with_its_page_and_its_one_isbn(tmp_path, monkeypatch):
+    a = A._openlibrary_article(work(isbn=["9780306406157"], publisher=["Example Press"]))
+    bib = _export(tmp_path, monkeypatch, [a], "bib")
+    assert bib.startswith("@book{") and "isbn = {9780306406157}" in bib
+    assert "url = {https://openlibrary.org/works/OL1W}" in bib and "publisher = {Example Press}" in bib
+    md = _export(tmp_path, monkeypatch, [a], "md")
+    assert "**Open Library:** https://openlibrary.org/works/OL1W" in md
+    item = A.article_to_zotero_item(a)
+    assert (item["itemType"], item["url"], item["ISBN"]) == (
+        "book", "https://openlibrary.org/works/OL1W", "9780306406157")
+
+
+# ── Books with one title are not one book ───────────────────────────────────
+
+def book(title, first_author, year, **kw):
+    return article(title=title, author_list=[first_author], year=year, pub_types=["Book"],
+                   book={"kind": "book", "isbn": [], "openlibrary": None}, source="Open Library", **kw)
+
+
+def shown(arts):
+    seen, out = set(), []
+    for a in arts:
+        if not A.is_duplicate(seen, a):
+            out.append(a)
+        A.register(seen, a)
+    return [(a["title"], a["author_list"][0], a["year"]) for a in out]
+
+
+def test_books_sharing_a_short_title_are_all_shown_but_one_book_twice_is_not():
+    arts = [book("Glioma", "Doe, Jane", "2012"), book("Glioma", "Roe, Richard", "1991"),
+            book("Glioma", "Doe, J.", "2012"),               # the same book, listed again
+            book("Glioma", "Doe, Jane", "2016")]             # its next edition
+    assert shown(arts) == [("Glioma", "Doe, Jane", "2012"), ("Glioma", "Roe, Richard", "1991"),
+                           ("Glioma", "Doe, Jane", "2016")]
+
+
+def test_a_paper_and_a_book_with_one_title_are_two():
+    assert len(shown([article(title="Glioma", author_list=["Doe, Jane"], year="2012"),
+                      book("Glioma", "Doe, Jane", "2012")])) == 2
+
+
+def test_papers_still_meet_by_their_whole_title():
+    assert len(shown([article(title="A trial of something", author_list=["Doe, Jane"], year="2012"),
+                      article(title="A trial of something", author_list=["Roe, R"], year="2013")])) == 1
+
+
+def test_the_merged_list_tells_books_apart_the_same_way():
+    merged = A.merge_articles([("Open Library", [book("Glioma", "Doe, Jane", "2012"),
+                                                 book("Glioma", "Roe, Richard", "1991")]),
+                               ("Other", [book("Glioma", "Doe, J.", "2012")])])
+    assert [(m["author_list"][0], m["found_in"]) for m in merged] == [
+        ("Doe, Jane", ["Open Library", "Other"]), ("Roe, Richard", ["Open Library"])]

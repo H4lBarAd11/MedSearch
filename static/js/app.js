@@ -791,7 +791,8 @@ const _DB_SHORT = {pubmed: 'PubMed', cochrane: 'Cochrane', guidelines: 'Guidelin
                    clinicaltrials: 'ClinicalTrials.gov', arxiv: 'arXiv', scopus: 'Scopus',
                    wos: 'Web of Science', europepmc: 'Europe PMC', openalex: 'OpenAlex',
                    crossref: 'Crossref', core: 'CORE', ieee: 'IEEE Xplore',
-                   semanticscholar: 'Semantic Scholar', bookshelf: 'NCBI Bookshelf'};
+                   semanticscholar: 'Semantic Scholar', bookshelf: 'NCBI Bookshelf',
+                   openlibrary: 'Open Library'};
 function updateSourcesSummary() {
   const dbs = getSelectedDBs();
   const label = document.getElementById('dockSourcesLabel');
@@ -1462,14 +1463,43 @@ function sourceIcon(s) {
   return `<svg class="ico" aria-hidden="true"><use href="#i-${icons[s] || 'journal'}"/></svg>`;
 }
 
-// The button to a free copy, or ''. A PDF opens in the viewer; a book on NCBI
-// Bookshelf opens at its Bookshelf page in a MedSearch window, as Bookshelf
-// is read as web pages and has no PDF of most of its books.
+// The button to a free copy, or ''. A PDF opens in the viewer. A book on NCBI
+// Bookshelf, read as web pages, opens at its Bookshelf page in a MedSearch
+// window; a free Open Library book in the Internet Archive's reader, which
+// loads a page at a time and offers the PDF to download.
 function freeCopyButton(a) {
   if (a.access_kind !== 'open' || !a.access_link) return '';
-  if (a.book && a.book.bookshelf)
-    return `<button class="link-btn open-access" onclick="openInAppBrowser('${escAttr(a.access_link)}', '${escAttr(a.title || 'Book')}')">${ico('preprint')} Read on Bookshelf</button>`;
+  const reader = a.book && (a.book.bookshelf ? 'Read on Bookshelf' : a.book.openlibrary ? 'Read free' : '');
+  if (reader)
+    return `<button class="link-btn open-access" onclick="openInAppBrowser('${escAttr(a.access_link)}', '${escAttr(a.title || 'Book')}')">${ico('preprint')} ${reader}</button>`;
   return `<button class="link-btn open-access" onclick="openPdf('${escAttr(a.access_link)}', '${escAttr(a.title || 'PDF')}')">${ico('preprint')} Read PDF</button>`;
+}
+
+// A book Open Library lends: its edition's page, where Borrow takes a free
+// Internet Archive account. The window keeps the sign-in.
+function borrowButton(a) {
+  if (!a.book || !a.book.borrow) return '';
+  return `<button class="link-btn doi" onclick="openInAppBrowser('${escAttr(a.book.borrow)}', '${escAttr(a.title || 'Book')}')">${ico('library')} Borrow</button>`;
+}
+
+// WorldCat, the libraries' shared catalogue, on this book: by its ISBN when it
+// has one, else by its title and first author, which finds every edition.
+function worldcatUrl(a) {
+  const isbn = (a.book && a.book.isbn || [])[0];
+  const first = ((a.author_list || [])[0] || '').split(',')[0].trim();
+  const q = isbn ? `bn:${isbn}` : [a.title || '', first].join(' ').trim();
+  return 'https://search.worldcat.org/search?' + new URLSearchParams({q});
+}
+
+// A book's ways to a copy beyond the free one: the libraries that hold it, and
+// its Open Library page. Bookshelf's books are free online, so they have none.
+function libraryButtons(a) {
+  if (!a.book || a.book.bookshelf) return '';
+  const title = escAttr(a.title || 'Book');
+  let out = `<button class="link-btn doi" onclick="openInAppBrowser('${escAttr(worldcatUrl(a))}', '${title}')">${ico('globe')} Find in a library</button>`;
+  if (a.book.openlibrary)
+    out += `<button class="link-btn doi" onclick="openInAppBrowser('${escAttr(a.book.openlibrary)}', '${title}')">${ico('external')} Open Library</button>`;
+  return out;
 }
 
 function makeCard(a) {
@@ -1480,7 +1510,7 @@ function makeCard(a) {
   const qTag   = a.quartile ? `<span class="meta-tag ${qClass}">${escHtml(a.quartile)}</span>` : '';
   const cited  = a.cited_by ? `<span class="meta-tag cited">Cited: ${escHtml(a.cited_by)}</span>` : '';
 
-  let links = freeCopyButton(a);
+  let links = freeCopyButton(a) + borrowButton(a);
   if (a.access_kind === 'doi' && a.access_link) {
     const hasProxy = !!currentProxyUrl();
     const doiHref = proxify(a.access_link);
@@ -1520,6 +1550,7 @@ function makeCard(a) {
     links += `<a class="link-btn doi" href="https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(a.pmid)}/" target="_blank">PubMed</a>`;
   if (a.nct_id)
     links += `<a class="link-btn doi" href="https://clinicaltrials.gov/study/${encodeURIComponent(a.nct_id)}" target="_blank">ClinicalTrials</a>`;
+  links += libraryButtons(a);
 
   const citeBtn = a.doi
     ? `<button class="link-btn cite-btn" onclick="openCitations(${a._idx})">${ico('cite')} Citations</button>`

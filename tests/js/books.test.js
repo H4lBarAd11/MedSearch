@@ -47,3 +47,85 @@ test("Book is offered in the type filter, last, only when books are listed", () 
   _refreshTypeOptions();
   assert.deepEqual(offered(), ["Review", "Registered trial", "Book"]);
 });
+
+// ── Open Library ────────────────────────────────────────────────────────────
+
+const { borrowButton, libraryButtons, worldcatUrl } =
+  load(["escAttr", "ico", "borrowButton", "worldcatUrl", "libraryButtons"]);
+const WORK = "https://openlibrary.org/works/OL1W";
+
+test("a free Open Library book is read in a MedSearch window", () => {
+  const html = freeCopyButton({title: "Example Handbook", access_kind: "open",
+                               access_link: "https://archive.org/details/scan",
+                               book: {kind: "book", openlibrary: WORK}});
+  assert.match(html, /Read free<\/button>$/);
+  assert.ok(html.includes(`onclick="openInAppBrowser('https://archive.org/details/scan', 'Example Handbook')"`));
+});
+
+test("a lent book has Borrow, at its edition's page in a MedSearch window", () => {
+  const html = borrowButton({title: "Example Handbook",
+                             book: {borrow: "https://openlibrary.org/books/OL2M"}});
+  assert.match(html, /Borrow<\/button>$/);
+  assert.ok(html.includes(`onclick="openInAppBrowser('https://openlibrary.org/books/OL2M', 'Example Handbook')"`));
+  assert.equal(borrowButton({book: {borrow: null}}), "");
+  assert.equal(borrowButton({book: null}), "");
+});
+
+test("WorldCat is asked by the ISBN, else by the title and the first author", () => {
+  const byIsbn = new URL(worldcatUrl({title: "Example Handbook", author_list: ["Doe, Jane"],
+                                      book: {isbn: ["9780306406157"]}}));
+  assert.equal(byIsbn.origin + byIsbn.pathname, "https://search.worldcat.org/search");
+  assert.equal(byIsbn.searchParams.get("q"), "bn:9780306406157");
+  const byTitle = new URL(worldcatUrl({title: "Example Handbook", author_list: ["Doe, Jane", "Roe, R"],
+                                       book: {isbn: []}}));
+  assert.equal(byTitle.searchParams.get("q"), "Example Handbook Doe");
+  assert.equal(new URL(worldcatUrl({title: "Example & Handbook", book: {}})).searchParams.get("q"),
+               "Example & Handbook");
+});
+
+test("a book has Find in a library and its Open Library page; a Bookshelf book and a paper have neither", () => {
+  const html = libraryButtons({title: "Example Handbook", author_list: [], book: {isbn: [], openlibrary: WORK}});
+  assert.deepEqual([...html.matchAll(/<\/svg> ([^<]+)<\/button>/g)].map(m => m[1]),
+                   ["Find in a library", "Open Library"]);
+  assert.ok(html.includes("openInAppBrowser('https://search.worldcat.org/search?q=Example+Handbook'"));
+  assert.ok(html.includes(`openInAppBrowser('${WORK}', 'Example Handbook')`));
+  const elsewhere = libraryButtons({title: "A chapter", book: {isbn: [], openlibrary: null}});
+  assert.match(elsewhere, /Find in a library<\/button>$/);
+  assert.equal(libraryButtons({title: "A chapter", book: {bookshelf: "NBK1"}}), "");
+  assert.equal(libraryButtons({title: "A paper", book: null}), "");
+});
+
+// ── A book's row, as the results list draws it ──────────────────────────────
+
+const { makeCard } = load(["escHtml", "escAttr", "ico", "freeCopyButton", "borrowButton",
+                           "worldcatUrl", "libraryButtons", "makeCard"]);
+
+function rowButtons(a) {
+  globalThis.document = {createElement: () => ({classList: {add() {}}, innerHTML: ""})};
+  globalThis.currentProxyUrl = () => "";
+  globalThis.proxify = (u) => u;
+  const html = makeCard({_idx: 0, pub_types: ["Book"], scihub: [], ...a}).innerHTML;
+  const links = html.slice(html.indexOf('<div class="article-links">'));
+  return [...links.matchAll(/<(?:button|a) class="link-btn[^>]*>(?:<svg[^>]*>.*?<\/svg> )?([^<]+)<\/(?:button|a)>/g)]
+    .map(m => m[1].trim());
+}
+
+test("an Open Library row: Borrow, then the library and its Open Library page", () => {
+  assert.deepEqual(rowButtons({title: "Example Handbook", access_kind: "none", access_link: null,
+                               book: {kind: "book", isbn: [], openlibrary: WORK,
+                                      borrow: "https://openlibrary.org/books/OL2M"}}),
+                   ["Borrow", "Find in a library", "Open Library", "Explain", "Zotero"]);
+});
+
+test("a Bookshelf row: Read on Bookshelf and PubMed, no library", () => {
+  assert.deepEqual(rowButtons({title: "Low-Grade Gliomas", pmid: "900001", access_kind: "open",
+                               access_link: BOOKSHELF, book: {kind: "chapter", isbn: [], bookshelf: "NBK900001"}}),
+                   ["Read on Bookshelf", "PubMed", "Explain", "Zotero"]);
+});
+
+test("a paper's row is as it was", () => {
+  assert.deepEqual(rowButtons({title: "A paper", doi: "10.1/x", pmid: "1", pub_types: [], book: null,
+                               access_kind: "open", access_link: "https://x.org/a.pdf",
+                               scihub: ["https://sci-hub.example/10.1/x"]}),
+                   ["Read PDF", "Sci-Hub", "PubMed", "Citations", "Explain", "Zotero"]);
+});

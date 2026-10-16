@@ -441,6 +441,8 @@ class _RateLimiter:
 _NCBI_LIMITER = _RateLimiter()
 # A Semantic Scholar key allows one request a second, across all its uses.
 _S2_LIMITER = _RateLimiter()
+# Open Library allows one request a second, three to an app that gives a contact.
+_OPENLIBRARY_LIMITER = _RateLimiter()
 
 def _throttle(url):
     host = (urllib.parse.urlparse(url).hostname or "").lower()
@@ -448,6 +450,8 @@ def _throttle(url):
         _NCBI_LIMITER.wait(9 if CONFIG.get("pubmed_api_key") else 2.8)
     elif host == "api.semanticscholar.org":
         _S2_LIMITER.wait(1)
+    elif host == "openlibrary.org":
+        _OPENLIBRARY_LIMITER.wait(2.8 if _contact_email() else 0.9)
 
 def _contact_email():
     """The user's own address for polite-pool APIs (NCBI, Crossref), or None."""
@@ -531,10 +535,21 @@ def _work_keys(a):
         return "bare:" + work, "sub:" + work
     return "sub:" + work, "bare:" + work
 
+def _title_key(a):
+    """The whole title, as two records of one paper share it. Many books share
+    a short title ("Glioma"), so a book's also holds its first author and its
+    year: another edition is another book."""
+    title = _norm_title(a.get("title"))
+    if not title or not a.get("book"):
+        return title
+    names = a.get("author_list") or []
+    family = _norm_text(_name_parts(_query_safe(names[0]))[0]) if names else ""
+    return f"{title}|{family}|{str(a.get('year') or '')[:4]}"
+
 def _dedup_keys(a):
     """What a result is filed under: the DOI (in any case: PubMed keeps the
-    publisher's capitals, Crossref lowercases), the PMID, the whole title,
-    and the work (_work_keys)."""
+    publisher's capitals, Crossref lowercases), the PMID, the whole title
+    (_title_key), and the work (_work_keys)."""
     keys = []
     doi = (a.get("doi") or "").strip().lower()
     if doi:
@@ -542,7 +557,7 @@ def _dedup_keys(a):
     pmid = str(a.get("pmid") or "").strip()
     if pmid:
         keys.append("pmid:" + pmid)
-    title = _norm_title(a.get("title"))
+    title = _title_key(a)
     if title:
         keys.append("title:" + title)
     filed, _other_half = _work_keys(a)
@@ -1757,6 +1772,14 @@ def _pubmed_abstract(el):
 def _bookshelf_url(nbk):
     return f"https://www.ncbi.nlm.nih.gov/books/{nbk}/"
 
+def _book_page(bk):
+    """(where, address) of a book's own page: NCBI Bookshelf or Open Library."""
+    if bk.get("bookshelf"):
+        return "NCBI Bookshelf", _bookshelf_url(bk["bookshelf"])
+    if bk.get("openlibrary"):
+        return "Open Library", bk["openlibrary"]
+    return None, None
+
 def _pubmed_book(art, pmid, source_label):
     """
     One NCBI Bookshelf record (PubMed's PubmedBookArticle) as a result: a
@@ -2705,6 +2728,86 @@ def search_core(query, max_r, y_from, y_to, sort="relevance", offset=0, people=N
     arts = [a for a in arts if within_range(a["year"], y_from, y_to) and (not au or _wrote(a, au))]
     return enrich_access(arts), data.get("totalHits") or 0
 
+# ── Open Library ─────────────────────────────────────────────────────────────
+# The Internet Archive's catalogue of books: free, no key. Each result is a
+# work, its editions together. A public-domain book is read free; many others
+# are lent for an hour or two weeks to anyone with a free Internet Archive
+# account. Books lent only to readers with a print disability get no Borrow.
+OPENLIBRARY = "https://openlibrary.org"
+_OPENLIBRARY_FIELDS = ("key,title,subtitle,author_name,first_publish_year,isbn,publisher,"
+                       "ebook_access,ia,lending_edition_s,lending_identifier_s")
+
+def _openlibrary_headers():
+    # Open Library asks an app to name itself and give a contact.
+    return {"User-Agent": "MedSearch/1.0" + (f" ({_contact_email()})" if _contact_email() else "")}
+
+def _isbn13(isbn):
+    """An ISBN as its 13 digits (an ISBN-10 converted), or None."""
+    s = re.sub(r"[^\dX]", "", (isbn or "").upper())
+    if len(s) == 13 and s.isdigit():
+        return s
+    if len(s) == 10 and s[:9].isdigit():
+        core = "978" + s[:9]
+        return core + str(-sum(int(d) * (3 if i % 2 else 1) for i, d in enumerate(core)) % 10)
+    return None
+
+def _openlibrary_article(d):
+    """One Open Library work as a result. A work lists the ISBNs and
+    publishers of all its editions, so an ISBN or a publisher is kept only
+    when there is just one."""
+    title = " ".join((d.get("title") or "").split()) or "No title"
+    if d.get("subtitle"):
+        title += ": " + " ".join(d["subtitle"].split())
+    parts = [_name_parts(n) for n in d.get("author_name") or [] if n and n.strip()]
+    names = [f"{f}, {g}" if g else f for f, g in parts]
+    authors = "; ".join(f"{f}, {g[0]}." if g else f for f, g in parts[:3]) + \
+              (" et al." if len(parts) > 3 else "")
+    isbns = list(dict.fromkeys(filter(None, map(_isbn13, d.get("isbn") or []))))
+    publishers = list(dict.fromkeys(p.strip() for p in d.get("publisher") or [] if p and p.strip()))
+    access = d.get("ebook_access")
+    ia = d.get("lending_identifier_s") or next(iter(d.get("ia") or []), None)
+    edition = d.get("lending_edition_s")
+    work = OPENLIBRARY + d["key"] if str(d.get("key") or "").startswith("/works/") else None
+    a = _article(title=title, authors=authors, author_list=names,
+                 year=str(d["first_publish_year"]) if d.get("first_publish_year") else "n.d.",
+                 journal=publishers[0] if len(publishers) == 1 else "", source="Open Library",
+                 pub_types=["Book"],
+                 book={"kind": "book", "title": title, "publisher": publishers[0] if len(publishers) == 1 else "",
+                       "place": "", "isbn": isbns if len(isbns) == 1 else [], "editors": [],
+                       "bookshelf": None, "openlibrary": work,
+                       "borrow": (f"{OPENLIBRARY}/books/{edition}" if edition else work)
+                                 if access == "borrowable" else None})
+    if access == "public" and ia:
+        a["access_kind"], a["access_link"] = "open", f"https://archive.org/details/{ia}"
+    else:
+        a["access_kind"], a["access_link"] = "none", None
+    return a
+
+def search_openlibrary(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
+    _cannot("Open Library", people, institution=False)
+    au = (people or {}).get("author")
+    q = query.strip()
+    if y_from or y_to:
+        years = f"first_publish_year:[{y_from or '*'} TO {y_to or '*'}]"
+        q = f"({q}) AND {years}" if q else years
+    params = {"limit": max_r, "offset": offset, "fields": _OPENLIBRARY_FIELDS}
+    if q:
+        params["q"] = q
+    if au:
+        # Open Library ranks by the name; each book is checked for it.
+        params["author"] = au["name"]
+    if sort == "date":
+        params["sort"] = "new"
+    data, status = fetch_json(f"{OPENLIBRARY}/search.json?{urllib.parse.urlencode(params)}",
+                              headers=_openlibrary_headers(), timeout=25)
+    if status != 200 or not isinstance(data, dict):
+        if not status:
+            raise RuntimeError("Open Library didn't respond. Check your connection and try again.")
+        raise RuntimeError(f"Open Library returned HTTP {status}.")
+    arts = [_openlibrary_article(d) for d in data.get("docs") or [] if isinstance(d, dict)]
+    arts = [a for a in arts if within_range(a["year"], y_from, y_to) and (not au or _wrote(a, au))]
+    return arts, data.get("numFound") or 0
+
 # Every source, in dedup-priority order: when two sources return the same
 # paper, the earlier one keeps it. Cochrane and Guidelines come before plain
 # PubMed so systematic reviews and guidelines are labelled as such.
@@ -2714,6 +2817,7 @@ SOURCES = [
     ("guidelines",      "Guidelines",          search_guidelines,       True),
     ("pubmed",          "PubMed",              search_pubmed,           True),
     ("bookshelf",       "NCBI Bookshelf",      search_bookshelf,        True),
+    ("openlibrary",     "Open Library",        search_openlibrary,      False),
     ("europepmc",       "Europe PMC",          search_europepmc,        True),
     ("scopus",          "Scopus",              search_scopus,           False),
     ("wos",             "Web of Science",      search_wos,              False),
@@ -2794,7 +2898,7 @@ def merge_articles(groups):
         for a in arts:
             doi = (a.get("doi") or "").strip().lower() or None
             pmid = str(a.get("pmid") or "").strip() or None
-            title = _norm_title(a.get("title"))
+            title = _title_key(a)
             filed, other_half = _work_keys(a)
             hit = by_doi.get(doi) if doi else None
             if hit is None and pmid:
@@ -2821,7 +2925,7 @@ def merge_articles(groups):
                 by_doi.setdefault(hit["doi"].strip().lower(), hit)
             if hit.get("pmid"):
                 by_pmid.setdefault(str(hit["pmid"]), hit)
-            t = _norm_title(hit.get("title"))
+            t = _title_key(hit)
             if t and hit not in by_title.setdefault(t, []):
                 by_title[t].append(hit)
             for w in (filed, _work_keys(hit)[0]):
@@ -3268,8 +3372,9 @@ def do_export(articles, query, fmt, synthesis=""):
                     lines.append(f"**Publisher:** {bk['publisher']}  \n")
                 if bk.get("isbn"):
                     lines.append(f"**ISBN:** {', '.join(bk['isbn'])}  \n")
-                if bk.get("bookshelf"):
-                    lines.append(f"**NCBI Bookshelf:** {_bookshelf_url(bk['bookshelf'])}  \n")
+                where, page = _book_page(bk)
+                if page:
+                    lines.append(f"**{where}:** {page}  \n")
             if a.get("doi"): lines.append(f"**DOI:** https://doi.org/{a['doi']}  \n")
             if a.get("pmid"): lines.append(f"**PMID:** {a['pmid']}  \n")
             if a.get("oneliner"): lines.append(f"**Summary:** _{a['oneliner']}_  \n")
@@ -3295,8 +3400,7 @@ def do_export(articles, query, fmt, synthesis=""):
                 fields += [("publisher", _bib(bk.get("publisher") or "")),
                            ("address", _bib(bk.get("place") or "")),
                            ("isbn", _bib(", ".join(bk.get("isbn") or [])))]
-                if bk.get("bookshelf"):
-                    fields.append(("url", _bib(_bookshelf_url(bk["bookshelf"]))))
+                fields.append(("url", _bib(_book_page(bk)[1] or "")))
             else:
                 fields.append(("journal", _bib(a.get("journal", ""))))
             if a.get("doi"):  fields.append(("doi", _bib(a["doi"])))
@@ -3399,8 +3503,8 @@ def article_to_zotero_item(a):
         else:
             item["DOI"] = a["doi"]
         item["url"] = f"https://doi.org/{a['doi']}"
-    elif bk and bk.get("bookshelf"):
-        item["url"] = _bookshelf_url(bk["bookshelf"])
+    elif bk and _book_page(bk)[1]:
+        item["url"] = _book_page(bk)[1]
     elif a.get("pmid"):
         item["url"] = f"https://pubmed.ncbi.nlm.nih.gov/{a['pmid']}/"
     if a.get("pmid"):
