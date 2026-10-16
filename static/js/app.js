@@ -3205,6 +3205,37 @@ function closeAsk(confirmed) {
   if (res) res(confirmed ? (hasInput ? document.getElementById('askInput').value : true) : null);
 }
 
+// Settings ▸ Uninstall MedSearch: asks first, in the danger colour; then the
+// app removes its login item, quits, and its files go to the Trash.
+async function uninstallMedSearch() {
+  const win = !!MS.onWindows;
+  const yes = await ask({
+    title: 'Uninstall MedSearch?',
+    text: (win ? 'Its settings, recent and saved searches, exports and the web data of its windows go to ' +
+                 'the Recycle Bin, the app is removed, and MedSearch quits. API keys and library sign-ins ' +
+                 'stay in Credential Manager, for a later install.'
+               : 'The app, its settings, recent and saved searches, exports and the web data of its windows ' +
+                 'go to the Trash, and MedSearch quits. API keys and library sign-ins stay in the Keychain, ' +
+                 'for a later install.'),
+    okLabel: win ? 'Move to the Recycle Bin and quit' : 'Move to Trash and quit',
+    danger: true});
+  if (!yes) return;
+  let res, data = {};
+  try {
+    res = await fetch('/uninstall', {method: 'POST'});
+    data = await res.json().catch(() => ({}));
+  } catch (e) {
+    fail('MedSearch did not answer: ' + e.message, "Couldn't uninstall MedSearch");
+    return;
+  }
+  if (!res.ok || !data.ok) {
+    fail(data.message || `MedSearch answered ${res.status}.`, "Couldn't uninstall MedSearch");
+    return;
+  }
+  showToast(win ? 'MedSearch is quitting; its files go to the Recycle Bin.'
+                : 'MedSearch is quitting; its files go to the Trash.', '');
+}
+
 let _failReturnFocus = null;
 function fail(message, title) {
   document.getElementById('failTitle').textContent = title || "Couldn't do that";

@@ -3906,7 +3906,8 @@ def index():
                            sources=_start_sources(),
                            auto_query=auto_query,
                            auto_source=auto_source,
-                           on_windows=(sys.platform == "win32"))
+                           on_windows=(sys.platform == "win32"),
+                           installed=(_install_kind() != "source"))
 
 @app.route("/ping")
 def ping():
@@ -4292,6 +4293,111 @@ def _replace_and_exit(plan):
             subprocess.Popen(_setup_command(plan[1]), creationflags=flags, close_fds=True)
     finally:
         os._exit(0)
+
+# ── Uninstall ────────────────────────────────────────────────────────────────
+# Settings ▸ Uninstall MedSearch, in the installed app. The login item goes at
+# once; then MedSearch quits, and a helper that waits for it to be gone moves
+# to the Trash (Windows: the Recycle Bin) the app, the settings, history and
+# saved searches, the exports and the web data of its windows, and on Windows
+# runs the installer's own uninstaller, which removes the program. Waiting for
+# the quit means nothing written on the way out comes back afterwards. The API
+# keys and the library sign-ins are kept, for a later install.
+
+def _uninstall_targets():
+    """What goes to the Trash or the Recycle Bin, the ones that exist. Never
+    the Downloads folder, and never the web data source runs share with every
+    other Python app."""
+    home = Path.home()
+    paths = [CONFIG_DIR, home / "medsearch_exports"]
+    if sys.platform == "darwin":
+        lib = home / "Library"
+        paths = [_this_bundle(), *paths,
+                 lib / "WebKit" / APP_ID, lib / "Caches" / APP_ID,
+                 lib / "HTTPStorages" / APP_ID, lib / "HTTPStorages" / f"{APP_ID}.binarycookies",
+                 lib / "Saved Application State" / f"{APP_ID}.savedState",
+                 lib / "Preferences" / f"{APP_ID}.plist"]
+    return [p for p in paths if p.exists()]
+
+# macOS's own Move to Trash, from a script: no Finder, so no permission to
+# control it is asked for. Each path comes as an argument.
+_TRASH_JS = ('function run(argv) { ObjC.import("Foundation"); '
+             'var fm = $.NSFileManager.defaultManager; '
+             'argv.forEach(function (p) { '
+             'fm.trashItemAtURLResultingItemURLError($.NSURL.fileURLWithPath(p), null, null); }); }')
+
+def _mac_trash_script(pid, paths):
+    """Once process `pid` has gone (and its web views a second later), `paths` go to the Trash."""
+    q = shlex.quote
+    return (f"while kill -0 {pid} 2>/dev/null; do sleep 0.2; done; sleep 1; "
+            f"/usr/bin/osascript -l JavaScript -e {q(_TRASH_JS)} " + " ".join(q(str(p)) for p in paths))
+
+def _windows_uninstall_script(pid, paths, uninstaller):
+    """PowerShell: once process `pid` has gone, `paths` go to the Recycle Bin,
+    then Windows Setup's uninstaller removes the program, quietly."""
+    ps = lambda p: "'" + str(p).replace("'", "''") + "'"
+    items = ", ".join(ps(p) for p in paths)
+    return ("Wait-Process -Id {pid} -ErrorAction SilentlyContinue; Start-Sleep -Seconds 1; "
+            "Add-Type -AssemblyName Microsoft.VisualBasic; "
+            "foreach ($p in @({items})) {{ "
+            "if (Test-Path -LiteralPath $p -PathType Container) {{ "
+            "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($p, 'OnlyErrorDialogs', 'SendToRecycleBin') }} "
+            "elseif (Test-Path -LiteralPath $p) {{ "
+            "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($p, 'OnlyErrorDialogs', 'SendToRecycleBin') }} }}; "
+            "& {exe} /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+            ).format(pid=pid, items=items, exe=ps(uninstaller))
+
+def _uninstall_plan(kind):
+    """("mac", script) or ("windows", script) for this installed MedSearch.
+    Raises UpdateRefused, saying why, when it can't uninstall itself."""
+    targets = _uninstall_targets()
+    if kind == "mac_app":
+        bundle = _this_bundle()
+        if str(bundle).startswith("/Volumes/"):
+            raise UpdateRefused("MedSearch is running from its disk image, so there is nothing "
+                                "installed to remove. Eject the disk image instead.")
+        if not os.access(bundle.parent, os.W_OK):
+            raise UpdateRefused(f"This Mac's user can't change {bundle.parent}, so MedSearch can't "
+                                "move itself to the Trash. Drag it there from the Finder.")
+        return ("mac", _mac_trash_script(os.getpid(), targets))
+    folder = Path(sys.executable).parent
+    uninstallers = sorted(folder.glob("unins*.exe"))
+    if not uninstallers:
+        raise UpdateRefused(f"Windows Setup's uninstaller is not in {folder}. Remove MedSearch "
+                            "from Settings ▸ Apps instead.")
+    return ("windows", _windows_uninstall_script(os.getpid(), targets, uninstallers[-1]))
+
+def _uninstall_and_exit(plan):
+    time.sleep(0.4)          # let the HTTP response reach the window
+    try:
+        if plan[0] == "mac":
+            subprocess.Popen(["/bin/sh", "-c", plan[1]], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        else:
+            flags = (getattr(subprocess, "DETACHED_PROCESS", 0)
+                     | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                     | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle",
+                              "Hidden", "-Command", plan[1]], creationflags=flags, close_fds=True)
+    finally:
+        os._exit(0)
+
+@app.route("/uninstall", methods=["POST"])
+def uninstall():
+    kind = _install_kind()
+    if kind == "source":
+        return jsonify({"ok": False, "message": "This MedSearch runs from its source code, so there "
+                        "is no installed app to uninstall. Delete its folder yourself."}), 400
+    try:
+        plan = _uninstall_plan(kind)
+    except UpdateRefused as e:
+        return jsonify({"ok": False, "message": str(e)}), 400
+    try:
+        _set_open_at_login(False)
+    except Exception:
+        pass
+    threading.Thread(target=_uninstall_and_exit, args=(plan,), daemon=True).start()
+    return jsonify({"ok": True})
 
 def _check_published(version):
     local = get_local_version()
@@ -5139,12 +5245,17 @@ def export_zotero_single():
 # macOS, by name and icon in the Dock and in the menu bar's permissions. Only
 # with no app installed does it start this folder. A LaunchAgent works on
 # every macOS the app supports; the newer login-item API needs macOS 13.
-# Windows: the same command under the user's Run key, which starts it by the
-# clock and lists it in Task Manager's Startup apps; no administrator needed.
+# Windows: under the user's Run key, which starts it by the clock and lists it
+# in Task Manager's Startup apps; no administrator needed. There too it is the
+# installed MedSearch.exe whenever there is one, not a Python run from source.
 _LOGIN_LABEL = "com.halbarad.medsearch"
 _LOGIN_AGENT = Path.home() / "Library" / "LaunchAgents" / f"{_LOGIN_LABEL}.plist"
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _RUN_VALUE = "MedSearch"
+# Windows Setup's record of where it installed MedSearch: its uninstall entry,
+# named after the AppId in packaging/MedSearch.iss.
+_UNINSTALL_KEY = (r"Software\Microsoft\Windows\CurrentVersion\Uninstall"
+                  r"\{517922D8-2BE5-492D-9FA3-42779BACA2AC}_is1")
 
 def _winreg():
     import winreg
@@ -5167,12 +5278,36 @@ def _run_key_set():
     except OSError:
         return False
 
+def _installed_windows_exe():
+    """The installed MedSearch.exe, where Windows Setup says it put it, or None."""
+    reg = _winreg()
+    for root in (reg.HKEY_CURRENT_USER, getattr(reg, "HKEY_LOCAL_MACHINE", None)):
+        if root is None:
+            continue
+        try:
+            with reg.OpenKey(root, _UNINSTALL_KEY) as key:
+                where, _ = reg.QueryValueEx(key, "InstallLocation")
+        except OSError:
+            continue
+        exe = os.path.join(str(where), "MedSearch.exe")
+        if os.path.isfile(exe):
+            return exe
+    return None
+
+def _windows_login_command():
+    """What Open at login starts on Windows: the installed MedSearch.exe
+    whenever there is one, also for a copy run from source; else this copy."""
+    if getattr(sys, "frozen", False):
+        return _self_command("--background")
+    exe = _installed_windows_exe()
+    return [exe, "--background"] if exe else _self_command("--background")
+
 def _set_run_key(on):
     reg = _winreg()
     with reg.CreateKey(reg.HKEY_CURRENT_USER, _RUN_KEY) as key:
         if on:
             reg.SetValueEx(key, _RUN_VALUE, 0, reg.REG_SZ,
-                           subprocess.list2cmdline(_self_command("--background")))
+                           subprocess.list2cmdline(_windows_login_command()))
         else:
             try:
                 reg.DeleteValue(key, _RUN_VALUE)
@@ -5207,10 +5342,25 @@ def _set_open_at_login(on):
     _write_login_agent(_login_command())
 
 def _repair_login_item():
-    """A login item that starts a copy run from source while MedSearch.app is
-    installed is pointed at the app: started at login, that copy is Python to
-    macOS, and its menu bar item needs Python allowed there. Nothing else is
-    changed: no item, an unreadable one, or no app installed."""
+    """A login item that starts a copy run from source while MedSearch is
+    installed is pointed at the installed one: started at login, that copy is
+    Python to the system, by name and icon, and on a Mac its menu bar item
+    needs Python allowed there. Nothing else is changed: no item, an
+    unreadable one, one that already starts the installed MedSearch, or no
+    MedSearch installed."""
+    if sys.platform == "win32":
+        exe = _installed_windows_exe()
+        if not exe:
+            return
+        reg = _winreg()
+        try:
+            with reg.OpenKey(reg.HKEY_CURRENT_USER, _RUN_KEY) as key:
+                have, _ = reg.QueryValueEx(key, _RUN_VALUE)
+        except OSError:
+            return
+        if exe.lower() not in str(have).lower():
+            _set_run_key(True)
+        return
     if sys.platform != "darwin":
         return
     try:

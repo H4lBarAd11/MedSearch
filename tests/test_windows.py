@@ -362,24 +362,27 @@ def _on_windows(monkeypatch, **extra):
 
 
 class FakeWinreg:
-    """winreg over a dict of HKCU\\<key> -> {value: data}."""
-    HKEY_CURRENT_USER, REG_SZ = "HKCU", 1
+    """winreg over dicts of HKCU\\<key> (keys) and HKLM\\<key> (machine) -> {value: data}."""
+    HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, REG_SZ = "HKCU", "HKLM", 1
 
     def __init__(self):
-        self.keys = {}
+        self.keys, self.machine = {}, {}
 
     class _Key:
         def __init__(self, values): self.values = values
         def __enter__(self): return self
         def __exit__(self, *a): return False
 
+    def _store(self, root):
+        return self.machine if root == "HKLM" else self.keys
+
     def CreateKey(self, root, path):
-        return self._Key(self.keys.setdefault(path, {}))
+        return self._Key(self._store(root).setdefault(path, {}))
 
     def OpenKey(self, root, path):
-        if path not in self.keys:
+        if path not in self._store(root):
             raise FileNotFoundError(path)
-        return self._Key(self.keys[path])
+        return self._Key(self._store(root)[path])
 
     def QueryValueEx(self, key, name):
         if name not in key.values:
@@ -428,6 +431,54 @@ def test_settings_reports_the_windows_login_state(client, auth, monkeypatch, reg
     assert (got["can_open_at_login"], got["open_at_login"]) == (True, False)
     registry.keys[A._RUN_KEY] = {"MedSearch": "x"}
     assert client.get("/settings", headers=auth, base_url=BASE).json["open_at_login"] is True
+
+
+def _installed_exe(registry, tmp_path, machine=False):
+    """MedSearch.exe installed by Setup in tmp_path, as Setup records it."""
+    exe = tmp_path / "MedSearch.exe"
+    exe.write_text("")
+    (registry.machine if machine else registry.keys)[A._UNINSTALL_KEY] = {"InstallLocation": str(tmp_path) + os.sep}
+    return str(exe)
+
+
+def test_open_at_login_from_source_on_windows_starts_the_installed_exe(monkeypatch, registry, tmp_path):
+    _on_windows(monkeypatch, executable=r"C:\Python\pythonw.exe")
+    A._set_open_at_login(True)                      # nothing installed: this copy
+    assert "app.py" in registry.keys[A._RUN_KEY]["MedSearch"]
+    exe = _installed_exe(registry, tmp_path)
+    A._set_open_at_login(True)
+    assert registry.keys[A._RUN_KEY]["MedSearch"] == subprocess.list2cmdline([exe, "--background"])
+
+
+def test_an_exe_installed_for_every_user_is_found_too(monkeypatch, registry, tmp_path):
+    _on_windows(monkeypatch)
+    exe = _installed_exe(registry, tmp_path, machine=True)
+    assert A._installed_windows_exe() == exe
+    (tmp_path / "MedSearch.exe").unlink()           # Setup's record, but the exe is gone
+    assert A._installed_windows_exe() is None
+
+
+def test_a_run_key_left_by_a_source_run_is_pointed_at_the_installed_exe(monkeypatch, registry, tmp_path):
+    _on_windows(monkeypatch, executable=r"C:\Python\pythonw.exe")
+    A._set_open_at_login(True)                      # as a source run wrote it
+    A._repair_login_item()
+    assert "app.py" in registry.keys[A._RUN_KEY]["MedSearch"]       # nothing installed: stays
+    registry.keys[A._RUN_KEY]["MedSearch"] = r"C:\Elsewhere\pythonw.exe C:\Elsewhere\app.py --background"
+    A._repair_login_item()
+    assert registry.keys[A._RUN_KEY]["MedSearch"].startswith(r"C:\Elsewhere")   # nor another copy's
+    exe = _installed_exe(registry, tmp_path)
+    A._repair_login_item()
+    assert registry.keys[A._RUN_KEY]["MedSearch"] == subprocess.list2cmdline([exe, "--background"])
+
+
+def test_the_windows_repair_changes_nothing_else(monkeypatch, registry, tmp_path):
+    _on_windows(monkeypatch)
+    exe = _installed_exe(registry, tmp_path)
+    A._repair_login_item()
+    assert A._RUN_KEY not in registry.keys           # Open at login off: stays off
+    registry.keys[A._RUN_KEY] = {"MedSearch": f'"{exe.upper()}" --background'}
+    A._repair_login_item()
+    assert registry.keys[A._RUN_KEY]["MedSearch"] == f'"{exe.upper()}" --background'   # already it
 
 
 def test_run_from_source_on_windows_it_starts_without_a_console_window(monkeypatch, tmp_path):

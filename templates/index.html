@@ -515,6 +515,11 @@
         <div class="settings-version">This is MedSearch {{ app_version }}.</div>
         <button class="btn-secondary update-check-btn" id="updateCheckBtn" onclick="checkForUpdatesNow()">Check for updates</button>
       </div>
+      {% if installed %}<div class="settings-field" id="uninstallField">
+        <label>Uninstall</label>
+        <button class="btn-secondary update-check-btn" type="button" onclick="uninstallMedSearch()">Uninstall MedSearch…</button>
+        <div class="settings-hint">{% if on_windows %}Moves its settings, history, saved searches, exports and the web data of its windows to the Recycle Bin, removes the app, and quits. API keys and library sign-ins stay in Credential Manager, for a later install.{% else %}Moves the app, its settings, history, saved searches, exports and the web data of its windows to the Trash, and quits. API keys and library sign-ins stay in the Keychain, for a later install.{% endif %}</div>
+      </div>{% endif %}
     </div>
     <div class="settings-footer">
       <button class="btn-secondary" onclick="closeSettings()">Cancel</button>
