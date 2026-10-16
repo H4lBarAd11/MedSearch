@@ -59,8 +59,16 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-[email removed].
+reported by opening the **⋯** menu on the issue, pull request or comment
+concerned, choosing **Report content**, and sending it to GitHub Support. For
+anything that isn't a single piece of content, use
+[GitHub's abuse report form](https://github.com/contact/report-abuse).
+
+MedSearch belongs to a personal account, and GitHub only passes reports
+privately to the maintainers of repositories owned by an organization. So
+reports go to GitHub Support, who review them, and the community leaders act on
+the outcome here. In this project that is the maintainer, Riccardo Nevoso
+([@H4lBarAd11](https://github.com/H4lBarAd11)).
 All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
