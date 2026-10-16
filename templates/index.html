@@ -23,6 +23,7 @@
     hasWos:             {{ 'true' if has_wos else 'false' }},
     hasIeee:            {{ 'true' if has_ieee else 'false' }},
     hasSemanticscholar: {{ 'true' if has_semanticscholar else 'false' }},
+    hasGooglebooks:     {{ 'true' if has_googlebooks else 'false' }},
     aiOn:               {{ 'true' if ai_on else 'false' }},
     hasAiKey:           {{ 'true' if has_ai_key else 'false' }},
   };
@@ -213,6 +214,11 @@
       <div class="db-check"></div>
       <span class="db-name">Open Library</span>
       <span class="db-badge free">Free</span>
+    </div>
+    <div class="db-item{{ ' checked' if 'googlebooks' in sources and has_googlebooks }}" data-db="googlebooks" data-needs-key="googlebooks">
+      <div class="db-check"></div>
+      <span class="db-name">Google Books</span>
+      <span class="db-badge {{ 'available' if has_googlebooks else 'needs-key' }}" id="badge_googlebooks">{{ 'Available' if has_googlebooks else 'API required' }}</span>
     </div>
     <div class="db-item{{ ' checked' if 'scopus' in sources and has_scopus }}" data-db="scopus" data-needs-key="scopus">
       <div class="db-check"></div>
@@ -445,6 +451,10 @@
       <div class="settings-field">
         <label>Semantic Scholar API key</label>
         <input type="password" id="set_semanticscholar" placeholder="apply free at semanticscholar.org/product/api">
+      </div>
+      <div class="settings-field">
+        <label>Google Books API key</label>
+        <input type="password" id="set_googlebooks" placeholder="get free at console.cloud.google.com">
       </div>
       <div class="settings-field">
         <label>OpenAlex API key <span style="font-weight:normal;color:var(--text3)">— optional, ten times more searches a day</span></label>

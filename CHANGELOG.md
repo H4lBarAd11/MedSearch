@@ -16,6 +16,7 @@ one line per change, in plain words, no internals.
 - The books and chapters OpenAlex and Crossref find are tagged Book and exported as books, with the book's title, editors, publisher and ISBN where Crossref has them. Find in a library looks them up in WorldCat, a chapter as its book.
 - Crossref also finds whole books: books, monographs, edited books and reference books.
 - A book is called free only when there is a PDF of it. OpenAlex and Unpaywall list some paid books as free because of a web page that is not the book, and those now open through your library instead.
+- New database, with a free key from a Google Cloud project, added in Settings: Google Books. It knows most books in print, recent editions included. A book in the public domain is read free; for many others Preview shows the pages the publisher allows. Find in a library looks each one up in WorldCat by its ISBN. What may be read depends on the country you search from.
 
 ## 2.1
 

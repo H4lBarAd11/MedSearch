@@ -577,3 +577,134 @@ def test_crossref_types_of_book(type_, kind):
     a = A._crossref_article(cr_item(type_, **{"container-title": ["Example"]}))
     assert (a["book"] or {}).get("kind") == kind
     assert ("Book" in a["pub_types"]) == bool(kind)
+
+
+# ── Google Books ────────────────────────────────────────────────────────────
+
+def volume(viewability="NO_PAGES", **access):
+    """A Google Books volume, in the shape its API documents, placeholder values."""
+    return {"volumeInfo": {"title": "Example Handbook", "subtitle": "Third edition",
+                           "authors": ["Jane A. Doe", "Richard Roe"], "publisher": "Example Press",
+                           "publishedDate": "2016-03-01", "description": "<p>A <b>handbook</b> &amp; more.</p>",
+                           "industryIdentifiers": [{"type": "ISBN_10", "identifier": "0306406152"},
+                                                   {"type": "ISBN_13", "identifier": "9780306406157"},
+                                                   # a Library of Congress number: ten digits, no ISBN
+                                                   {"type": "OTHER", "identifier": "LCCN:2001012345"}],
+                           "previewLink": "https://books.google.example/preview",
+                           "infoLink": "https://books.google.example/info"},
+            "accessInfo": {"viewability": viewability, "publicDomain": False,
+                           "webReaderLink": "https://play.google.example/reader", **access}}
+
+
+@pytest.fixture
+def google(monkeypatch):
+    """A fake Google Books answering `reply[0]`; records the URLs asked."""
+    asked, reply = Terms(), [({"totalItems": 0, "items": []}, 200)]
+
+    def get(url, *a, **k):
+        asked.append(url)
+        return reply[0]
+    monkeypatch.setattr(A, "fetch_json", get)
+    A.CONFIG["google_books_api_key"] = "gb-key"
+    asked.reply = reply
+    return asked
+
+
+def test_a_google_books_volume_is_read_as_one_edition_of_a_book():
+    a = A._googlebooks_article(volume())
+    assert a["title"] == "Example Handbook: Third edition"
+    assert a["author_list"] == ["Doe, Jane A.", "Roe, Richard"] and a["authors"] == "Doe, J.; Roe, R."
+    assert (a["year"], a["journal"], a["source"], a["pub_types"]) == (
+        "2016", "Example Press", "Google Books", ["Book"])
+    assert a["abstract"] == "A handbook & more."
+    assert a["book"]["isbn"] == ["9780306406157"]           # its ISBN-10 and -13 are one book
+    assert a["book"]["google"] == "https://books.google.example/info"
+    assert (a["access_kind"], a["book"]["preview"]) == ("none", None)
+
+
+def test_a_public_domain_volume_is_read_free_and_a_partial_one_previewed():
+    free = A._googlebooks_article(volume("ALL_PAGES", publicDomain=True,
+                                         accessViewStatus="FULL_PUBLIC_DOMAIN"))
+    assert (free["access_kind"], free["access_link"]) == ("open", "https://play.google.example/reader")
+    sample = A._googlebooks_article(volume("PARTIAL", accessViewStatus="SAMPLE"))
+    assert sample["access_kind"] == "none"
+    assert sample["book"]["preview"] == "https://books.google.example/preview"
+
+
+def test_google_books_is_asked_with_its_key_page_order_and_author(google):
+    google.reply[0] = ({"totalItems": 77, "items": [
+        volume(), dict(volume(), volumeInfo=dict(volume()["volumeInfo"], authors=["John Roe"])),
+        dict(volume(), volumeInfo=dict(volume()["volumeInfo"], publishedDate="1999"))]}, 200)
+    arts, total = A.search_googlebooks("glioma", 100, 2000, None, sort="date", offset=40,
+                                       people=A.people_filter("Jane Doe"))
+    p = ol_params(google[0])
+    assert google[0].startswith("https://www.googleapis.com/books/v1/volumes?")
+    assert p == {"q": 'glioma inauthor:"Doe"', "maxResults": "40", "startIndex": "40",
+                 "printType": "books", "orderBy": "newest", "key": "gb-key"}
+    # Another author's book and one outside the years are left out here.
+    assert [a["year"] for a in arts] == ["2016"] and total == 77
+
+
+def test_an_author_alone_asks_google_books_by_the_name_only(google):
+    A.search_googlebooks("", 10, None, None, people=A.people_filter("Jane Doe"))
+    assert ol_params(google[0])["q"] == 'inauthor:"Doe"'
+
+
+@pytest.mark.parametrize("status, body, says", [
+    (429, {"error": {"message": "Quota exceeded"}}, "daily allowance for this key is used up (Quota exceeded)"),
+    (400, {"error": {"message": "API key not valid."}}, "did not accept the API key (400: API key not valid.)"),
+    (403, {"error": {"message": "Books API has not been used in project 1"}}, "Books API is turned on"),
+    (0, None, "didn't respond"),
+    (500, None, "returned HTTP 500."),
+])
+def test_google_books_says_why_it_refused(google, status, body, says):
+    google.reply[0] = (body, status)
+    with pytest.raises(RuntimeError, match=re.escape(says)):
+        A.search_googlebooks("glioma", 10, None, None)
+
+
+def test_google_books_needs_its_key_and_cannot_follow_an_institution_or_a_doi(google):
+    A.CONFIG["google_books_api_key"] = ""
+    with pytest.raises(RuntimeError, match="No Google Books API key"):
+        A.search_googlebooks("glioma", 10, None, None)
+    with pytest.raises(A.SourceCannotAnswer, match="institution"):
+        A.search_googlebooks("glioma", 10, None, None, people=A.people_filter(None, "Example Hospital"))
+    with pytest.raises(A.SourceCannotAnswer):
+        A.doi_lookup("googlebooks", A.search_googlebooks, ["10.9/x"])
+    assert google == []
+
+
+def test_the_google_books_key_is_a_secret_kept_by_settings(client, auth):
+    assert "google_books_api_key" in A.SECRET_KEYS
+    assert A._KEY_REQUIRED["googlebooks"] == ("google_books_api_key", "Google Books")
+    assert client.post("/settings", json={"google_books_api_key": "gb-key-1234"},
+                       headers=auth, base_url=BASE).json["ok"]
+    shown = client.get("/settings", headers=auth, base_url=BASE).json["google_books_api_key"]
+    assert shown and "gb-key-1234" not in shown
+    page = client.get("/", base_url=BASE).get_data(as_text=True)
+    assert 'id="badge_googlebooks">Available<' in page and "hasGooglebooks:     true" in page
+
+
+def test_google_books_comes_after_open_library_and_asks_for_its_key_until_it_has_one(client, auth):
+    keys = [k for k, *_ in A.SOURCES]
+    assert keys.index("googlebooks") == keys.index("openlibrary") + 1
+    client.post("/sources", json={"sources": ["pubmed", "googlebooks"]}, headers=auth, base_url=BASE)
+    page = client.get("/", base_url=BASE).get_data(as_text=True)
+    assert 'id="badge_googlebooks">API required<' in page
+    assert re.findall(r'class="db-item checked" data-db="([a-z]+)"', page) == ["pubmed"]
+
+
+def test_a_google_books_book_is_exported_with_its_page(tmp_path, monkeypatch):
+    a = A._googlebooks_article(volume())
+    md = _export(tmp_path, monkeypatch, [a], "md")
+    assert "**Google Books:** https://books.google.example/info" in md
+    assert A.article_to_zotero_item(a)["url"] == "https://books.google.example/info"
+
+
+def test_every_settings_field_the_page_reads_is_on_the_page():
+    js = (Path(A.__file__).parent / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    html = (Path(A.__file__).parent / "templates" / "index.html").read_text(encoding="utf-8")
+    ids = set(re.findall(r"getElementById\('(set_[a-z_]+)'\)", js))
+    ids |= set(re.findall(r"^\s+\w+:\s+'(set_[a-z_]+)',", js, re.M))
+    assert "set_googlebooks" in ids
+    assert {i for i in ids if f'id="{i}"' not in html} == set()

@@ -149,6 +149,7 @@ DEFAULTS = {
     "wos_api_key":       "",
     "ieee_api_key":      "",
     "semantic_scholar_api_key": "",
+    "google_books_api_key": "",
     # Optional: OpenAlex and CORE answer without a key, a key allows more.
     "openalex_api_key":  "",
     "core_api_key":      "",
@@ -189,7 +190,8 @@ DEFAULTS = {
 # Settings, and it is what identifies the caller to Unpaywall.
 SECRET_KEYS = ("anthropic_api_key", "pubmed_api_key", "scopus_api_key",
                "scopus_insttoken", "wos_api_key", "ieee_api_key",
-               "semantic_scholar_api_key", "openalex_api_key", "core_api_key")
+               "semantic_scholar_api_key", "openalex_api_key", "core_api_key",
+               "google_books_api_key")
 
 
 def _config_for_disk(cfg, stored):
@@ -1783,6 +1785,8 @@ def _book_page(bk):
         return "NCBI Bookshelf", _bookshelf_url(bk["bookshelf"])
     if bk.get("openlibrary"):
         return "Open Library", bk["openlibrary"]
+    if bk.get("google"):
+        return "Google Books", bk["google"]
     return None, None
 
 def _pubmed_book(art, pmid, source_label):
@@ -2827,6 +2831,78 @@ def search_openlibrary(query, max_r, y_from, y_to, sort="relevance", offset=0, p
     arts = [a for a in arts if within_range(a["year"], y_from, y_to) and (not au or _wrote(a, au))]
     return arts, data.get("numFound") or 0
 
+# ── Google Books ─────────────────────────────────────────────────────────────
+# Needs a free key from a Google Cloud project with the Books API turned on;
+# without one Google allows no searches. Each result is one edition. What may
+# be read depends on the country the search comes from: a public-domain book
+# in full, many others a preview of some pages.
+GOOGLE_BOOKS = "https://www.googleapis.com/books/v1/volumes"
+
+def _googlebooks_get(params):
+    key = _key("google_books_api_key")
+    if not key:
+        raise RuntimeError("No Google Books API key set.")
+    data, status = fetch_json(f"{GOOGLE_BOOKS}?{urllib.parse.urlencode(dict(params, key=key))}",
+                              timeout=20, error_body=True)
+    if status == 200 and isinstance(data, dict):
+        return data
+    said = (((data or {}).get("error") or {}).get("message") or "").strip() if isinstance(data, dict) else ""
+    if status == 429:
+        raise RuntimeError("Google Books' daily allowance for this key is used up"
+                           + (f" ({said})" if said else "") + ". It renews tomorrow.")
+    if status in (400, 401, 403):
+        raise RuntimeError(f"Google Books did not accept the API key ({status}"
+                           + (f": {said}" if said else "") + "). Check it in Settings, and that "
+                           "the Books API is turned on in the key's Google Cloud project.")
+    if not status:
+        raise RuntimeError("Google Books didn't respond. Check your connection and try again.")
+    raise RuntimeError(f"Google Books returned HTTP {status}" + (f": {said}" if said else "."))
+
+def _googlebooks_article(item):
+    v, access = item.get("volumeInfo") or {}, item.get("accessInfo") or {}
+    title = " ".join((v.get("title") or "").split()) or "No title"
+    if v.get("subtitle"):
+        title += ": " + " ".join(v["subtitle"].split())
+    parts = [_name_parts(n) for n in v.get("authors") or [] if n and n.strip()]
+    names = [f"{f}, {g}" if g else f for f, g in parts]
+    authors = "; ".join(f"{f}, {g[0]}." if g else f for f, g in parts[:3]) + \
+              (" et al." if len(parts) > 3 else "")
+    year = (re.match(r"\d{4}", v.get("publishedDate") or "") or [None])[0]
+    publisher = (v.get("publisher") or "").strip()
+    isbns = list(dict.fromkeys(filter(None, (_isbn13(i.get("identifier"))
+                                             for i in v.get("industryIdentifiers") or []
+                                             if i.get("type") in ("ISBN_13", "ISBN_10")))))
+    whole = access.get("publicDomain") or access.get("accessViewStatus") == "FULL_PUBLIC_DOMAIN"
+    a = _article(title=title, authors=authors, author_list=names, year=year or "n.d.",
+                 journal=publisher, abstract=_jats_text(v.get("description") or ""),
+                 source="Google Books", pub_types=["Book"],
+                 book={"kind": "book", "title": title, "publisher": publisher, "place": "",
+                       "isbn": isbns, "editors": [], "bookshelf": None,
+                       "google": v.get("infoLink") or v.get("canonicalVolumeLink") or None,
+                       "preview": v.get("previewLink") or None
+                                  if access.get("viewability") == "PARTIAL" else None})
+    reader = access.get("webReaderLink") or v.get("previewLink")
+    if whole and reader:
+        a["access_kind"], a["access_link"] = "open", reader
+    else:
+        a["access_kind"], a["access_link"] = "none", None
+    return a
+
+def search_googlebooks(query, max_r, y_from, y_to, sort="relevance", offset=0, people=None):
+    _cannot("Google Books", people, institution=False)
+    au = (people or {}).get("author")
+    # Google matches inauthor: on the words of a name; each book is checked
+    # for the initial as well.
+    q = " ".join(filter(None, [query.strip(), f'inauthor:"{au["family"]}"' if au else ""]))
+    # At most 40 a page. Google has no years filter: they are checked here.
+    params = {"q": q, "maxResults": min(max_r, 40), "startIndex": offset, "printType": "books"}
+    if sort == "date":
+        params["orderBy"] = "newest"
+    data = _googlebooks_get(params)
+    arts = [_googlebooks_article(i) for i in data.get("items") or [] if isinstance(i, dict)]
+    arts = [a for a in arts if within_range(a["year"], y_from, y_to) and (not au or _wrote(a, au))]
+    return arts, data.get("totalItems") or 0
+
 # Every source, in dedup-priority order: when two sources return the same
 # paper, the earlier one keeps it. Cochrane and Guidelines come before plain
 # PubMed so systematic reviews and guidelines are labelled as such.
@@ -2837,6 +2913,7 @@ SOURCES = [
     ("pubmed",          "PubMed",              search_pubmed,           True),
     ("bookshelf",       "NCBI Bookshelf",      search_bookshelf,        True),
     ("openlibrary",     "Open Library",        search_openlibrary,      False),
+    ("googlebooks",     "Google Books",        search_googlebooks,      False),
     ("europepmc",       "Europe PMC",          search_europepmc,        True),
     ("scopus",          "Scopus",              search_scopus,           False),
     ("wos",             "Web of Science",      search_wos,              False),
@@ -2851,7 +2928,8 @@ SOURCES = [
 _KEY_REQUIRED = {"scopus":          ("scopus_api_key", "Scopus"),
                  "wos":             ("wos_api_key", "Web of Science"),
                  "ieee":            ("ieee_api_key", "IEEE Xplore"),
-                 "semanticscholar": ("semantic_scholar_api_key", "Semantic Scholar")}
+                 "semanticscholar": ("semantic_scholar_api_key", "Semantic Scholar"),
+                 "googlebooks":     ("google_books_api_key", "Google Books")}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CITED BY, AND ONE MERGED LIST ACROSS SOURCES  (for use as a library too)
@@ -3709,6 +3787,7 @@ def index():
                            has_wos=bool((CONFIG.get("wos_api_key","") or "").strip()),
                            has_ieee=bool(_key("ieee_api_key")),
                            has_semanticscholar=bool(_key("semantic_scholar_api_key")),
+                           has_googlebooks=bool(_key("google_books_api_key")),
                            institution_proxies=CONFIG.get("institution_proxies", []),
                            active_proxy=CONFIG.get("active_proxy", 0),
                            sources=_start_sources(),

@@ -38,7 +38,7 @@ const ONBOARD_CONTENT = {
         ],
       },
     ],
-    note: '<strong>Optional keys:</strong> Scopus, Web of Science, IEEE Xplore and Semantic Scholar need a key to be searched; keys for PubMed, OpenAlex and CORE raise their limits. Everything else works without them.',
+    note: '<strong>Optional keys:</strong> Scopus, Web of Science, IEEE Xplore, Semantic Scholar and Google Books need a key to be searched; keys for PubMed, OpenAlex and CORE raise their limits. Everything else works without them.',
     note2: '<strong>Scopus &amp; Web of Science:</strong> these only work from your <strong>institution\'s network</strong>. From home, connect to your university VPN, or ask your library for an Elsevier "institutional token" and add it in Settings. If you see a 401 error, you\'re off-network.',
   },
   it: {
@@ -74,7 +74,7 @@ const ONBOARD_CONTENT = {
         ],
       },
     ],
-    note: '<strong>Chiavi opzionali:</strong> Scopus, Web of Science, IEEE Xplore e Semantic Scholar richiedono una chiave per essere cercati; le chiavi di PubMed, OpenAlex e CORE alzano i loro limiti. Tutto il resto funziona anche senza.',
+    note: '<strong>Chiavi opzionali:</strong> Scopus, Web of Science, IEEE Xplore, Semantic Scholar e Google Books richiedono una chiave per essere cercati; le chiavi di PubMed, OpenAlex e CORE alzano i loro limiti. Tutto il resto funziona anche senza.',
     note2: '<strong>Scopus e Web of Science:</strong> funzionano solo dalla <strong>rete della tua istituzione</strong>. Da casa, connettiti alla VPN dell\'università, oppure chiedi alla biblioteca un "institutional token" Elsevier e inseriscilo nelle Impostazioni. Se vedi un errore 401, sei fuori dalla rete.',
   },
 };
@@ -739,6 +739,7 @@ let dbKeyPresent = {
   wos:             MS.hasWos,
   ieee:            MS.hasIeee,
   semanticscholar: MS.hasSemanticscholar,
+  googlebooks:     MS.hasGooglebooks,
 };
 
 document.querySelectorAll('.db-item').forEach(item => {
@@ -792,7 +793,7 @@ const _DB_SHORT = {pubmed: 'PubMed', cochrane: 'Cochrane', guidelines: 'Guidelin
                    wos: 'Web of Science', europepmc: 'Europe PMC', openalex: 'OpenAlex',
                    crossref: 'Crossref', core: 'CORE', ieee: 'IEEE Xplore',
                    semanticscholar: 'Semantic Scholar', bookshelf: 'NCBI Bookshelf',
-                   openlibrary: 'Open Library'};
+                   openlibrary: 'Open Library', googlebooks: 'Google Books'};
 function updateSourcesSummary() {
   const dbs = getSelectedDBs();
   const label = document.getElementById('dockSourcesLabel');
@@ -846,6 +847,15 @@ const DB_KEY_INFO = {
       'Paste it into <strong>Settings</strong> (bottom bar) → Semantic Scholar, and Save.',
     ],
   },
+  googlebooks: {
+    name: 'Google Books',
+    intro: 'Google Books answers no searches made without a key. The key is free, from a Google account:',
+    steps: [
+      'In the <a href="https://console.cloud.google.com/apis/library/books.googleapis.com" target="_blank">Google Cloud console</a>, create a project and turn on the Books API.',
+      'Under APIs &amp; Services → Credentials, choose Create credentials → API key, and copy it.',
+      'Paste it into <strong>Settings</strong> (bottom bar) → Google Books, and Save.',
+    ],
+  },
 };
 
 function showApiKeyPrompt(dbKey) {
@@ -868,7 +878,8 @@ function goToSettingsFromPrompt() {
 
 // The settings that hold the key each database needs.
 const DB_KEY_SETTING = {scopus: 'scopus_api_key', wos: 'wos_api_key', ieee: 'ieee_api_key',
-                        semanticscholar: 'semantic_scholar_api_key'};
+                        semanticscholar: 'semantic_scholar_api_key',
+                        googlebooks: 'google_books_api_key'};
 
 // Refresh the badges of the databases that need a key, and the internal state,
 // from the settings as /settings returns them (masked: only whether each is set).
@@ -1465,21 +1476,29 @@ function sourceIcon(s) {
 
 // The button to a free copy, or ''. A PDF opens in the viewer. A book on NCBI
 // Bookshelf, read as web pages, opens at its Bookshelf page in a MedSearch
-// window; a free Open Library book in the Internet Archive's reader, which
-// loads a page at a time and offers the PDF to download.
+// window; a free Open Library or Google Books book in its reader, which loads
+// a page at a time.
 function freeCopyButton(a) {
   if (a.access_kind !== 'open' || !a.access_link) return '';
-  const reader = a.book && (a.book.bookshelf ? 'Read on Bookshelf' : a.book.openlibrary ? 'Read free' : '');
+  const reader = a.book && (a.book.bookshelf ? 'Read on Bookshelf'
+                            : (a.book.openlibrary || a.book.google) ? 'Read free' : '');
   if (reader)
     return `<button class="link-btn open-access" onclick="openInAppBrowser('${escAttr(a.access_link)}', '${escAttr(a.title || 'Book')}')">${ico('preprint')} ${reader}</button>`;
   return `<button class="link-btn open-access" onclick="openPdf('${escAttr(a.access_link)}', '${escAttr(a.title || 'PDF')}')">${ico('preprint')} Read PDF</button>`;
 }
 
 // A book Open Library lends: its edition's page, where Borrow takes a free
-// Internet Archive account. The window keeps the sign-in.
+// Internet Archive account. The window keeps the sign-in. A book Google Books
+// shows some pages of: its preview.
 function borrowButton(a) {
-  if (!a.book || !a.book.borrow) return '';
-  return `<button class="link-btn doi" onclick="openInAppBrowser('${escAttr(a.book.borrow)}', '${escAttr(a.title || 'Book')}')">${ico('library')} Borrow</button>`;
+  if (!a.book) return '';
+  const title = escAttr(a.title || 'Book');
+  let out = '';
+  if (a.book.borrow)
+    out += `<button class="link-btn doi" onclick="openInAppBrowser('${escAttr(a.book.borrow)}', '${title}')">${ico('library')} Borrow</button>`;
+  if (a.book.preview)
+    out += `<button class="link-btn doi" onclick="openInAppBrowser('${escAttr(a.book.preview)}', '${title}')">${ico('preprint')} Preview</button>`;
+  return out;
 }
 
 // WorldCat, the libraries' shared catalogue, on this book: by its ISBN when it
@@ -2388,6 +2407,7 @@ async function openSettings() {
     wos_api_key:       'set_wos',
     ieee_api_key:      'set_ieee',
     semantic_scholar_api_key: 'set_semanticscholar',
+    google_books_api_key: 'set_googlebooks',
     openalex_api_key:  'set_openalex',
     core_api_key:      'set_core',
     unpaywall_email:   'set_email',
@@ -2631,6 +2651,7 @@ async function saveSettings() {
     wos_api_key:       document.getElementById('set_wos').value.trim(),
     ieee_api_key:      document.getElementById('set_ieee').value.trim(),
     semantic_scholar_api_key: document.getElementById('set_semanticscholar').value.trim(),
+    google_books_api_key: document.getElementById('set_googlebooks').value.trim(),
     openalex_api_key:  document.getElementById('set_openalex').value.trim(),
     core_api_key:      document.getElementById('set_core').value.trim(),
     unpaywall_email:   document.getElementById('set_email').value.trim(),

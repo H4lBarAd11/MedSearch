@@ -152,3 +152,25 @@ test("a Crossref chapter's row: DOI, Sci-Hub as now, then Find in a library", ()
                                book: {kind: "chapter", title: "Example Atlas", isbn: ["9780306406157"]}}),
                    ["DOI", "Sci-Hub", "Find in a library", "Citations", "Explain", "Zotero"]);
 });
+
+// ── Google Books ────────────────────────────────────────────────────────────
+
+test("a public-domain Google book is read free; one with sample pages is previewed", () => {
+  const free = freeCopyButton({title: "Example Handbook", access_kind: "open",
+                               access_link: "https://play.google.example/reader",
+                               book: {kind: "book", google: "https://books.google.example/info"}});
+  assert.match(free, /Read free<\/button>$/);
+  assert.ok(free.includes("openInAppBrowser('https://play.google.example/reader'"));
+  const sample = borrowButton({title: "Example Handbook",
+                               book: {preview: "https://books.google.example/preview"}});
+  assert.match(sample, /Preview<\/button>$/);
+  assert.ok(sample.includes("openInAppBrowser('https://books.google.example/preview', 'Example Handbook')"));
+});
+
+test("a Google book's row: Preview, then Find in a library by its ISBN", () => {
+  assert.deepEqual(rowButtons({title: "Example Handbook", access_kind: "none", access_link: null,
+                               book: {kind: "book", isbn: ["9780306406157"],
+                                      google: "https://books.google.example/info",
+                                      preview: "https://books.google.example/preview"}}),
+                   ["Preview", "Find in a library", "Explain", "Zotero"]);
+});
