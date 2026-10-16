@@ -995,7 +995,7 @@ const DB_KEY_INFO = {
     intro: 'Google Books answers no searches made without a key. The key is free, from a Google account:',
     steps: [
       'In the <a href="https://console.cloud.google.com/apis/library/books.googleapis.com" target="_blank">Google Cloud console</a>, create a project and turn on the Books API.',
-      'Under APIs &amp; Services → Credentials, choose Create credentials → API key, and copy it.',
+      'Under APIs &amp; Services → Credentials, choose Create credentials → API key, and copy the key it shows: one line beginning <code>AIza</code>.',
       'Paste it into <strong>Settings</strong> (bottom bar) → Google Books, and Save.',
     ],
   },

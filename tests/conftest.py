@@ -54,6 +54,9 @@ def clean_state(monkeypatch):
     def no_network(*a, **k):
         raise AssertionError("test tried to reach the network")
     monkeypatch.setattr(A.urllib.request, "urlopen", no_network)
+    # Nor does any test see a MedSearch.app installed on the Mac running it:
+    # the ones about an installed app say so themselves.
+    monkeypatch.setattr(A, "_installed_mac_app", lambda: False)
     yield
 
 

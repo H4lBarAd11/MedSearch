@@ -195,7 +195,7 @@ touches the Keychain, so it never asks.
 | **Web of Science** | [developer.clarivate.com](https://developer.clarivate.com) | Web of Science as a source |
 | **IEEE Xplore** | [developer.ieee.org](https://developer.ieee.org) | IEEE Xplore as a source (200 calls a day) |
 | **Semantic Scholar** | [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api) | Semantic Scholar as a source. Requested with an institutional email address; a key left unused for about 60 days may be removed |
-| **Google Books** | [console.cloud.google.com](https://console.cloud.google.com/apis/library/books.googleapis.com): a project with the Books API turned on, then *Credentials ▸ API key* | Google Books as a source. Without a key Google answers no searches; the key's daily allowance shows in the Google Cloud console |
+| **Google Books** | [console.cloud.google.com](https://console.cloud.google.com/apis/library/books.googleapis.com): a project with the Books API turned on, then *Credentials ▸ API key*: one line beginning `AIza` | Google Books as a source. Without a key Google answers no searches; the key's daily allowance shows in the Google Cloud console |
 | **OpenAlex** | [openalex.org](https://openalex.org) | Optional: about 1,000 OpenAlex searches a day instead of about 100 |
 | **CORE** | [core.ac.uk/services/api](https://core.ac.uk/services/api) | Optional: more CORE searches a minute |
 | **Unpaywall** | any valid email address | Better detection of free full text. It is also given, as the contact they ask apps for, to Crossref, NCBI and Open Library |
