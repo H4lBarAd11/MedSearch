@@ -1,14 +1,15 @@
 <p align="center">
-  <img src="docs/readme/banner.svg" alt="MedSearch — the medical literature, thirteen sources at once, with AI summaries, a PDF reader and a research assistant" width="100%">
+  <img src="docs/readme/banner.svg" alt="MedSearch — the medical literature, sixteen sources at once, with AI summaries, a PDF reader and a research assistant" width="100%">
 </p>
 
 MedSearch is a desktop application for macOS and Windows, for searching the medical and
 scientific literature. One question goes to PubMed, Europe PMC, Cochrane, a
 clinical-guidelines source, ClinicalTrials.gov, OpenAlex, Crossref, CORE, arXiv, Scopus,
-Web of Science, IEEE Xplore and Semantic Scholar at the same time; the answers come back as
-one list, with the duplicates removed, the free full text found where it exists, and
-retracted papers marked before anyone quotes them. Google Scholar opens beside them, with
-the same search.
+Web of Science, IEEE Xplore and Semantic Scholar, and for books to NCBI Bookshelf, Open
+Library and Google Books, at the same time; the answers come back as one list, with the
+duplicates removed, the free full text found where it exists, and retracted papers marked
+before anyone quotes them. Google Scholar opens beside them with the same search, and so do
+the platforms your library subscribes to, such as ClinicalKey and UpToDate.
 
 It is a personal project by [Riccardo Nevoso](https://github.com/H4lBarAd11), built for
 the way clinicians and researchers actually search: one window instead of a dozen browser
@@ -30,7 +31,7 @@ tabs.
 
 ## What it does
 
-**One search, every source.** The thirteen sources are searched in parallel and merged into a
+**One search, every source.** The sixteen sources are searched in parallel and merged into a
 single deduplicated list. Each source reports on its own, so one that fails (a missing key,
 an off-campus Scopus) says so in a dialog and the others' results still arrive. Europe PMC
 brings the preprint servers (medRxiv, bioRxiv and others) and the full text of its
@@ -47,14 +48,33 @@ typed. With either set, the search box can be left empty to list everything by t
 one in use shows as a chip beside the search bar, and saved searches keep them. A database
 that keeps no authors or no institutions says so and is left out of such a search.
 
+**Languages.** Also under *Options*, add a language and every search finds only papers and
+books in English and that language, English first, until the languages are removed again; a
+chip beside the search bar shows the ones in use. The databases that can be asked for a
+language are asked. Web of Science, Crossref, CORE, arXiv, IEEE Xplore and Semantic Scholar
+can't be, so they say so above their results and leave out only what they say is in another
+language.
+
 **Search by DOI.** Paste a DOI, a doi.org link or a link to the article, or several DOIs at
-once, and each ticked source looks those papers up by DOI. Years, Strict, author and
-institution don't apply. A paper none of them has is shown from Crossref, and a DOI that
+once, and each ticked source looks those papers up by DOI. Years, Strict, author,
+institution and languages don't apply. A paper none of them has is shown from Crossref, and a DOI that
 nobody knows is reported.
 
 **Guidelines.** A *Guidelines* source finds national and society guidelines indexed in
-PubMed, and the *Guidelines* panel opens a country's official body directly (SNLG, NICE,
-ECRI, AWMF, HAS and others) with the search already filled in where the site allows it.
+PubMed, NICE's and WHO's among them (they are kept on NCBI Bookshelf), and the *Guidelines*
+panel opens a country's official body directly (SNLG, NICE, ECRI, AWMF, HAS and others) with
+the search already filled in where the site allows it.
+
+**Books and chapters.** Three databases find books: **NCBI Bookshelf** (StatPearls,
+GeneReviews, health technology assessments and many more, free to read), **Open Library**
+(the Internet Archive's catalogue) and **Google Books** (with a free key). OpenAlex and
+Crossref return books and chapters too. Each is tagged *Book*, with the ways to a copy it
+has: *Read on Bookshelf*, *Read free* for a book in the public domain, *Borrow* for one Open
+Library lends (for an hour or two weeks, with a free Internet Archive account), *Preview*
+for the pages a publisher allows on Google Books, *DOI (via library)* for one your library
+may hold, and *Find in a library*, which looks it up in WorldCat, the shared catalogue of
+libraries worldwide. A book is called free only when there is a copy of it to read, never
+for a web page about it. *Book* is also a choice in the study-type filter.
 
 **What a result tells you.** Study design (meta-analysis, systematic review, RCT, …),
 journal and year, journal quartile for the major journals, citation count, and a
@@ -73,7 +93,8 @@ on/off* in the bottom bar, turns all of it off.
 
 **Citations and export.** A citation graph for any paper: what it cites, and what cites it,
 gathered from PubMed, Scopus, OpenAlex and OpenCitations. Export to Markdown, BibTeX or RIS,
-or straight into Zotero.
+or straight into Zotero; a chapter goes as a chapter of its book, with the book's title,
+editors and publisher, and a whole book as a book.
 
 **From the menu bar.** MedSearch keeps an icon in the macOS menu bar, or by the clock on
 Windows: a quick search from anywhere, your recent searches, and the default source for
@@ -151,7 +172,8 @@ The installers are built with `packaging/build-mac.sh` and `packaging/build-wind
 ## API keys
 
 The free sources need no keys: PubMed, Europe PMC, Cochrane, the guidelines source,
-ClinicalTrials.gov, OpenAlex, Crossref, CORE and arXiv work out of the box. Keys are added
+ClinicalTrials.gov, OpenAlex, Crossref, CORE, arXiv, NCBI Bookshelf and Open Library work
+out of the box. Keys are added
 in **Settings** (bottom bar) and never leave the machine: on macOS they are kept in the
 **Keychain** (visible in Keychain Access under *MedSearch*, and revocable from there), and
 on Windows in **Credential Manager** (*Windows Credentials*, as *MedSearch/…*), so no key
@@ -173,9 +195,10 @@ touches the Keychain, so it never asks.
 | **Web of Science** | [developer.clarivate.com](https://developer.clarivate.com) | Web of Science as a source |
 | **IEEE Xplore** | [developer.ieee.org](https://developer.ieee.org) | IEEE Xplore as a source (200 calls a day) |
 | **Semantic Scholar** | [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api) | Semantic Scholar as a source. Requested with an institutional email address; a key left unused for about 60 days may be removed |
+| **Google Books** | [console.cloud.google.com](https://console.cloud.google.com/apis/library/books.googleapis.com): a project with the Books API turned on, then *Credentials ▸ API key* | Google Books as a source. Without a key Google answers no searches; the key's daily allowance shows in the Google Cloud console |
 | **OpenAlex** | [openalex.org](https://openalex.org) | Optional: about 1,000 OpenAlex searches a day instead of about 100 |
 | **CORE** | [core.ac.uk/services/api](https://core.ac.uk/services/api) | Optional: more CORE searches a minute |
-| **Unpaywall** | any valid email address | Better detection of free full text |
+| **Unpaywall** | any valid email address | Better detection of free full text. It is also given, as the contact they ask apps for, to Crossref, NCBI and Open Library |
 
 > [!IMPORTANT]
 > **Scopus and Web of Science answer only from a subscribing institution's network.** They
@@ -190,6 +213,14 @@ OpenAthens). To find it, open any journal article *through your library's websit
 off-campus and copy what appears in front of the publisher's address, for example
 `ezproxy.library.example.edu`. Both the host-rewriting kind and a `…?url=` login prefix
 work. Several libraries can be saved; the active one is chosen under **Options**.
+
+**Your library's platforms.** Some of what a library subscribes to can't be searched by
+another program: ClinicalKey, AccessMedicine, UpToDate and the like. In **Settings → Library
+resources**, tick the ones you have, or add another with its name and the address of one of
+its searches, with `{q}` where the words go (search the site for one word, copy the
+address, and put `{q}` in place of the word). Each gets a *Search* button at the bottom of
+the Databases panel, which opens it through your library, in a MedSearch window, with your
+search filled in.
 
 Papers then show **DOI (via library)**, which opens them in a browser window inside
 MedSearch that carries your library login, so subscribed papers load directly. A site's
@@ -223,7 +254,9 @@ own API key in its own Anthropic console workspace and set the spend limit there
 Everything runs on your machine. Searches, keys, history and saved searches stay in
 `~/.medsearch/` (on Windows, `.medsearch` in your user folder). The only traffic out is to
 the literature services you search (including OpenAlex, for the suggestions while you type
-an author or institution) and, with AI on, to the Anthropic API.
+an author or institution, and WorldCat when you look for a book in a library) and, with AI
+on, to the Anthropic API. The email address set for Unpaywall goes to Unpaywall, Crossref,
+NCBI and Open Library, as the contact they ask apps for, and nowhere else.
 
 ---
 
@@ -270,6 +303,13 @@ about 1,000.
 
 **Semantic Scholar no longer accepts its key (403).** Semantic Scholar removes keys left
 unused for about 60 days; request a new one.
+
+**Google Books does not accept its key.** Check that the Books API is turned on in the
+Google Cloud project the key belongs to (*APIs & Services ▸ Library ▸ Books API*).
+
+**A Search button opens the platform but not the search.** The platform changed its
+search address. Search it for one word, copy the address, and add it again in *Settings ▸
+Library resources* with `{q}` in place of the word.
 
 **On Windows the window stays empty.** Microsoft's WebView2 is missing or broken: install
 the *WebView2 Runtime* from microsoft.com and open MedSearch again.

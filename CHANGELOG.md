@@ -15,10 +15,12 @@ one line per change, in plain words, no internals.
 - Books that share a short title, such as "Glioma", are no longer taken for one another: a book is shown once only when the same book, by the same first author and from the same year, is found twice.
 - The books and chapters OpenAlex and Crossref find are tagged Book and exported as books, with the book's title, editors, publisher and ISBN where Crossref has them. Find in a library looks them up in WorldCat, a chapter as its book.
 - Crossref also finds whole books: books, monographs, edited books and reference books.
-- A book is called free only when there is a PDF of it. OpenAlex and Unpaywall list some paid books as free because of a web page that is not the book, and those now open through your library instead.
+- A book that OpenAlex or Crossref finds is called free only when there is a PDF of it. OpenAlex and Unpaywall list some paid books as free because of a web page that is not the book, and those now open through your library instead.
 - New database, with a free key from a Google Cloud project, added in Settings: Google Books. It knows most books in print, recent editions included. A book in the public domain is read free; for many others Preview shows the pages the publisher allows. Find in a library looks each one up in WorldCat by its ISBN. What may be read depends on the country you search from.
 - Library resources, in Settings: tick ClinicalKey, AccessMedicine or UpToDate, or add another platform your library subscribes to, such as Thieme MedOne, with the address of one of its searches. Each gets a Search button at the bottom of the Databases panel, which opens it in its own window through your library, with your search filled in.
 - Languages, under Options: add one, and searches find only papers and books in English and that language, English first. A chip beside the search bar shows the languages in use, and its cross goes back to any language. The choice is kept for the next start. Web of Science, Crossref, CORE, arXiv, IEEE Xplore and Semantic Scholar can't be asked for a language: they say so above their results, and leave out only what they say is in another language.
+- The menu bar's quick search can use NCBI Bookshelf, Open Library or Google Books as its default source.
+- Settings says where the email for Unpaywall goes: to Unpaywall, Crossref, NCBI and Open Library, as the contact they ask apps for, and nowhere else. It used to say Unpaywall only.
 
 ## 2.1
 
