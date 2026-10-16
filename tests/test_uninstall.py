@@ -69,7 +69,7 @@ def test_no_web_page_can_uninstall_it(client, mac_app):
 
 
 def test_a_path_with_quotes_and_spaces_reaches_the_trash_whole():
-    script = A._mac_trash_script(42, [Path("/Users/x/it's a folder")])
+    script = A._mac_trash_script(42, ["/Users/x/it's a folder"])
     assert shlex.split(script.split("; sleep 1; ")[1])[-1] == "/Users/x/it's a folder"
 
 
@@ -120,8 +120,8 @@ def test_windows_recycles_the_data_then_runs_setups_uninstaller(monkeypatch, tmp
 
 
 def test_a_windows_path_with_an_apostrophe_is_quoted_for_powershell():
-    script = A._windows_uninstall_script(7, [Path("C:/Users/O'Neil/.medsearch")], Path("C:/P/unins000.exe"))
-    assert "@('C:/Users/O''Neil/.medsearch')" in script
+    script = A._windows_uninstall_script(7, [r"C:\Users\O'Neil\.medsearch"], r"C:\P\unins000.exe")
+    assert r"@('C:\Users\O''Neil\.medsearch')" in script and script.endswith(r"& 'C:\P\unins000.exe' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART")
 
 
 def test_windows_without_setups_uninstaller_says_where_to_go(monkeypatch, tmp_path):

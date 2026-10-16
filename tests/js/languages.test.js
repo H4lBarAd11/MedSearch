@@ -65,7 +65,8 @@ test("a database's note shows above its results, and alone when it found nothing
 });
 
 test("each search sends the languages, Find more the same ones, and the page draws them at start", () => {
-  const src = readFileSync(new URL("../../static/js/app.js", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../../static/js/app.js", import.meta.url), "utf8")
+    .replace(/\r\n/g, "\n");   // as checked out on Windows
   const run = src.slice(src.indexOf("function runSearch("), src.indexOf("// Fresh search: rebuild the results area"));
   assert.ok(run.includes("    languages:   [...languages],\n"));
   assert.ok(run.includes("author: prev.author, institution: prev.institution,\n                                     languages: prev.languages});"));

@@ -33,7 +33,8 @@ test("nothing free, no button", () => {
 // The results' type filter offers Book when the list holds books.
 
 test("Book is offered in the type filter, last, only when books are listed", () => {
-  const src = readFileSync(new URL("../../static/js/app.js", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../../static/js/app.js", import.meta.url), "utf8")
+    .replace(/\r\n/g, "\n");   // as checked out on Windows
   globalThis._TYPE_ORDER = new Function(`return ${src.match(/const _TYPE_ORDER = (\[[^\]]*\]);/)[1]}`)();
   const { _refreshTypeOptions } = load(["escHtml", "_refreshTypeOptions"]);
   const sel = {value: "", innerHTML: "", options: [{}]};
