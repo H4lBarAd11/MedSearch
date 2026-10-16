@@ -61,6 +61,13 @@ def test_the_mac_app_trashes_itself_its_data_and_web_data_and_nothing_else(clien
     assert not any("Downloads" in w or "org.python.python" in w for w in words)
 
 
+def test_no_web_page_can_uninstall_it(client, mac_app):
+    # The window's token is on every request it makes; a page elsewhere has none.
+    assert client.post("/uninstall", base_url=BASE).status_code == 403
+    assert client.post("/uninstall", headers={"X-MedSearch-Token": "guess"}, base_url=BASE).status_code == 403
+    assert mac_app.started == []
+
+
 def test_a_path_with_quotes_and_spaces_reaches_the_trash_whole():
     script = A._mac_trash_script(42, [Path("/Users/x/it's a folder")])
     assert shlex.split(script.split("; sleep 1; ")[1])[-1] == "/Users/x/it's a folder"

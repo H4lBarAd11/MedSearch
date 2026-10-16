@@ -462,7 +462,8 @@ def _throttle(url):
         _OPENLIBRARY_LIMITER.wait(2.8 if _contact_email() else 0.9)
 
 def _contact_email():
-    """The user's own address for polite-pool APIs (NCBI, Crossref), or None."""
+    """The user's own address, given as the contact that Unpaywall, Crossref,
+    NCBI and Open Library ask an app for, or None."""
     return (CONFIG.get("unpaywall_email") or "").strip() or None
 
 def http_get(url, headers=None, timeout=TIMEOUT, error_body=False, data=None, retry=True):
@@ -1903,13 +1904,13 @@ def _pubmed_book(art, pmid, source_label):
     a = _article(title=chapter or book_title or "No title", authors=authors, author_list=names,
                  year=year, journal=book_title if chapter else publisher, doi=doi, pmid=pmid,
                  abstract=_pubmed_abstract(doc), source=source_label,
-                  pub_types=["Book"] + _pub_type_badges(raw_types),
+                 pub_types=["Book"] + _pub_type_badges(raw_types),
                  languages=_record_languages(l.text for l in doc.findall("Language")),
                  book={"kind": "chapter" if chapter else "book", "title": book_title,
                        "publisher": publisher,
                        "place": (book.findtext("Publisher/PublisherLocation") or "").strip(),
-                       "isbn": [re.sub(r"[^\dX]", "", i.text.upper()) for i in book.findall("Isbn")
-                                if i.text and i.text.strip()],
+                       "isbn": list(dict.fromkeys(filter(None, (_isbn13(i.text)
+                                                                for i in book.findall("Isbn"))))),
                        "editors": editors, "bookshelf": nbk})
     if nbk:
         a["access_kind"], a["access_link"] = "open", _bookshelf_url(nbk)
@@ -2989,17 +2990,26 @@ def search_googlebooks(query, max_r, y_from, y_to, sort="relevance", offset=0, p
     # Google matches inauthor: on the words of a name; each book is checked
     # for the initial as well.
     q = " ".join(filter(None, [query.strip(), f'inauthor:"{au["family"]}"' if au else ""]))
-    # At most 40 a page. Google has no years filter: they are checked here.
-    params = {"q": q, "maxResults": min(max_r, 40), "startIndex": offset, "printType": "books"}
+    params = {"q": q, "printType": "books"}
     if sort == "date":
         params["orderBy"] = "newest"
     # Google is asked for one language at most; with more, each book is checked.
     if languages and len(languages) == 1:
         params["langRestrict"] = languages[0]
-    data = _googlebooks_get(params)
-    arts = [_googlebooks_article(i) for i in data.get("items") or [] if isinstance(i, dict)]
+    # Google answers at most 40 at a time, so more are asked for in turn.
+    items, total, start = [], 0, offset
+    while start < offset + max_r:
+        data = _googlebooks_get(dict(params, startIndex=start, maxResults=min(40, offset + max_r - start)))
+        page = [i for i in data.get("items") or [] if isinstance(i, dict)]
+        items += page
+        total = data.get("totalItems") or total
+        if len(page) < min(40, offset + max_r - start):
+            break
+        start += len(page)
+    # Google has no years filter: they are checked here.
+    arts = [_googlebooks_article(i) for i in items]
     arts = [a for a in arts if within_range(a["year"], y_from, y_to) and (not au or _wrote(a, au))]
-    return arts, data.get("totalItems") or 0
+    return arts, total
 
 # Every source, in dedup-priority order: when two sources return the same
 # paper, the earlier one keeps it. Cochrane and Guidelines come before plain
@@ -5423,7 +5433,7 @@ def _clean_library_resources(given):
     """What Settings sent, checked. Raises ValueError, saying why, for one of
     the user's own that is not a web address of a search with {q} in it."""
     if not isinstance(given, dict):
-        raise ValueError("The library resources were not sent as a list.")
+        raise ValueError("The library resources were not sent in a form MedSearch can read.")
     ids = [r["id"] for r in LIBRARY_RESOURCES]
     on = [i for i in ids if i in (given.get("on") or [])]
     own = []

@@ -38,7 +38,7 @@ WHOLE_BOOK = """<PubmedBookArticle><BookDocument><PMID Version="1">900002</PMID>
     <PubDate><Year>2024</Year></PubDate>
     <AuthorList Type="authors"><Author><LastName>Doe</LastName><ForeName>Jane</ForeName></Author></AuthorList>
     <ELocationID EIdType="doi">10.9/report</ELocationID>
-    <Isbn>978-1-4731-9490-x</Isbn>
+    <Isbn>0-306-40615-2</Isbn><Isbn>978-0-306-40615-7</Isbn>
   </Book>
   <PublicationType UI="D017065">Practice Guideline</PublicationType>
 </BookDocument></PubmedBookArticle>"""
@@ -108,7 +108,7 @@ def test_a_bookshelf_record_without_a_chapter_title_is_a_whole_book(monkeypatch)
     assert a["journal"] == "Example Institute"         # a whole book shows its publisher
     assert a["book"]["kind"] == "book"
     assert a["author_list"] == ["Doe, Jane"] and a["book"]["editors"] == []
-    assert a["book"]["isbn"] == ["978147319490X"]
+    assert a["book"]["isbn"] == ["9780306406157"]        # its ISBN-10 and -13 are one book
     assert a["doi"] == "10.9/report"
     assert a["pub_types"] == ["Book", "Guideline"]
 
@@ -233,7 +233,7 @@ def test_bibtex_writes_a_chapter_as_incollection_and_a_book_as_book(tmp_path, mo
     assert "publisher = {Example Publishing}" in chapter and "address = {Example City}" in chapter
     assert "url = {https://www.ncbi.nlm.nih.gov/books/NBK900001/}" in chapter
     assert "journal" not in chapter + book
-    assert "publisher = {Example Institute}" in book and "isbn = {978147319490X}" in book
+    assert "publisher = {Example Institute}" in book and "isbn = {9780306406157}" in book
     assert "booktitle" not in book and "doi = {10.9/report}" in book
     assert "journal = {Example Journal}" in paper and "publisher" not in paper
 
@@ -246,7 +246,7 @@ def test_ris_writes_a_chapter_as_chap_and_a_book_as_book(tmp_path, monkeypatch):
                  "CY  - Example City"):
         assert line in chapter.split("\n")
     lines = book.strip().split("\n")
-    assert lines[0] == "TY  - BOOK" and "SN  - 978147319490X" in lines
+    assert lines[0] == "TY  - BOOK" and "SN  - 9780306406157" in lines
     assert "PB  - Example Institute" in lines and not any(l.startswith("T2") for l in lines)
     assert paper.strip().split("\n")[0] == "TY  - JOUR" and "T2  - Example Journal" in paper
 
@@ -266,7 +266,7 @@ def test_zotero_gets_a_book_section_and_a_book(monkeypatch):
     assert (chapter["publisher"], chapter["place"]) == ("Example Publishing", "Example City")
     assert chapter["url"] == "https://www.ncbi.nlm.nih.gov/books/NBK900001/"
     assert "publicationTitle" not in chapter
-    assert book["itemType"] == "book" and book["ISBN"] == "978147319490X"
+    assert book["itemType"] == "book" and book["ISBN"] == "9780306406157"
     # Zotero keeps a DOI field on articles only: a book's goes in Extra.
     assert "DOI" not in book and book["extra"] == "DOI: 10.9/report\nPMID: 900002"
     assert paper["itemType"] == "journalArticle" and paper["publicationTitle"] == "Example Journal"
@@ -643,6 +643,27 @@ def test_google_books_is_asked_with_its_key_page_order_and_author(google):
                  "printType": "books", "orderBy": "newest", "key": "gb-key"}
     # Another author's book and one outside the years are left out here.
     assert [a["year"] for a in arts] == ["2016"] and total == 77
+
+
+def test_more_than_forty_are_asked_for_in_turn(google, monkeypatch):
+    asked = []
+
+    def get(url, *a, **k):
+        p = ol_params(url)
+        asked.append((int(p["startIndex"]), int(p["maxResults"])))
+        n = int(p["maxResults"])
+        return {"totalItems": 500, "items": [volume() for _ in range(n)]}, 200
+    monkeypatch.setattr(A, "fetch_json", get)
+    arts, total = A.search_googlebooks("glioma", 50, None, None, offset=50)
+    assert asked == [(50, 40), (90, 10)] and len(arts) == 50 and total == 500
+
+
+def test_google_books_stops_asking_when_it_runs_out(google, monkeypatch):
+    asked = []
+    monkeypatch.setattr(A, "fetch_json", lambda url, *a, **k: (asked.append(url),
+                        ({"totalItems": 3, "items": [volume()] * 3}, 200))[1])
+    arts, total = A.search_googlebooks("glioma", 50, None, None)
+    assert len(asked) == 1 and len(arts) == 3 and total == 3
 
 
 def test_an_author_alone_asks_google_books_by_the_name_only(google):
