@@ -349,6 +349,24 @@ class NativeChrome:
         if is_open != self.is_open:
             self.is_open = is_open
             self._apply_visibility()
+            # A toast belongs to the screen it came on: when a screen opens
+            # over the home it was shown on, or closes from under it, it goes
+            # now rather than sit over what's there (his ask, 21 Oct). Not one
+            # placed for what is now showing ("Settings saved." comes as
+            # Settings closes, placed for the home that the close brings back).
+            if self.toast.alpha > 0.01 and is_open != getattr(self, "_toast_screen", is_open):
+                self.dismiss_toast()
+
+    def dismiss_toast(self):
+        """The toast away at once, its timer void."""
+        self._toast_n += 1
+
+        def sink() -> None:
+            self.toast.alpha = 0.0
+        try:
+            UIView.animateWithDuration(0.15, animations=Block(sink))
+        except Exception:
+            sink()
 
     def _apply_visibility(self):
         shown = 0.0 if self.is_open else 1.0
@@ -378,6 +396,7 @@ class NativeChrome:
         page says so as it asks, a step ahead of set_open)."""
         self._toast_n += 1
         n = self._toast_n
+        self._toast_screen = screen
         green = kind == "green"
         self.toast_icon.image = UIImage.systemImageNamed_("checkmark.circle.fill" if green else "info.circle")
         self.toast_icon.tintColor = _sage() if green else _ui(UIColor, "secondaryLabelColor")

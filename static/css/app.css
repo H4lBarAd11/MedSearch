@@ -2020,8 +2020,13 @@ body {
 /* toast */
 .toast {
   position: fixed;
-  bottom: 92px;   /* just above the dock, right-hand side */
-  right: 24px;
+  /* In the window's bottom-right corner, level with the dock (his ask, 21 Oct:
+     92px up, it floated beside nothing), and never so wide as to reach the
+     dock in the middle: half the window less half the dock (500px with its
+     labels, 345px without, below 1080px) and a margin each side. The window
+     is never narrower than 940px, so there is always room: 260px or more. */
+  bottom: 14px;
+  right: 14px;
   background: var(--bg2);
   border: 1px solid var(--border2);
   border-radius: var(--radius);
@@ -2033,13 +2038,16 @@ body {
   transform: translateY(80px);
   opacity: 0;
   transition: all 0.25s ease;
-  max-width: 320px;
+  max-width: min(320px, calc(50vw - 280px));
   /* Never in the way of a tap, shown or not: hidden, it still lay over the
      iPhone's Settings Save button and took every tap (his Zotero key never
      saved, 21 Oct). */
   pointer-events: none;
 }
 .toast.show { transform: translateY(0); opacity: 1; }
+@media (max-width: 1080px) {
+  .toast { max-width: min(320px, calc(50vw - 202px)); }
+}
 .toast.green { background: var(--green-tint); border-color: var(--green-tint2); color: var(--green); }
 /* HIDDEN MEANS HIDDEN. The browser's own [hidden]{display:none} is a user-
    agent rule, and any author rule that sets display (.dock-btn is flex)
