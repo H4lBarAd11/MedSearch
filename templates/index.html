@@ -49,6 +49,7 @@
     hasGooglebooks:     {{ 'true' if has_googlebooks else 'false' }},
     aiOn:               {{ 'true' if ai_on else 'false' }},
     hasAiKey:           {{ 'true' if has_ai_key else 'false' }},
+    aiProvider:         {{ ai_provider | tojson }},
   };
 </script>
 <script src="/static/js/boot.js?v={{ asset_v }}"></script>
@@ -413,10 +414,10 @@
   <div class="panel-title">AI features</div>
   <div class="ai-row">
     <span class="ai-row-text" id="aiSwitchText">Use AI
-      <small>Summaries, synthesis, Explain and the assistant, through your Anthropic key</small></span>
+      <small>Summaries, synthesis, Explain and the assistant, through your {{ ai_provider_label }} key</small></span>
     <input type="checkbox" id="aiSwitch" aria-labelledby="aiSwitchText" onchange="setAI(this.checked)"{{ ' checked' if ai_on }}>
   </div>
-  <div class="settings-hint" id="aiKeyHint"{{ '' if not has_ai_key else ' hidden' }}>Needs an Anthropic API key: add one in Settings.</div>
+  <div class="settings-hint" id="aiKeyHint"{{ '' if not has_ai_key else ' hidden' }}>Needs an {{ ai_provider_label }} API key: add one in Settings.</div>
   <div class="panel-title panel-title-2">Spending this month</div>
   <div class="ai-spend" id="aiSpend">—</div>
   <div class="ai-row">
@@ -504,10 +505,30 @@
         </div>
       </div>
       <div class="settings-field">
+        <label>AI provider</label>
+        <div class="sort-toggle appearance-toggle" id="aiProviderToggle" role="radiogroup" aria-label="AI provider">
+          <button type="button" class="sort-opt" data-provider="anthropic" onclick="setAiProvider('anthropic')">Anthropic</button>
+          <button type="button" class="sort-opt" data-provider="openrouter" onclick="setAiProvider('openrouter')">OpenRouter</button>
+        </div>
+        <div class="settings-hint">Which service the AI features use. Anthropic and OpenRouter both answer the same requests; the key of the one you pick is the one that is used. The other key, if you have one, stays saved.</div>
+      </div>
+      <div class="settings-field" id="anthropicKeyField">
         <label>Anthropic API key (AI summaries &amp; synthesis)</label>
         <input type="password" id="set_anthropic" placeholder="sk-ant-…">
         <div class="settings-hint"><a href="https://console.anthropic.com/settings/keys" target="_blank" onclick="openInAppBrowser(this.href, 'Anthropic — API keys'); return false">Create a key at console.anthropic.com</a>: sign in, add some credit under Billing (AI use is paid by the token), then Create Key and copy it.</div>
         <div class="settings-hint">Switch the AI on or off, and set a monthly spending limit, under AI in the bottom bar.</div>
+      </div>
+      <div class="settings-field" id="openrouterKeyField" hidden>
+        <label>OpenRouter API key (AI summaries &amp; synthesis)</label>
+        <input type="password" id="set_openrouter" placeholder="sk-or-v1-…">
+        <div class="settings-hint"><a href="https://openrouter.ai/settings/keys" target="_blank" onclick="openInAppBrowser(this.href, 'OpenRouter — API keys'); return false">Create a key at openrouter.ai</a>: sign in, add credit under Credits (AI use is paid by the token), then Create API key and copy it.</div>
+        <div class="settings-hint">One key opens every model on OpenRouter. MedSearch asks for the two Claude models below; any other model on OpenRouter can be named instead.</div>
+      </div>
+      <div class="settings-field" id="openrouterModelField" hidden>
+        <label>OpenRouter models</label>
+        <input type="text" id="set_openrouter_main" class="model-input" placeholder="anthropic/claude-sonnet-5" autocomplete="off" spellcheck="false">
+        <input type="text" id="set_openrouter_fast" class="model-input" placeholder="anthropic/claude-haiku-4.5" autocomplete="off" spellcheck="false">
+        <div class="settings-hint">The model for the long work (synthesis, Explain, the assistant) and the one for the per-article one-liners, named as OpenRouter names them. Find them at <a href="https://openrouter.ai/models" target="_blank" onclick="openInAppBrowser(this.href, 'OpenRouter — models'); return false">openrouter.ai/models</a>.</div>
       </div>
       <div class="settings-field">
         <label>NCBI / PubMed API key (optional — higher rate limits)</label>

@@ -4,6 +4,10 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 2.6
+
+- The AI can be used through OpenRouter as well as Anthropic: pick the one you want in Settings and paste its key. Both answer the same requests, and the OpenRouter models can be changed to any other model on OpenRouter.
+
 ## 2.5
 
 - Appearance, in Settings: System, Light or Dark. System follows the computer's own setting as it changes; Light and Dark keep MedSearch that way whatever the computer does.

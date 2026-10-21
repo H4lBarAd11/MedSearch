@@ -21,7 +21,7 @@
 set -u
 
 SERVICE="MedSearch"
-ACCOUNTS=(anthropic_api_key pubmed_api_key scopus_api_key scopus_insttoken wos_api_key)
+ACCOUNTS=(anthropic_api_key openrouter_api_key pubmed_api_key scopus_api_key scopus_insttoken wos_api_key)
 
 if [ "$(uname)" != "Darwin" ]; then
   echo "  This is a macOS script (there is no Keychain elsewhere)."

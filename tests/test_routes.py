@@ -205,8 +205,8 @@ class _FakeStream:
 
 def _stream(monkeypatch, lines):
     A.CONFIG["anthropic_api_key"] = "sk-test"
-    monkeypatch.setattr(A, "_anthropic_open", lambda payload, timeout: _FakeStream(lines))
-    return [json.loads(c[6:]) for c in A.claude_stream({"model": A.MODEL_MAIN, "messages": []})]
+    monkeypatch.setattr(A, "_ai_open", lambda payload, timeout: _FakeStream(lines))
+    return [json.loads(c[6:]) for c in A.ai_stream({"model": A.MODEL_MAIN, "messages": []})]
 
 
 def test_only_text_deltas_become_chunks(monkeypatch):
@@ -224,20 +224,20 @@ def test_a_refusal_is_reported(monkeypatch):
 
 
 def test_no_key_is_an_error_not_a_crash():
-    evs = [json.loads(c[6:]) for c in A.claude_stream({"messages": []})]
+    evs = [json.loads(c[6:]) for c in A.ai_stream({"messages": []})]
     assert evs[0]["type"] == "error" and evs[-1]["type"] == "done"
 
 
 def test_ai_switched_off_refuses_even_with_a_key():
     A.CONFIG.update(anthropic_api_key="sk-test", ai_enabled=False)
-    evs = [json.loads(c[6:]) for c in A.claude_stream({"messages": []})]
+    evs = [json.loads(c[6:]) for c in A.ai_stream({"messages": []})]
     assert "turned off" in evs[0]["text"]
 
 
 def test_one_liners_use_the_fast_model(monkeypatch):
     A.CONFIG["anthropic_api_key"] = "sk-test"
     seen = {}
-    monkeypatch.setattr(A, "claude_text", lambda payload, timeout=30, **kw: seen.update(payload) or "x")
+    monkeypatch.setattr(A, "ai_text", lambda payload, timeout=30, **kw: seen.update(payload) or "x")
     A.ai_oneliner("t", "abstract")
     assert seen["model"] == A.MODEL_FAST
 
@@ -768,8 +768,8 @@ def test_the_streamed_answer_is_metered(client, auth, monkeypatch, tmp_path):
         'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}',
         'data: {"type":"message_delta","usage":{"output_tokens":500}}',
     ]
-    monkeypatch.setattr(A, "_anthropic_open", lambda payload, timeout: _FakeStream(lines))
-    list(A.claude_stream({"model": "claude-sonnet-5", "messages": []}, feature="explanations"))
+    monkeypatch.setattr(A, "_ai_open", lambda payload, timeout: _FakeStream(lines))
+    list(A.ai_stream({"model": "claude-sonnet-5", "messages": []}, feature="explanations"))
     u = A.load_usage()
     assert u["calls"] == {"explanations": 1}
     assert round(u["cost"], 6) == round(1000 / 1e6 * 2.0 + 500 / 1e6 * 10.0, 6)
@@ -783,11 +783,11 @@ def test_the_limit_stops_the_ai_and_says_so(client, auth, monkeypatch, tmp_path)
     assert A.ai_over_cap() is True
 
     attempts = []
-    monkeypatch.setattr(A, "_anthropic_open",
+    monkeypatch.setattr(A, "_ai_open",
                         lambda payload, timeout: attempts.append(payload))
 
     events = [json.loads(c[6:]) for c in
-              A.claude_stream({"model": A.MODEL_MAIN, "messages": []}, feature="syntheses")]
+              A.ai_stream({"model": A.MODEL_MAIN, "messages": []}, feature="syntheses")]
     assert events[0]["type"] == "error" and "$5.00" in events[0]["text"]
     assert events[-1]["type"] == "done"                    # the stream still closes
     assert A.ai_oneliner("t", "abstract") is None          # the cheap calls stop too
@@ -814,10 +814,10 @@ def test_a_limit_of_zero_stops_the_ai_before_the_first_call(tmp_path, monkeypatc
     assert A.ai_cap() == 0.0
     assert A.ai_over_cap() is True
     attempts = []
-    monkeypatch.setattr(A, "_anthropic_open", lambda payload, timeout: attempts.append(payload))
+    monkeypatch.setattr(A, "_ai_open", lambda payload, timeout: attempts.append(payload))
     assert A.ai_oneliner("t", "abstract") is None
     events = [json.loads(c[6:]) for c in
-              A.claude_stream({"model": A.MODEL_MAIN, "messages": []}, feature="syntheses")]
+              A.ai_stream({"model": A.MODEL_MAIN, "messages": []}, feature="syntheses")]
     assert events[0]["type"] == "error" and "$0.00" in events[0]["text"]
     assert attempts == []
 
@@ -1096,8 +1096,8 @@ def test_a_stream_the_page_stops_still_counts(tmp_path, monkeypatch):
     class Fake:
         def __enter__(self): return iter(lines)
         def __exit__(self, *a): return False
-    monkeypatch.setattr(A, "_anthropic_open", lambda payload, timeout: Fake())
-    gen = A.claude_stream({"model": "claude-sonnet-5", "messages": []}, feature="syntheses")
+    monkeypatch.setattr(A, "_ai_open", lambda payload, timeout: Fake())
+    gen = A.ai_stream({"model": "claude-sonnet-5", "messages": []}, feature="syntheses")
     next(gen)                    # the first chunk reaches the page
     gen.close()                  # then the page stops it
     assert A.load_usage()["cost"] == pytest.approx(2.0)     # 1M input tokens at $2

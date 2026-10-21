@@ -162,6 +162,15 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULTS = {
     "anthropic_api_key": "",
+    "openrouter_api_key": "",
+    # Which service the AI features talk to: "anthropic" or "openrouter".
+    # The choice is the user's; it is never swapped behind their back.
+    "ai_provider":      "anthropic",
+    # The models asked for under OpenRouter. The defaults are the same two
+    # Claude models the app uses directly, named the way OpenRouter names
+    # them ("vendor/model"); any model on OpenRouter can be put here.
+    "openrouter_model_main": "anthropic/claude-sonnet-5",
+    "openrouter_model_fast": "anthropic/claude-haiku-4.5",
     "pubmed_api_key":    "",
     "scopus_api_key":    "",
     "scopus_insttoken":  "",
@@ -221,8 +230,8 @@ DEFAULTS = {
 # available (secrets_store.py); the config file then holds everything else.
 # unpaywall_email is deliberately not one: it is an address, shown in full in
 # Settings, and it is what identifies the caller to Unpaywall.
-SECRET_KEYS = ("anthropic_api_key", "pubmed_api_key", "scopus_api_key",
-               "scopus_insttoken", "wos_api_key", "ieee_api_key",
+SECRET_KEYS = ("anthropic_api_key", "openrouter_api_key", "pubmed_api_key",
+               "scopus_api_key", "scopus_insttoken", "wos_api_key", "ieee_api_key",
                "semantic_scholar_api_key", "openalex_api_key", "core_api_key",
                "google_books_api_key", "zotero_api_key")
 
@@ -463,7 +472,8 @@ def load_config():
             if stored:
                 cfg[k] = stored
                 in_keychain.add(k)
-    for k, e in {"anthropic_api_key":"ANTHROPIC_API_KEY","pubmed_api_key":"NCBI_API_KEY",
+    for k, e in {"anthropic_api_key":"ANTHROPIC_API_KEY","openrouter_api_key":"OPENROUTER_API_KEY",
+                 "pubmed_api_key":"NCBI_API_KEY",
                  "scopus_api_key":"SCOPUS_API_KEY","wos_api_key":"WOS_API_KEY",
                  "unpaywall_email":"UNPAYWALL_EMAIL"}.items():
         v = os.environ.get(e,"")
@@ -1183,26 +1193,65 @@ def scihub_links(doi):
 # ══════════════════════════════════════════════════════════════════════════════
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# The AI features can talk to Anthropic directly, or through OpenRouter, which
+# fronts many models behind one key. Each provider says where its calls go,
+# which setting holds its key, and how the key is sent; the adapters below
+# turn our request into the provider's shape and its reply back into ours.
+# Inside MedSearch a request is written in Anthropic's shape (system blocks,
+# thinking, cache_control) and translated on the way out.
+PROVIDERS = {
+    "anthropic": {
+        "label": "Anthropic",
+        "url": ANTHROPIC_URL,
+        "key": "anthropic_api_key",
+        "auth": ("x-api-key", "{key}"),
+        "headers": {"anthropic-version": "2023-06-01"},
+    },
+    "openrouter": {
+        "label": "OpenRouter",
+        "url": OPENROUTER_URL,
+        "key": "openrouter_api_key",
+        "auth": ("authorization", "Bearer {key}"),
+        # OpenRouter asks an app to say which app it is; both are optional.
+        "headers": {"HTTP-Referer": "https://github.com/H4lBarAd11/MedSearch",
+                    "X-Title": "MedSearch"},
+    },
+}
+
 # The long-form work (synthesis, Explain, the assistant) uses Sonnet; the
 # per-article one-liners and the suggested questions are short, high-volume
 # jobs, so they use Haiku. A 7-source search makes ~70 one-liner calls.
 MODEL_MAIN = "claude-sonnet-5"
 MODEL_FAST = "claude-haiku-4-5"
+# Under OpenRouter the same models are named "vendor/model", with a dot in the
+# version where Anthropic writes a hyphen (anthropic/claude-haiku-4.5): the
+# hyphen form is no model there, and every one-liner failed with it.
+OPENROUTER_MODEL_MAIN = "anthropic/claude-sonnet-5"
+OPENROUTER_MODEL_FAST = "anthropic/claude-haiku-4.5"
 # Sonnet 5 thinks by default. These are short reading tasks where the extra
-# latency and output spend buy nothing, so it is switched off for them.
+# latency and output spend buy nothing, so it is switched off for them. It is
+# an Anthropic-only field, and is dropped for the other provider.
 _NO_THINKING = {"thinking": {"type": "disabled"}}
 
 # ── What the AI spends ──────────────────────────────────────────────────────
-# Every Anthropic reply states how many tokens it used; these are the published
+# Every reply states how many tokens it used; these are the published
 # per-million-token prices for the two models above (USD, June 2026: Sonnet 5
 # $2/$10, Haiku 4.5 $1/$5). The assistant caches its context, and cached tokens
 # are not billed at the input rate: writing a cache entry costs 1.25x the input
 # rate, reading one 0.1x. A model we don't price is still counted, with its
 # tokens recorded and no cost added — a number that is wrong is worse than one
 # that is missing.
+# OpenRouter asks the same prices for the same two models under their
+# "vendor/model" names, so they are priced here too. Better still, OpenRouter
+# says what each call cost, and that figure is the one we use (see
+# record_usage): the prices are only a stand-in.
 _PRICES = {                      # model -> (input $/1M, output $/1M)
     "claude-sonnet-5": (2.00, 10.00),
     "claude-haiku-4-5": (1.00, 5.00),
+    "anthropic/claude-sonnet-5": (2.00, 10.00),
+    "anthropic/claude-haiku-4.5": (1.00, 5.00),
 }
 _CACHE_WRITE_RATE, _CACHE_READ_RATE = 1.25, 0.10
 USAGE_FILE = CONFIG_DIR / "usage.json"
@@ -1232,14 +1281,20 @@ def load_usage():
 
 
 def record_usage(model, feature, input_tokens, output_tokens,
-                 cache_write_tokens=0, cache_read_tokens=0):
+                 cache_write_tokens=0, cache_read_tokens=0, cost=None):
     """Add one call to this month's total. Never raises: a failure to write the
-    tally must not break the feature the user asked for."""
+    tally must not break the feature the user asked for.
+
+    `cost` is what the provider itself said the call cost, when it says so
+    (OpenRouter does). It is the truest figure there is, so it is used as it
+    comes; without it the call is priced from the model's published rates."""
     try:
         with _USAGE_LOCK:
             u = load_usage()
             price = _PRICES.get(model)
-            if price:
+            if cost is not None:
+                u["cost"] += max(0.0, float(cost))
+            elif price:
                 u["cost"] += (
                     (input_tokens / 1e6) * price[0]
                     + (cache_write_tokens / 1e6) * price[0] * _CACHE_WRITE_RATE
@@ -1297,31 +1352,80 @@ def _over_cap_message():
             "Raise it under AI in the bottom bar, or leave it and MedSearch keeps searching without AI.")
 
 
-def _anthropic_key():
-    return (CONFIG.get("anthropic_api_key") or "").strip()
+def ai_provider():
+    """The service the AI features talk to. It is the user's own choice: a
+    provider whose key is missing is not quietly swapped for another one."""
+    p = str(CONFIG.get("ai_provider") or "").strip().lower()
+    return p if p in PROVIDERS else "anthropic"
+
+def _provider():
+    return PROVIDERS[ai_provider()]
+
+def _ai_key():
+    """The key of the provider in use, if there is one."""
+    return (CONFIG.get(_provider()["key"]) or "").strip()
+
+def _ai_model(role):
+    """The model to ask for under the provider in use: "main" for the long-form
+    work, "fast" for the short, high-volume one."""
+    if ai_provider() == "openrouter":
+        setting = "openrouter_model_main" if role == "main" else "openrouter_model_fast"
+        chosen = (CONFIG.get(setting) or "").strip()
+        if chosen:
+            return chosen
+        return OPENROUTER_MODEL_MAIN if role == "main" else OPENROUTER_MODEL_FAST
+    return MODEL_MAIN if role == "main" else MODEL_FAST
 
 def ai_active():
     """AI runs only when a key exists AND the user hasn't switched AI off."""
-    return bool(_anthropic_key()) and CONFIG.get("ai_enabled", True)
+    return bool(_ai_key()) and CONFIG.get("ai_enabled", True)
 
 def _sse(obj):
     return "data: " + json.dumps(obj) + "\n\n"
 
-def _anthropic_open(payload, timeout):
-    req = urllib.request.Request(ANTHROPIC_URL, data=json.dumps(payload).encode(),
-        headers={"x-api-key": _anthropic_key(), "anthropic-version": "2023-06-01",
-                 "content-type": "application/json"}, method="POST")
+def _ai_request(payload):
+    """Our request in the provider's shape. We write requests in Anthropic's
+    shape inside MedSearch; OpenRouter speaks OpenAI's, so the system prompt
+    becomes a message of its own and the Anthropic-only fields (thinking, the
+    cache marker) are dropped."""
+    if ai_provider() != "openrouter":
+        return dict(payload)
+    out = {k: v for k, v in payload.items() if k not in ("system", "thinking")}
+    messages = []
+    system = payload.get("system")
+    if system:
+        text = system if isinstance(system, str) else "\n\n".join(
+            b.get("text", "") for b in system if isinstance(b, dict))
+        if text:
+            messages.append({"role": "system", "content": text})
+    for m in payload.get("messages") or []:
+        messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+    out["messages"] = messages
+    return out
+
+def _ai_open(payload, timeout):
+    """Open the connection to the provider and send the request. The one place
+    a call leaves MedSearch."""
+    p = _provider()
+    header, template = p["auth"]
+    headers = {"content-type": "application/json", header: template.format(key=_ai_key())}
+    headers.update(p.get("headers") or {})
+    req = urllib.request.Request(p["url"], data=json.dumps(_ai_request(payload)).encode(),
+        headers=headers, method="POST")
     return urllib.request.urlopen(req, timeout=timeout)
 
 def _api_error_text(e):
-    """A plain-language message for an HTTPError from the Anthropic API."""
+    """A plain-language message for an HTTPError from the AI provider."""
     try: detail = e.read().decode(errors="replace")
     except Exception: detail = ""
-    msg = f"Anthropic API error {e.code}. "
+    label = _provider()["label"]
+    msg = f"{label} API error {e.code}. "
     if e.code == 401:
         msg += "Your API key is invalid or expired. Re-enter it in Settings (check for typos or extra spaces)."
+    elif e.code == 402:
+        msg += f"Not enough credit left on your {label} account. Add some, or lower the monthly limit."
     elif e.code == 429:
-        msg += "Rate limit reached or credits exhausted. Check your Anthropic account balance."
+        msg += f"Rate limit reached or credits exhausted. Check your {label} account balance."
     elif e.code in (500, 502, 503, 529):
         msg += "The service is busy right now. Try again in a minute."
     else:
@@ -1329,36 +1433,70 @@ def _api_error_text(e):
         except Exception: msg += detail[:200]
     return msg
 
-def claude_text(payload, timeout=30, feature="other"):
+def _ai_usage(data):
+    """(input, output, cache_write, cache_read, cost) out of what the provider
+    reports it used. Anthropic counts its own tokens; OpenRouter counts the
+    model's and, better still, says what the call cost."""
+    u = data.get("usage") or {}
+    if ai_provider() == "openrouter":
+        details = u.get("prompt_tokens_details") or {}
+        cost = u.get("cost")
+        return (int(u.get("prompt_tokens") or 0),
+                int(u.get("completion_tokens") or 0),
+                int(details.get("cache_write_tokens") or 0),
+                int(details.get("cached_tokens") or 0),
+                float(cost) if isinstance(cost, (int, float)) else None)
+    return (int(u.get("input_tokens") or 0),
+            int(u.get("output_tokens") or 0),
+            int(u.get("cache_creation_input_tokens") or 0),
+            int(u.get("cache_read_input_tokens") or 0),
+            None)
+
+def _ai_refused(data):
+    """Whether the model declined the request."""
+    if ai_provider() == "openrouter":
+        choices = data.get("choices") or []
+        return bool(choices and (choices[0].get("message") or {}).get("refusal"))
+    return data.get("stop_reason") == "refusal"
+
+def _ai_reply_text(data):
+    """The text of a finished reply, whichever provider it came from."""
+    if ai_provider() == "openrouter":
+        choices = data.get("choices") or []
+        if choices:
+            return ((choices[0].get("message") or {}).get("content") or "").strip()
+        return ""
+    return "".join(b.get("text", "") for b in data.get("content", [])
+                   if b.get("type") == "text").strip()
+
+def ai_text(payload, timeout=30, feature="other"):
     """One non-streaming call; returns the reply text. Raises RuntimeError."""
-    if not _anthropic_key():
-        raise RuntimeError("No Anthropic API key set.")
+    if not _ai_key():
+        raise RuntimeError(f"No {_provider()['label']} API key set.")
     if ai_over_cap():
         raise RuntimeError(_over_cap_message())
     try:
-        with _anthropic_open(payload, timeout) as r:
+        with _ai_open(payload, timeout) as r:
             data = json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         raise RuntimeError(_api_error_text(e))
     except Exception as e:
-        raise RuntimeError(f"Anthropic request failed: {e}")
-    usage = data.get("usage") or {}
-    record_usage(payload.get("model"), feature,
-                 usage.get("input_tokens", 0), usage.get("output_tokens", 0),
-                 usage.get("cache_creation_input_tokens", 0),
-                 usage.get("cache_read_input_tokens", 0))
-    if data.get("stop_reason") == "refusal":
+        raise RuntimeError(f"{_provider()['label']} request failed: {e}")
+    used_in, used_out, cache_write, cache_read, cost = _ai_usage(data)
+    record_usage(payload.get("model"), feature, used_in, used_out,
+                 cache_write, cache_read, cost=cost)
+    if _ai_refused(data):
         raise RuntimeError("The model declined this request.")
-    return "".join(b.get("text", "") for b in data.get("content", [])
-                   if b.get("type") == "text").strip()
+    return _ai_reply_text(data)
 
-def claude_stream(payload, timeout=120, feature="other"):
+def ai_stream(payload, timeout=120, feature="other"):
     """
     Stream one call as our own SSE events: {"type":"chunk"} per text delta,
     {"type":"error"} on failure, and always a final {"type":"done"}.
     """
-    if not _anthropic_key():
-        yield _sse({"type": "error", "text": "No API key set. Add your Anthropic key in Settings."})
+    if not _ai_key():
+        yield _sse({"type": "error",
+                    "text": f"No API key set. Add your {_provider()['label']} key in Settings."})
         yield _sse({"type": "done"})
         return
     if not CONFIG.get("ai_enabled", True):
@@ -1373,15 +1511,43 @@ def claude_stream(payload, timeout=120, feature="other"):
     # The tokens are reported in two places: the input count when the message
     # starts, the output count as it ends.
     used_in = used_out = used_cache_write = used_cache_read = 0
+    cost = None
     try:
         try:
-            with _anthropic_open(payload, timeout) as r:
+            with _ai_open(payload, timeout) as r:
                 for raw in r:
                     line = raw.decode("utf-8", errors="replace").strip()
                     if not line.startswith("data:"):
                         continue
-                    try: ev = json.loads(line[5:].strip())
+                    body = line[5:].strip()
+                    if body == "[DONE]":          # OpenRouter's end of the stream
+                        break
+                    try: ev = json.loads(body)
                     except Exception: continue
+                    if ai_provider() == "openrouter":
+                        # OpenRouter's stream is OpenAI's: the text sits in
+                        # choices[].delta.content, and the usage comes in the
+                        # last message, which carries no choices.
+                        if ev.get("error"):
+                            msg = (ev["error"] or {}).get("message") or "The AI service reported an error."
+                            yield _sse({"type": "error", "text": msg})
+                            break
+                        for ch in ev.get("choices") or []:
+                            text = (ch.get("delta") or {}).get("content")
+                            if text:
+                                yield _sse({"type": "chunk", "text": text})
+                            if ch.get("finish_reason") == "content_filter":
+                                yield _sse({"type": "error", "text": "The model declined this request."})
+                        u = ev.get("usage") or {}
+                        if u:
+                            details = u.get("prompt_tokens_details") or {}
+                            used_in = int(u.get("prompt_tokens") or used_in)
+                            used_out = int(u.get("completion_tokens") or used_out)
+                            used_cache_write = int(details.get("cache_write_tokens") or used_cache_write)
+                            used_cache_read = int(details.get("cached_tokens") or used_cache_read)
+                            if isinstance(u.get("cost"), (int, float)):
+                                cost = float(u["cost"])
+                        continue
                     kind = ev.get("type")
                     if kind == "message_start":
                         u0 = ((ev.get("message") or {}).get("usage") or {})
@@ -1412,7 +1578,7 @@ def claude_stream(payload, timeout=120, feature="other"):
         # 20 Oct: it never did).
         if used_in or used_out or used_cache_read or used_cache_write:
             record_usage(payload.get("model"), feature, used_in, used_out,
-                         used_cache_write, used_cache_read)
+                         used_cache_write, used_cache_read, cost=cost)
     yield _sse({"type": "done"})
 
 def ai_oneliner(title, abstract):
@@ -1421,9 +1587,9 @@ def ai_oneliner(title, abstract):
     prompt = (f"Title: {title}\n\nAbstract: {abstract}\n\n"
               "In exactly one sentence (≤25 words), state the key finding. No preamble.")
     try:
-        return claude_text({"model": MODEL_FAST, "max_tokens": 80,
-                            "messages": [{"role": "user", "content": prompt}]},
-                           feature="summaries") or None
+        return ai_text({"model": _ai_model("fast"), "max_tokens": 80,
+                        "messages": [{"role": "user", "content": prompt}]},
+                       feature="summaries") or None
     except Exception:
         # one-liners fail silently (don't spam errors per article); synthesis surfaces them
         return None
@@ -1447,9 +1613,9 @@ def ai_synthesis_stream(query, articles):
               "key findings, consensus, controversies/gaps, clinical implications. "
               "Reference articles by [number]. Do not rely on any article marked [RETRACTED]; "
               "if one is relevant, say that it was retracted.")
-    yield from claude_stream({"model": MODEL_MAIN, "max_tokens": 2000, **_NO_THINKING,
-                              "messages": [{"role": "user", "content": prompt}]},
-                             timeout=120, feature="syntheses")
+    yield from ai_stream({"model": _ai_model("main"), "max_tokens": 2000, **_NO_THINKING,
+                          "messages": [{"role": "user", "content": prompt}]},
+                         timeout=120, feature="syntheses")
 
 def ai_explain_stream(article):
     note = ("\nNOTE: this paper has been RETRACTED. Say so first, and treat its findings accordingly.\n"
@@ -1460,9 +1626,9 @@ def ai_explain_stream(article):
               "Explain this paper for a medical professional. Cover:\n"
               "1. Research question and why it matters\n2. Methodology\n"
               "3. Main findings\n4. Limitations and biases\n5. Clinical implications")
-    yield from claude_stream({"model": MODEL_MAIN, "max_tokens": 1500, **_NO_THINKING,
-                              "messages": [{"role": "user", "content": prompt}]},
-                             timeout=120, feature="explanations")
+    yield from ai_stream({"model": _ai_model("main"), "max_tokens": 1500, **_NO_THINKING,
+                          "messages": [{"role": "user", "content": prompt}]},
+                         timeout=120, feature="explanations")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  AI ASSISTANT  (content-aware clinical chat, grounded in current results)
@@ -1525,9 +1691,9 @@ def assistant_chat_stream(messages, query, articles):
          "text": f"=== CURRENT SEARCH ===\nQuery: {query or '(none)'}\nResults currently loaded:\n{context}",
          "cache_control": {"type": "ephemeral"}},
     ]
-    yield from claude_stream({"model": MODEL_MAIN, "max_tokens": 1024, **_NO_THINKING,
-                              "system": system_blocks, "messages": messages},
-                             timeout=120, feature="questions")
+    yield from ai_stream({"model": _ai_model("main"), "max_tokens": 1024, **_NO_THINKING,
+                          "system": system_blocks, "messages": messages},
+                         timeout=120, feature="questions")
 
 def assistant_suggestions(query, articles):
     """Generate 3-4 short follow-up questions based on the current search."""
@@ -1543,9 +1709,9 @@ def assistant_suggestions(query, articles):
         "Respond ONLY with a JSON array of 4 strings, nothing else."
     )
     try:
-        text = claude_text({"model": MODEL_FAST, "max_tokens": 250,
-                            "messages": [{"role": "user", "content": prompt}]},
-                           feature="suggestions")
+        text = ai_text({"model": _ai_model("fast"), "max_tokens": 250,
+                        "messages": [{"role": "user", "content": prompt}]},
+                       feature="suggestions")
         text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
         arr = json.loads(text)
         if isinstance(arr, list):
@@ -4387,7 +4553,7 @@ def remember_sources():
 @app.route("/")
 def index():
     pull_library_setup()      # the other device's libraries, if newer (iCloud Keychain)
-    has_key = bool(_anthropic_key())
+    has_key = bool(_ai_key())
     ai_pref = CONFIG.get("ai_enabled", True)
     # Optional deep-link from a launch with --query: /?q=...&src=...
     auto_query  = (request.args.get("q") or "").strip()
@@ -4397,6 +4563,8 @@ def index():
                            asset_v=ASSET_V,
                            ai_on=(has_key and ai_pref),   # active only if key AND enabled
                            has_ai_key=has_key,             # whether a key exists at all
+                           ai_provider=ai_provider(),      # which service the AI talks to
+                           ai_provider_label=PROVIDERS[ai_provider()]["label"],
                            history=SESSION["history"][-10:],
                            saved=load_saved(),
                            show_onboarding=not CONFIG.get("onboarding_seen", False),
@@ -6155,6 +6323,13 @@ def settings():
                 CONFIG["ai_monthly_cap"] = 0.0
         if "ai_cap_on" in data:
             CONFIG["ai_cap_on"] = bool(data["ai_cap_on"])
+        if "ai_provider" in data:
+            p = str(data["ai_provider"] or "").strip().lower()
+            if p in PROVIDERS:
+                CONFIG["ai_provider"] = p
+        for k in ("openrouter_model_main", "openrouter_model_fast"):
+            if isinstance(data.get(k), str) and data[k].strip():
+                CONFIG[k] = data[k].strip()
         if "active_proxy" in data:
             try:
                 # -1 is a valid value meaning "no library / don't proxy"
@@ -6179,12 +6354,16 @@ def settings():
                 warning = f"Settings were saved, but opening at login couldn't be changed: {e}"
         return jsonify({"ok": True, "warning": warning} if warning else {"ok": True})
     # Mask API keys (show only last 4 chars). The email isn't sensitive, so
-    # return it in full so the user can see and verify it.
+    # return it in full so the user can see and verify it. The AI provider and
+    # the model names are settings, not secrets, and the page needs them as
+    # they are.
     safe = {}
+    plain = ("unpaywall_email", "ai_provider", "openrouter_model_main",
+             "openrouter_model_fast")
     for k, v in CONFIG.items():
         if not isinstance(v, str):
             continue
-        if k == "unpaywall_email":
+        if k in plain:
             safe[k] = v
         elif len(v) > 4:
             safe[k] = "*"*(len(v)-4) + v[-4:]
@@ -6196,7 +6375,7 @@ def settings():
     safe["active_proxy"] = CONFIG.get("active_proxy", 0)
     safe["ai_monthly_cap"] = ai_cap_amount()
     safe["ai_cap_on"] = ai_cap_on()
-    safe["has_ai_key"] = bool(_anthropic_key())
+    safe["has_ai_key"] = bool(_ai_key())
     safe["ai_enabled"] = bool(CONFIG.get("ai_enabled", True))
     safe["can_open_at_login"] = _open_at_login_supported()
     safe["open_at_login"] = _open_at_login_enabled()

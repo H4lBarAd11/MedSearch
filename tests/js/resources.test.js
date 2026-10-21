@@ -90,6 +90,7 @@ async function save(draft, typed) {
   const sent = [], fails = [];
   Object.assign(globalThis, {MS: {resourcePresets: PRESETS}, resourceDraft: draft, libraryResources: {on: [], own: []},
     _keysToClear: new Set(), institutionProxies: [], activeProxy: 0, savedProxies: [],
+    aiProvider: "anthropic",
     buildInstitutions: () => [], renderProxyPicker() {}, refreshDbKeyBadges() {}, closeSettings() {},
     showToast() {}, fail: (m) => fails.push(m),
     fetch: async (url, opts) => { if (opts) sent.push(JSON.parse(opts.body)); return {json: async () => ({ok: true})}; }});

@@ -15,7 +15,7 @@ const ONBOARD_CONTENT = {
         title: '<svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-key\"/></svg> Set up your API key (for AI features)',
         steps: [
           '{Click} <strong>Settings</strong> in the bar {window}.',
-          'Paste your <strong>Anthropic key</strong> to enable AI summaries and synthesis. Get one free at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>.',
+          'Pick <strong>Anthropic</strong> or <strong>OpenRouter</strong> as the AI provider and paste its key: <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a> or <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai</a>. It enables AI summaries and synthesis.',
           '{Click} <strong>Save</strong>. That\'s the only key you need for the AI features.',
         ],
       },
@@ -51,7 +51,7 @@ const ONBOARD_CONTENT = {
         title: '<svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-key\"/></svg> Configura la tua chiave API (per le funzioni IA)',
         steps: [
           '{Click} <strong>Settings</strong> nella barra {window}.',
-          'Incolla la tua <strong>chiave Anthropic</strong> per attivare i riassunti e la sintesi IA. Ottienine una gratis su <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>.',
+          'Scegli <strong>Anthropic</strong> o <strong>OpenRouter</strong> come provider IA e incolla la sua chiave: <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a> oppure <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai</a>. Attiva i riassunti e la sintesi IA.',
           '{Click} <strong>Save</strong>. È l\'unica chiave necessaria per le funzioni IA.',
         ],
       },
@@ -1963,13 +1963,52 @@ let aiEnabled = MS.aiOn;
 let aiHasKey = MS.hasAiKey;     // follows a Settings save (saveSettings)
 let assistantOpen = false;   // declared here so applyAIState() can read it safely on load
 
+// ── The AI provider: Anthropic directly, or OpenRouter in front of it ───────
+// Both answer the same requests, so the choice is only about where the key
+// lives and which model is asked for. It is the user's own choice: a provider
+// with no key is never swapped for the other one behind their back.
+const AI_PROVIDERS = {
+  anthropic:  {label: 'Anthropic'},
+  openrouter: {label: 'OpenRouter'},
+};
+let aiProvider = AI_PROVIDERS[MS.aiProvider] ? MS.aiProvider : 'anthropic';
+
+// Show the key field and the models of the provider in use, and leave the
+// other's alone: its saved key stays where it is until it is chosen again.
+function renderAiProvider() {
+  document.querySelectorAll('#aiProviderToggle .sort-opt').forEach(b => {
+    const on = b.dataset.provider === aiProvider;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+    b.setAttribute('role', 'radio');
+  });
+  const label = AI_PROVIDERS[aiProvider].label;
+  const anth = document.getElementById('anthropicKeyField');
+  const orr  = document.getElementById('openrouterKeyField');
+  const mod  = document.getElementById('openrouterModelField');
+  if (anth) anth.hidden = aiProvider !== 'anthropic';
+  if (orr)  orr.hidden  = aiProvider !== 'openrouter';
+  if (mod)  mod.hidden  = aiProvider !== 'openrouter';
+  // The AI panel says whose key it needs.
+  const small = document.querySelector('#aiSwitchText small');
+  if (small) small.textContent = `Summaries, synthesis, Explain and the assistant, through your ${label} key`;
+  const hint = document.getElementById('aiKeyHint');
+  if (hint) hint.textContent = `Needs an ${label} API key: add one in Settings.`;
+}
+function setAiProvider(value) {
+  if (!AI_PROVIDERS[value]) return;
+  aiProvider = value;
+  renderAiProvider();
+}
+renderAiProvider();
+
 // The switch in the AI panel. Without a key, "on" makes no sense: Settings
 // opens instead and the switch stays off.
 function setAI(on) {
   if (on && !aiHasKey && !aiEnabled) {
     const sw = document.getElementById('aiSwitch');
     if (sw) sw.checked = false;
-    fail('Add your Anthropic API key in Settings to use AI features.');
+    fail(`Add your ${AI_PROVIDERS[aiProvider].label} API key in Settings to use AI features.`);
     closePanels(true);
     openSettings();
     return;
@@ -2855,15 +2894,19 @@ async function doExport(retried) {
 
 // ── Settings ───────────────────────────────────────────────────────────────
 // The library edits in Settings act on the live list, so leaving without
-// saving puts back what was there (the sweep, 20 Oct).
-let _settingsSaved = false, _librariesBefore = null;
+// saving puts back what was there (the sweep, 20 Oct). The AI provider is
+// like that: picking one shows its key field at once, so leaving without
+// saving puts the old one back.
+let _settingsSaved = false, _librariesBefore = null, _providerBefore = null;
 async function openSettings() {
   _settingsSaved = false;
   _librariesBefore = {list: JSON.parse(JSON.stringify(institutionProxies)), active: activeProxy};
+  _providerBefore = aiProvider;
   openOverlay('settingsOverlay');
   // Load which keys are already saved and indicate them in each field.
   const fields = {
     anthropic_api_key: 'set_anthropic',
+    openrouter_api_key: 'set_openrouter',
     pubmed_api_key:    'set_pubmed',
     scopus_api_key:    'set_scopus',
     scopus_insttoken:  'set_scopus_insttoken',
@@ -2919,6 +2962,13 @@ async function openSettings() {
     if (typeof s.active_proxy === 'number') activeProxy = s.active_proxy;
     institutionProxies = buildInstitutions();
     if (s.library_resources) libraryResources = s.library_resources;
+    // The provider in use, and the models asked for under OpenRouter. They are
+    // settings, not secrets, so they come back as they are.
+    if (AI_PROVIDERS[s.ai_provider]) { aiProvider = s.ai_provider; renderAiProvider(); }
+    const mainModel = document.getElementById('set_openrouter_main');
+    const fastModel = document.getElementById('set_openrouter_fast');
+    if (mainModel) mainModel.value = s.openrouter_model_main || '';
+    if (fastModel) fastModel.value = s.openrouter_model_fast || '';
   } catch(e) {}
   renderProxyRows();
   resourceDraft = {on: [...(libraryResources.on || [])],
@@ -2953,7 +3003,12 @@ function closeSettings() {
     activeProxy = _librariesBefore.active;
     renderProxyPicker();
   }
+  if (!_settingsSaved && _providerBefore) {
+    aiProvider = _providerBefore;
+    renderAiProvider();
+  }
   _librariesBefore = null;
+  _providerBefore = null;
   _settingsSaved = false;
   closeOverlay('settingsOverlay');
 }
@@ -3118,6 +3173,7 @@ function openUrlToSave(p) {
 async function saveSettings() {
   const raw = {
     anthropic_api_key: document.getElementById('set_anthropic').value.trim(),
+    openrouter_api_key: document.getElementById('set_openrouter').value.trim(),
     pubmed_api_key:    document.getElementById('set_pubmed').value.trim(),
     scopus_api_key:    document.getElementById('set_scopus').value.trim(),
     scopus_insttoken:  document.getElementById('set_scopus_insttoken').value.trim(),
@@ -3137,6 +3193,12 @@ async function saveSettings() {
     if (v && !_keysToClear.has(k)) payload[k] = v;
   }
   payload.clear = [..._keysToClear];
+  // Which service the AI talks to, and the models asked for under OpenRouter.
+  payload.ai_provider = aiProvider;
+  const orMain = document.getElementById('set_openrouter_main');
+  const orFast = document.getElementById('set_openrouter_fast');
+  if (orMain && orMain.value.trim()) payload.openrouter_model_main = orMain.value.trim();
+  if (orFast && orFast.value.trim()) payload.openrouter_model_fast = orFast.value.trim();
   // Proxies: send the full list (drop empty rows) + the active index.
   // Persist proxies that have a URL. Keep the `id` for predefined institutions
   // so their URL rehydrates into the right slot on reload (and isn't duplicated
@@ -3186,6 +3248,9 @@ async function saveSettings() {
       aiEnabled = s.has_ai_key && s.ai_enabled !== false;
       applyAIState();
     }
+    // The provider the server settled on, and its key: the key that counts is
+    // the one of the provider in use.
+    if (AI_PROVIDERS[s.ai_provider]) { aiProvider = s.ai_provider; renderAiProvider(); }
   } catch(e) {}
   _settingsSaved = true;
   closeSettings();

@@ -1547,6 +1547,8 @@ body {
   background: var(--green-tint);
 }
 .settings-field input.has-saved::placeholder { color: var(--green); }
+/* Two model fields under one label: a little air between them */
+.settings-field .model-input + .model-input { margin-top: 8px; }
 .settings-footer {
   padding: 12px 24px 20px;
   display: flex;
