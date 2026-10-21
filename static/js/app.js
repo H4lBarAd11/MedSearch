@@ -3410,11 +3410,21 @@ const _SHEET_EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
 // waited for it (too slow, his phone, 21 Oct).
 const _SHEET_OUT_EASE = 'cubic-bezier(0.4, 0, 1, 1)';
 const _SHEET_IN = 480, _SHEET_OUT = 240;
+// .sliding while a screen moves: its scroll-edge mask (touch.css) moves with
+// it, and mid-slide that clear band showed the page's chips through the
+// rising screen (21 Oct); it comes back once the screen has settled.
+function _sliding(el, a) {
+  el.classList.add('sliding');
+  const done = () => el.classList.remove('sliding');
+  a.addEventListener('finish', done);
+  a.addEventListener('cancel', done);
+  return a;
+}
 function _sheetIn(el) {
   el.classList.remove('closing');     // see _sheetOut
   if (_reduceMotion.matches || !el.animate) return null;
-  if (_sheetsSlide()) return el.animate([{transform: 'translateY(100%)'}, {transform: 'none'}],
-                                        {duration: _SHEET_IN, easing: _SHEET_EASE});
+  if (_sheetsSlide()) return _sliding(el, el.animate([{transform: 'translateY(100%)'}, {transform: 'none'}],
+                                                     {duration: _SHEET_IN, easing: _SHEET_EASE}));
   if (_sheetsCentred()) return el.animate([{opacity: 0}, {opacity: 1}], {duration: 220, easing: _EASE});
   return el.animate([{opacity: 0, transform: 'translateY(8px) scale(0.985)'},
                      {opacity: 1, transform: 'none'}], {duration: 220, easing: _EASE});
@@ -3422,8 +3432,8 @@ function _sheetIn(el) {
 function _sheetOut(el) {
   if (_reduceMotion.matches || !el.animate) return null;
   const a = _sheetsSlide()
-    ? el.animate([{transform: 'none'}, {transform: 'translateY(100%)'}],
-                 {duration: _SHEET_OUT, easing: _SHEET_OUT_EASE})
+    ? _sliding(el, el.animate([{transform: 'none'}, {transform: 'translateY(100%)'}],
+                              {duration: _SHEET_OUT, easing: _SHEET_OUT_EASE}))
     : _sheetsCentred() ? el.animate([{opacity: 1}, {opacity: 0}], {duration: 160, easing: _EASE})
     : el.animate([{opacity: 1, transform: 'none'},
                   {opacity: 0, transform: 'translateY(8px) scale(0.985)'}], {duration: 160, easing: _EASE});

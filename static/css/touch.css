@@ -670,6 +670,7 @@ html.native-chrome:has(.assistant-panel.open, .synthesis-panel.open) .results-sc
     -webkit-mask-image: linear-gradient(to bottom, transparent env(safe-area-inset-top), #000 calc(var(--chrome-top) + 4px));
             mask-image: linear-gradient(to bottom, transparent env(safe-area-inset-top), #000 calc(var(--chrome-top) + 4px));
   }
+  html.native-chrome .dock-panel.sliding { -webkit-mask-image: none; mask-image: none; }
   html.native-chrome .settings-body {
     -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
             mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
