@@ -191,6 +191,8 @@ DEFAULTS = {
     # Selected national guideline body (country code, e.g. "it"). Used by the
     # "National guidelines" button to open the right authority's search.
     "guideline_country": "",
+    # Light, dark or the system's (Settings › Appearance).
+    "appearance": "system",
     # Default source for the menu bar's quick search. One of the source keys
     # ("pubmed", "guidelines", "scopus", ...) or "all". Set from that menu.
     "default_source": "pubmed",
@@ -3881,6 +3883,26 @@ EXPORTS_FOLDER = None
 # And a function giving that folder's name for Settings (None: none picked).
 EXPORTS_FOLDER_NAME = None
 
+# The app's own windows follow Settings › Appearance through this: the Mac's
+# GUI start and the iOS shell set it to a function taking "system", "light"
+# or "dark" (the page follows by itself).
+APPEARANCE_HOOK = None
+APPEARANCES = ("system", "light", "dark")
+
+
+def appearance():
+    """Settings › Appearance: system, light or dark."""
+    value = CONFIG.get("appearance")
+    return value if value in APPEARANCES else "system"
+
+
+def _tell_appearance_hook():
+    if APPEARANCE_HOOK is not None:
+        try:
+            APPEARANCE_HOOK(appearance())
+        except Exception as e:
+            print(f"  appearance: the windows were not told ({e})")
+
 
 def exports_folder_name():
     """iOS: the picked folder's name, shown in Settings; None elsewhere or
@@ -4330,6 +4352,17 @@ def _start_sources():
     ticked = [k for k in saved if k in known] if isinstance(saved, list) else []
     return ticked or ["pubmed"]
 
+@app.route("/appearance", methods=["POST"])
+def remember_appearance():
+    """Settings › Appearance, kept and passed to the app's own windows."""
+    value = _json_body().get("appearance")
+    if value not in APPEARANCES:
+        return jsonify({"ok": False, "message": "Appearance is system, light or dark."}), 400
+    CONFIG["appearance"] = value
+    save_config(CONFIG)
+    _tell_appearance_hook()
+    return jsonify({"ok": True, "appearance": value})
+
 @app.route("/languages", methods=["POST"])
 def remember_languages():
     """The languages set under Options, kept for the next start."""
@@ -4388,6 +4421,7 @@ def index():
                            # no update check, no Updates field in Settings.
                            on_ios=(sys.platform == "ios"),
                            exports_folder_name=exports_folder_name(),
+                           appearance=appearance(),
                            installed=(_install_kind() != "source"))
 
 @app.route("/ping")
@@ -6501,6 +6535,27 @@ if __name__ == "__main__":
             (CONFIG_DIR / "articles.log").unlink(missing_ok=True)
         except Exception as e:                      # the windows still open without it
             print(f"  (article window tabs and downloads unavailable: {e})")
+
+        # Settings › Appearance for the Mac's own windows, dialogs and splash:
+        # the app's NSAppearance (None follows the system). Set once here, on
+        # the main thread before anything is drawn, and again from the main
+        # thread whenever Settings changes it.
+        if sys.platform == "darwin":
+            def _mac_appearance(value):
+                from AppKit import NSApplication, NSAppearance
+                name = {"light": "NSAppearanceNameAqua", "dark": "NSAppearanceNameDarkAqua"}.get(value)
+                NSApplication.sharedApplication().setAppearance_(
+                    NSAppearance.appearanceNamed_(name) if name else None)
+
+            def _mac_appearance_later(value):
+                from PyObjCTools import AppHelper
+                AppHelper.callAfter(_mac_appearance, value)
+
+            try:
+                _mac_appearance(appearance())
+                APPEARANCE_HOOK = _mac_appearance_later
+            except Exception as e:
+                print(f"  (appearance stays the system's: {e})")
 
         # The splash (splash.py), for a launch that shows the window: not for one
         # opened at login into the menu bar. The window then stays hidden until

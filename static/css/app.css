@@ -84,48 +84,49 @@
    the same roles as the light one. The single value SnowCOM doesn't have
    is the AI blue: the day blue is 3.28:1 on charcoal, so the night one is
    #7FA7D6 (6.96:1), derived here and measured, not approved. ─────────── */
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --bg:          #1B1A17;
-    --bg2:         #24231F;
-    --bg3:         #2C2B26;
-    --bg4:         #33312B;
-    --border:      #37352E;
-    --border2:     #46433B;
-    --text:        #ECEAE0;
-    --text2:       #C9C6BB;
-    --text3:       #A3A095;   /* 6.65:1 on the ground */
-    --accent:      #93B293;   /* sage */
-    --accent2:     #A9C4A9;
-    --accent-text: #93B293;   /* 7.48:1 — no deep shade needed at night */
-    --green:       #93B293;
-    --yellow:      #D19A62;   /* caramel */
-    --red:         #F0507A;   /* rose */
-    --retract:     #F0507A;
-    --purple:      #7FA7D6;   /* AI — see note above */
-    --neutral:     #6B6960;
-    --on-accent:   #1B1A17;   /* charcoal on sage: 7.48:1 */
-    --wordmark:    #93B293;
-    --chrome-glass: rgba(27,26,23,0.92);
-    --scrim:       rgba(0,0,0,0.55);
-    --scrim-deep:  rgba(0,0,0,0.65);
-    --accent-tint:  rgba(147,178,147,0.14);
-    --accent-tint2: rgba(147,178,147,0.24);
-    --green-tint:   rgba(147,178,147,0.14);
-    --green-tint2:  rgba(147,178,147,0.24);
-    --yellow-tint:  rgba(209,154,98,0.13);
-    --yellow-tint2: rgba(209,154,98,0.22);
-    --red-tint:     rgba(240,80,122,0.13);
-    --retract-tint: rgba(240,80,122,0.13);
-    --purple-tint:  rgba(127,167,214,0.14);
-    --purple-tint2: rgba(127,167,214,0.24);
-    --shadow:      0 8px 28px rgba(0,0,0,0.45);
-    --shadow-dialog: 0 18px 48px rgba(0,0,0,0.55);
-    --input-bg:    #201F1B;
-  }
-  ::-webkit-scrollbar-thumb { background: var(--border2); }
+/* The night ground, chosen by data-theme on <html>: set before the first
+   paint by the page's head (index.html) from Settings › Appearance, and
+   following the system while that says System (21 Oct, his ask). */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg:          #1B1A17;
+  --bg2:         #24231F;
+  --bg3:         #2C2B26;
+  --bg4:         #33312B;
+  --border:      #37352E;
+  --border2:     #46433B;
+  --text:        #ECEAE0;
+  --text2:       #C9C6BB;
+  --text3:       #A3A095;   /* 6.65:1 on the ground */
+  --accent:      #93B293;   /* sage */
+  --accent2:     #A9C4A9;
+  --accent-text: #93B293;   /* 7.48:1 — no deep shade needed at night */
+  --green:       #93B293;
+  --yellow:      #D19A62;   /* caramel */
+  --red:         #F0507A;   /* rose */
+  --retract:     #F0507A;
+  --purple:      #7FA7D6;   /* AI — see note above */
+  --neutral:     #6B6960;
+  --on-accent:   #1B1A17;   /* charcoal on sage: 7.48:1 */
+  --wordmark:    #93B293;
+  --chrome-glass: rgba(27,26,23,0.92);
+  --scrim:       rgba(0,0,0,0.55);
+  --scrim-deep:  rgba(0,0,0,0.65);
+  --accent-tint:  rgba(147,178,147,0.14);
+  --accent-tint2: rgba(147,178,147,0.24);
+  --green-tint:   rgba(147,178,147,0.14);
+  --green-tint2:  rgba(147,178,147,0.24);
+  --yellow-tint:  rgba(209,154,98,0.13);
+  --yellow-tint2: rgba(209,154,98,0.22);
+  --red-tint:     rgba(240,80,122,0.13);
+  --retract-tint: rgba(240,80,122,0.13);
+  --purple-tint:  rgba(127,167,214,0.14);
+  --purple-tint2: rgba(127,167,214,0.24);
+  --shadow:      0 8px 28px rgba(0,0,0,0.45);
+  --shadow-dialog: 0 18px 48px rgba(0,0,0,0.55);
+  --input-bg:    #201F1B;
 }
+:root[data-theme="dark"] ::-webkit-scrollbar-thumb { background: var(--border2); }
 
 /* 14px, and NO font smoothing override: DM Sans exactly as the other
    applications render it. */
@@ -2383,8 +2384,8 @@ button:active:not(:disabled), .link-btn:active { transform: scale(0.97); }
   .results-header { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
 @media (prefers-contrast: more) {
-  :root { --border: var(--border2); --text3: #5E5E5A; }
-  @media (prefers-color-scheme: dark) { :root { --text3: #C9C6BB; } }
+  :root, :root[data-theme] { --border: var(--border2); --text3: #5E5E5A; }
+  :root[data-theme="dark"] { --text3: #C9C6BB; }
   .results-header { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none;
                     box-shadow: 0 1px 0 var(--text3); }
   button { border-color: var(--text3); }

@@ -506,6 +506,7 @@ class MedSearch(toga.App):
         self.main_window.content = box
         self.main_window.show()
         self._take_the_whole_screen()
+        self._follow_appearance()
         self._install_page_bridge()
         # The page scrolls its results inside itself, as on the desktop; the
         # web view's own scroller only let a finger drag the whole page
@@ -539,6 +540,7 @@ class MedSearch(toga.App):
         try:
             self.engine_server, _token = start_engine()
             port = self.engine_server.port
+            self._hear_appearance()
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -731,6 +733,32 @@ class MedSearch(toga.App):
                 self._life, SEL("keyboardHid:"), "UIKeyboardDidHideNotification", None)
         except Exception as e:
             print(f"MedSearch iOS: the engine is not checked on return ({e})")
+
+    def _apply_appearance(self, value: str) -> None:
+        """Settings › Appearance for the native parts (the glass bars, the X,
+        the toasts, the alerts, the splash): the window's own light or dark,
+        or the system's."""
+        style = {"light": 1, "dark": 2}.get(value, 0)        # UIUserInterfaceStyle; 0 follows the system
+        try:
+            self.main_window._impl.native.overrideUserInterfaceStyle = style
+        except Exception as e:
+            print(f"MedSearch iOS: appearance not applied ({e})")
+
+    def _follow_appearance(self):
+        """At launch, before the splash: the choice read straight from the
+        engine's config file (the engine isn't running yet)."""
+        try:
+            path = Path.home() / "Library" / "Application Support" / "MedSearch" / "config.json"
+            value = json.loads(path.read_text()).get("appearance", "system")
+        except Exception:
+            value = "system"
+        self._apply_appearance(value)
+
+    def _hear_appearance(self):
+        """Once the engine runs: Settings › Appearance changes reach the
+        window (the engine calls this from its request thread)."""
+        import app as engine
+        engine.APPEARANCE_HOOK = lambda value: self.loop.call_soon_threadsafe(self._apply_appearance, value)
 
     def page_back_in_place(self):
         """The keyboard has gone: the web view's content back to the top. To

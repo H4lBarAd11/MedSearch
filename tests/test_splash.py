@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def _tokens(theme):
     css = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")
-    light, dark = css.split("@media (prefers-color-scheme: dark)", 1)
+    light, dark = css.split(":root[data-theme=\"dark\"] {", 1)
     part = light if theme == "light" else dark
     return {m.group(1): tuple(int(m.group(2)[i:i + 2], 16) for i in (0, 2, 4))
             for m in re.finditer(r"--([a-z0-9-]+):\s*#([0-9A-Fa-f]{6})", part)}

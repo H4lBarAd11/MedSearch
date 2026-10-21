@@ -6,6 +6,20 @@
      indicator on a phone, and lays its bars out with env(safe-area-inset-*). -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>MedSearch</title>
+<script>
+  // LIGHT, DARK OR THE SYSTEM'S (Settings › Appearance, 21 Oct): data-theme
+  // on <html>, set before anything is drawn. While it says System it follows
+  // the system's own switch as that changes; setAppearance (app.js) changes it.
+  (function () {
+    var pref = {{ appearance | tojson }}, night = window.matchMedia('(prefers-color-scheme: dark)');
+    function apply() {
+      document.documentElement.dataset.theme = pref === 'system' ? (night.matches ? 'dark' : 'light') : pref;
+    }
+    apply();
+    night.addEventListener('change', function () { if (pref === 'system') apply(); });
+    window.__msAppearance = function (value) { pref = value; apply(); };
+  })();
+</script>
 <link rel="stylesheet" href="/static/css/app.css?v={{ asset_v }}">
 <link rel="stylesheet" href="/static/css/touch.css?v={{ asset_v }}">
 <!-- PDF.js ships with the app (static/vendor/pdfjs), so the viewer works
@@ -24,6 +38,7 @@
     institutionProxies: {{ institution_proxies | tojson }},
     libraryResources:   {{ library_resources | tojson }},
     languages:          {{ languages | tojson }},
+    appearance:         {{ appearance | tojson }},
     languageNames:      {{ language_names | tojson }},
     resourcePresets:    {{ library_resource_presets | tojson }},
     activeProxy:        {{ active_proxy | tojson }},
@@ -480,6 +495,14 @@
       <span class="settings-title">Settings &amp; API Keys</span>
     </div>
     <div class="settings-body">
+      <div class="settings-field">
+        <label>Appearance</label>
+        <div class="sort-toggle appearance-toggle" id="appearanceToggle" role="radiogroup" aria-label="Appearance">
+          <button type="button" class="sort-opt" data-appearance="system" onclick="setAppearance('system')">System</button>
+          <button type="button" class="sort-opt" data-appearance="light" onclick="setAppearance('light')">Light</button>
+          <button type="button" class="sort-opt" data-appearance="dark" onclick="setAppearance('dark')">Dark</button>
+        </div>
+      </div>
       <div class="settings-field">
         <label>Anthropic API key (AI summaries &amp; synthesis)</label>
         <input type="password" id="set_anthropic" placeholder="sk-ant-…">

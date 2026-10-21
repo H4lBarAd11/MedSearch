@@ -1178,3 +1178,23 @@ def test_the_guidelines_country_is_kept_when_picked_not_only_when_opened(client,
     assert client.get("/guidelines/bodies", headers=auth, base_url=BASE).json["selected"] == code
     assert client.post("/guidelines/country", json={"country": "zz"}, headers=auth,
                        base_url=BASE).status_code == 400
+
+
+def test_appearance_is_kept_told_to_the_windows_and_set_before_the_page_draws(client, auth, monkeypatch):
+    told = []
+    monkeypatch.setattr(A, "APPEARANCE_HOOK", told.append)
+    page = client.get("/", base_url=BASE).get_data(as_text=True)
+    assert 'var pref = "system"' in page and 'id="appearanceToggle"' in page
+    assert page.index("dataset.theme") < page.index("/static/css/app.css")    # before the styles paint
+    r = client.post("/appearance", json={"appearance": "dark"}, headers=auth, base_url=BASE)
+    assert r.json == {"ok": True, "appearance": "dark"} and A.CONFIG["appearance"] == "dark"
+    assert told == ["dark"]
+    assert 'var pref = "dark"' in client.get("/", base_url=BASE).get_data(as_text=True)
+    assert client.post("/appearance", json={"appearance": "sepia"}, headers=auth,
+                       base_url=BASE).status_code == 400
+    assert A.CONFIG["appearance"] == "dark" and told == ["dark"]
+
+
+def test_an_unknown_saved_appearance_reads_as_the_systems():
+    A.CONFIG["appearance"] = "neon"
+    assert A.appearance() == "system"

@@ -924,6 +924,29 @@ function proxify(url) {
 // Toggle the Relevance / Recent sort control.
 // suppressRerun=true updates the UI state only (used when another flow, e.g.
 // running a saved search, will trigger the search itself).
+// ── Appearance: System, Light or Dark ───────────────────────────────────────
+// The page's colours change at once (index.html's head script); the engine
+// keeps the choice and has the app's own windows follow it (the Mac's
+// dialogs, the iPhone's glass bars and alerts).
+let appearance = MS.appearance || 'system';
+function renderAppearance() {
+  document.querySelectorAll('#appearanceToggle .sort-opt').forEach(b => {
+    const on = b.dataset.appearance === appearance;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+    b.setAttribute('role', 'radio');
+  });
+}
+function setAppearance(value) {
+  if (!['system', 'light', 'dark'].includes(value)) return;
+  appearance = value;
+  if (window.__msAppearance) window.__msAppearance(value);
+  renderAppearance();
+  fetch('/appearance', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({appearance: value})}).catch(() => {});
+}
+renderAppearance();
+
 function setSortMode(mode, suppressRerun) {
   if (mode !== 'relevance' && mode !== 'date') mode = 'relevance';
   sortMode = mode;
