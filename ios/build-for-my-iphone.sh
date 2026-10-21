@@ -173,8 +173,13 @@ if ! xcodebuild -project "$XCODEPROJ" -scheme MedSearch -configuration Debug \
       DEVELOPMENT_TEAM="$TEAM" CODE_SIGN_STYLE=Automatic PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE" \
       build >>"$LOG" 2>&1; then
   grep -E "error:|Unable to find a destination|not available|No Account|No profiles" "$LOG" | tail -8 >&2 || tail -20 "$LOG" >&2
-  fail "The build failed (full log: $LOG). Is the iPhone unlocked and nearby? If Xcode says the
-  Apple ID needs attention, open Xcode › Settings › Accounts and sign in again."
+  if grep -q -E "(Preparing|Connecting to) .*Xcode will continue" "$LOG"; then
+    fail "Xcode is still getting the device ready for development: the first time only, and it
+  can take several minutes. Keep it unlocked (a cable is faster than Wi-Fi); Xcode › Window ›
+  Devices and Simulators shows how far it has got. Then run this again."
+  fi
+  fail "The build failed (full log: $LOG). Is the iPhone or iPad unlocked and nearby? If Xcode says
+  the Apple ID needs attention, open Xcode › Settings › Accounts and sign in again."
 fi
 APP="$DERIVED/Build/Products/Debug-iphoneos/MedSearch.app"
 [ -d "$APP" ] || fail "The build left no app at $APP (full log: $LOG)."

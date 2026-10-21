@@ -547,6 +547,13 @@ html.native-chrome .dock-panel {
   left: 50% !important; transform: translateX(-50%);
   top: auto; bottom: calc(env(safe-area-inset-bottom) + 72px);
 }
+/* Options on an iPad: wider than the desktop's 400px. At the system's text
+   size its label column ("Results per source") left the fields too narrow,
+   and "From, e.g. 2018" and the institution's hint were cut off (his iPad,
+   21 Oct). A phone lays it out in one column (below). */
+@media (min-width: 701px) {
+  html.native-chrome #panelOptions { width: 520px; }
+}
 /* On an iPad the assistant and the synthesis are sheets in the middle, as
    Settings is, closed by the native X: their own small close marks go on
    every size (two closes on one screen, his iPad, 19 Oct). */

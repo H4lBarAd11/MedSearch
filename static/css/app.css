@@ -2310,6 +2310,10 @@ button.mesh-tag { font: inherit; font-size: 0.8rem; }
 .opt-grid .people-label { align-self: start; margin-top: 9px; }
 .opt-grid .filter-row { margin: 0; }
 .opt-grid .search-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0; }
+/* "Matching" level with the Strict switch, the first line of its row: centred
+   on the whole row, it sat below the switch once the hint wrapped to a second
+   line (his iPad, 21 Oct). */
+.opt-grid .filter-label:has(+ .search-hint), .opt-grid .search-hint { align-self: baseline; }
 .syntax-help { margin-top: 14px; font-size: 0.78rem; color: var(--text2); }
 .syntax-help summary { cursor: pointer; color: var(--text3); }
 .syntax-help p { margin: 8px 0 0; line-height: 1.55; }
