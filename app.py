@@ -4710,19 +4710,40 @@ def _install_kind():
         return {"darwin": "mac_app", "win32": "windows_app"}.get(sys.platform, "source")
     return "source"
 
-def _asset_name(version, system=None):
+def _windows_machine():
+    """"arm64" on a Windows PC with an ARM processor, else "x64". The PC's own
+    architecture, not this program's: an x64 MedSearch that Windows runs
+    under emulation on an ARM PC says "arm64", so its next update installs
+    the native ARM build."""
+    if sys.platform != "win32":
+        return "x64"            # asked only about Windows' installers (a Mac's is one for both)
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        process, native = ctypes.c_ushort(), ctypes.c_ushort()
+        if k32.IsWow64Process2(k32.GetCurrentProcess(), ctypes.byref(process), ctypes.byref(native)):
+            return "arm64" if native.value == 0xAA64 else "x64"          # IMAGE_FILE_MACHINE_ARM64
+    except Exception:
+        pass
+    import platform
+    return "arm64" if platform.machine().upper() in ("ARM64", "AARCH64") else "x64"
+
+# Versions released without an ARM installer (2.4 and before): an ARM PC
+# takes their x64 one, which Windows runs under emulation.
+_NO_ARM64 = set()
+
+def _asset_name(version, system=None, machine=None):
     if (system or sys.platform) == "win32":
+        if (machine or _windows_machine()) == "arm64" and version not in _NO_ARM64:
+            return f"MedSearch-{version}-Setup-arm64.exe"
         return f"MedSearch-{version}-Setup.exe"
     return f"MedSearch-{version}-mac.dmg"
 
-def _release_url(version, system=None):
-    return f"{GITHUB_RELEASES}/v{version}/{_asset_name(version, system)}"
+def _release_url(version, system=None, machine=None):
+    return f"{GITHUB_RELEASES}/v{version}/{_asset_name(version, system, machine)}"
 
-def _release_published(version):
-    """True once this version's installer for this system is on GitHub, False
-    while it is not, None when GitHub could not be asked."""
-    req = urllib.request.Request(_release_url(version), method="HEAD",
-                                 headers={"User-Agent": "MedSearch"})
+def _head_ok(url):
+    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "MedSearch"})
     try:
         with urllib.request.urlopen(req, timeout=8) as r:
             return 200 <= r.status < 300
@@ -4730,6 +4751,19 @@ def _release_published(version):
         return False if e.code == 404 else None
     except Exception:
         return None
+
+def _release_published(version):
+    """True once this version's installer for this system is on GitHub, False
+    while it is not, None when GitHub could not be asked. On an ARM PC a
+    release without an ARM installer counts by its x64 one, and is then
+    downloaded as that (_NO_ARM64)."""
+    found = _head_ok(_release_url(version))
+    if found is False and _asset_name(version).endswith("-arm64.exe"):
+        x64 = _head_ok(_release_url(version, machine="x64"))
+        if x64:
+            _NO_ARM64.add(version)
+        return x64
+    return found
 
 def _published_version():
     commit = _published_commit()

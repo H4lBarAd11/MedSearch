@@ -15,6 +15,14 @@
 ; not in the program folder (they are in the user's .medsearch folder and in
 ; Credential Manager), so an update or an uninstall leaves them alone.
 
+; THE ARCHITECTURE: x64, or arm64 for Windows on ARM (/DArch=arm64, which
+; build-windows.ps1 passes when its Python is ARM64). Same AppId, same folder:
+; an ARM PC that ran the x64 build under emulation moves to the native one at
+; its next update. The x64 Setup keeps the name every earlier version looks for.
+#ifndef Arch
+  #define Arch "x64"
+#endif
+
 #define VersionFile AddBackslash(SourcePath) + "..\VERSION"
 #define VersionHandle FileOpen(VersionFile)
 #define AppVersion Trim(FileRead(VersionHandle))
@@ -34,10 +42,16 @@ DefaultGroupName=MedSearch
 DisableProgramGroupPage=yes
 DisableDirPage=yes
 PrivilegesRequired=lowest
+#if Arch == "arm64"
+ArchitecturesAllowed=arm64
+ArchitecturesInstallIn64BitMode=arm64
+OutputBaseFilename=MedSearch-{#AppVersion}-Setup-arm64
+#else
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-OutputDir=..\dist
 OutputBaseFilename=MedSearch-{#AppVersion}-Setup
+#endif
+OutputDir=..\dist
 SetupIconFile=..\icon.ico
 UninstallDisplayIcon={app}\MedSearch.exe
 UninstallDisplayName=MedSearch

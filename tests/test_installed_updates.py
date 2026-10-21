@@ -359,3 +359,27 @@ def test_update_now_on_windows_downloads_setup_and_hands_over_to_it(client, auth
     url, dest = fetched[0]
     assert url.endswith("/v9.9/MedSearch-9.9-Setup.exe") and dest.name == "MedSearch-9.9-Setup.exe"
     assert no_leaving == [("windows", dest)]
+
+
+def test_an_arm_pc_takes_the_arm_installer_and_an_older_releases_x64_one(monkeypatch):
+    assert A._asset_name("2.5", "win32", "arm64") == "MedSearch-2.5-Setup-arm64.exe"
+    assert A._asset_name("2.5", "win32", "x64") == "MedSearch-2.5-Setup.exe"
+    assert A._asset_name("2.5", "darwin", "arm64") == "MedSearch-2.5-mac.dmg"
+    monkeypatch.setattr(A.sys, "platform", "win32")
+    monkeypatch.setattr(A, "_windows_machine", lambda: "arm64")
+    monkeypatch.setattr(A, "_NO_ARM64", set())
+    on_github = {"/v2.5/MedSearch-2.5-Setup-arm64.exe", "/v2.5/MedSearch-2.5-Setup.exe",
+                 "/v2.4/MedSearch-2.4-Setup.exe"}
+    asked = []
+
+    def head(url):
+        asked.append(url.split("/download")[1])
+        return url.split("/download")[1] in on_github
+    monkeypatch.setattr(A, "_head_ok", head)
+    assert A._release_published("2.5") is True
+    assert A._release_url("2.5").endswith("/v2.5/MedSearch-2.5-Setup-arm64.exe")
+    assert A._release_published("2.4") is True                  # no ARM build: the x64 one
+    assert A._release_url("2.4").endswith("/v2.4/MedSearch-2.4-Setup.exe")
+    assert asked == ["/v2.5/MedSearch-2.5-Setup-arm64.exe",
+                     "/v2.4/MedSearch-2.4-Setup-arm64.exe", "/v2.4/MedSearch-2.4-Setup.exe"]
+    assert A._release_published("2.6") is False                 # neither is there yet

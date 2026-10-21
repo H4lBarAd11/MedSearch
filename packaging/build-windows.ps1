@@ -6,7 +6,8 @@
 # Needs a Python with requirements.txt and PyInstaller installed (-Python names
 # it; default: python), and Inno Setup 6. Writes, in the MedSearch folder:
 #   dist\MedSearch\MedSearch.exe
-#   dist\MedSearch-<version>-Setup.exe
+#   dist\MedSearch-<version>-Setup.exe        (x64)
+#   dist\MedSearch-<version>-Setup-arm64.exe  (when the Python is ARM64: Windows on ARM)
 param([string]$Python = "python")
 $ErrorActionPreference = "Stop"
 
@@ -25,8 +26,11 @@ foreach ($Candidate in @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
 }
 if (-not $Iscc) { throw "Inno Setup 6 (ISCC.exe) was not found" }
 
-& $Iscc /Q packaging\MedSearch.iss
+# The installer is for the architecture the Python (and so MedSearch.exe) is.
+$Arch = (& $Python -c "import platform; print('arm64' if platform.machine().upper() in ('ARM64', 'AARCH64') else 'x64')").Trim()
+& $Iscc /Q "/DArch=$Arch" packaging\MedSearch.iss
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed ($LASTEXITCODE)" }
 
 $Version = (Get-Content VERSION -Raw).Trim()
-Write-Host "Built dist\MedSearch-$Version-Setup.exe"
+$Suffix = if ($Arch -eq "arm64") { "-arm64" } else { "" }
+Write-Host "Built dist\MedSearch-$Version-Setup$Suffix.exe ($Arch)"

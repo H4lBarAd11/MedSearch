@@ -57,6 +57,9 @@ def clean_state(monkeypatch):
     # Nor does any test see a MedSearch.app installed on the Mac running it:
     # the ones about an installed app say so themselves.
     monkeypatch.setattr(A, "_installed_mac_app", lambda: False)
+    # Nor the processor it runs on: a test that plays Windows on an ARM machine
+    # (a Mac with Apple silicon, an ARM runner) is an x64 PC unless it says so.
+    monkeypatch.setattr(A, "_windows_machine", lambda: "x64")
     yield
 
 
