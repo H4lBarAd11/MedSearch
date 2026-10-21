@@ -22,7 +22,8 @@ MedSearch runs on your own computer. What matters most:
 - its local server, which answers only MedSearch's own window: every request carries a
   token chosen afresh at each start;
 - the API keys and library sign-ins it keeps in the Keychain (on Windows, Credential
-  Manager), and the pages it fills those sign-ins in on;
+  Manager; on iPhone and iPad, the device's Keychain), and the pages it fills those
+  sign-ins in on;
 - its updates, which come from this repository's Releases, and Uninstall.
 
 A problem in one of the literature services MedSearch searches belongs to that service.

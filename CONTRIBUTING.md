@@ -10,8 +10,9 @@ Open an [issue](https://github.com/H4lBarAd11/MedSearch/issues/new/choose) and c
 **Report a problem**. The form asks for what makes a problem possible to find:
 
 - what you did, what happened, and what you expected instead;
-- the MedSearch version, shown in **Settings ▸ Updates**, and your system (macOS or
-  Windows, and its version);
+- the MedSearch version, shown in **Settings ▸ Updates** (on iPhone and iPad, under the
+  MedSearch name on the start screen), and your system (macOS, Windows, iOS or iPadOS, and
+  its version);
 - the databases that were ticked, when it is about a search.
 
 The installed app keeps a record of what it does, `medsearch.log`, in the `.medsearch`

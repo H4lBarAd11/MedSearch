@@ -27,8 +27,8 @@ body:
     id: version
     attributes:
       label: MedSearch version
-      description: Shown in Settings ▸ Updates.
-      placeholder: "2.2"
+      description: Shown in Settings ▸ Updates (on iPhone and iPad, under the MedSearch name on the start screen).
+      placeholder: "2.4"
     validations:
       required: true
   - type: dropdown
@@ -38,6 +38,7 @@ body:
       options:
         - macOS
         - Windows
+        - iPhone or iPad
         - Run from source
     validations:
       required: true
@@ -45,7 +46,7 @@ body:
     id: system_version
     attributes:
       label: System version
-      placeholder: "macOS 15.4, Windows 11 24H2, …"
+      placeholder: "macOS 15.4, Windows 11 24H2, iOS 27.1, …"
   - type: input
     id: databases
     attributes:

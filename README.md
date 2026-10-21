@@ -2,8 +2,8 @@
   <img src="docs/readme/banner.svg" alt="MedSearch — the medical literature, sixteen sources at once, with AI summaries, a PDF reader and a research assistant" width="100%">
 </p>
 
-MedSearch is a desktop application for macOS and Windows, for searching the medical and
-scientific literature. One question goes to PubMed, Europe PMC, Cochrane, a
+MedSearch is an application for macOS and Windows, and for iPhone and iPad (built on your
+own Mac, see below), for searching the medical and scientific literature. One question goes to PubMed, Europe PMC, Cochrane, a
 clinical-guidelines source, ClinicalTrials.gov, OpenAlex, Crossref, CORE, arXiv, Scopus,
 Web of Science, IEEE Xplore and Semantic Scholar, and for books to NCBI Bookshelf, Open
 Library and Google Books, at the same time; the answers come back as one list, with the
@@ -88,13 +88,21 @@ browser window inside the app that remembers the login.
 
 **AI, if you want it.** With a Claude API key: a one-line takeaway on every result, a
 streamed synthesis across all of them, an *Explain* for any single paper, and a research
-assistant that answers from the papers on screen and cites them by number. One switch, *AI
-on/off* in the bottom bar, turns all of it off.
+assistant that answers from the papers on screen and cites them by number. The *AI* tab in
+the bottom bar has the switch that turns all of it off, what it has cost this month, and a
+monthly limit.
 
 **Citations and export.** A citation graph for any paper: what it cites, and what cites it,
 gathered from PubMed, Scopus, OpenAlex and OpenCitations. Export to Markdown, BibTeX or RIS,
-or straight into Zotero; a chapter goes as a chapter of its book, with the book's title,
-editors and publisher, and a whole book as a book.
+or straight into Zotero: through the Zotero app when it is open, or with a free Zotero key
+in Settings without it (on iPhone, always this way). A chapter goes as a chapter of its
+book, with the book's title, editors and publisher, and a whole book as a book. On a Mac
+the exported files are kept inside MedSearch, and *Show in Finder* opens them; on Windows
+they go to `medsearch_exports` in your user folder; on iPhone, to a folder you pick once in
+Files, such as Downloads.
+
+**Light or dark.** *Settings ▸ Appearance*: System (following the computer's or the
+iPhone's own setting as it changes), Light or Dark.
 
 **From the menu bar.** MedSearch keeps an icon in the macOS menu bar, or by the clock on
 Windows: a quick search from anywhere, your recent searches, and the default source for
@@ -207,11 +215,12 @@ The installers are built with `packaging/build-mac.sh` and `packaging/build-wind
 
 The free sources need no keys: PubMed, Europe PMC, Cochrane, the guidelines source,
 ClinicalTrials.gov, OpenAlex, Crossref, CORE, arXiv, NCBI Bookshelf and Open Library work
-out of the box. Keys are added
-in **Settings** (bottom bar) and never leave the machine: on macOS they are kept in the
-**Keychain** (visible in Keychain Access under *MedSearch*, and revocable from there), and
-on Windows in **Credential Manager** (*Windows Credentials*, as *MedSearch/…*), so no key
-is written to a file. A key saved by an older version is moved there the next time
+out of the box. Keys are added in **Settings** (bottom bar), where each one has a line or
+two on how to get it and a link straight to the right page. They never leave the machine:
+on macOS they are kept in the **Keychain** (visible in Keychain Access under *MedSearch*,
+and revocable from there), on Windows in **Credential Manager** (*Windows Credentials*, as
+*MedSearch/…*), and on iPhone and iPad in the device's Keychain, so no key is written to a
+file. A key saved by an older version is moved there the next time
 MedSearch starts. Where there is neither, they stay in `~/.medsearch/config.json`, which is
 readable only by its owner.
 
@@ -224,13 +233,14 @@ touches the Keychain, so it never asks.
 | Key | Where to get it | What it unlocks |
 |---|---|---|
 | **Anthropic (Claude)** | [console.anthropic.com](https://console.anthropic.com) | The AI features: summaries, synthesis, Explain, the assistant |
-| **NCBI / PubMed** | [ncbi.nlm.nih.gov/account](https://ncbi.nlm.nih.gov/account) | A higher PubMed rate limit (10 requests a second instead of 3) |
-| **Scopus** | [dev.elsevier.com](https://dev.elsevier.com) | Scopus as a source |
+| **NCBI / PubMed** | [your NCBI account settings](https://account.ncbi.nlm.nih.gov/settings/), *API Key Management* | A higher PubMed rate limit (10 requests a second instead of 3) |
+| **Scopus** | [dev.elsevier.com](https://dev.elsevier.com/apikey/manage), *Create API Key* | Scopus as a source |
 | **Web of Science** | [developer.clarivate.com](https://developer.clarivate.com) | Web of Science as a source |
 | **IEEE Xplore** | [developer.ieee.org](https://developer.ieee.org) | IEEE Xplore as a source (200 calls a day) |
 | **Semantic Scholar** | [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api) | Semantic Scholar as a source. Requested with an institutional email address; a key left unused for about 60 days may be removed |
 | **Google Books** | [console.cloud.google.com](https://console.cloud.google.com/apis/library/books.googleapis.com): a project with the Books API turned on, then *Credentials ▸ API key*: one line beginning `AIza` | Google Books as a source. Without a key Google answers no searches; the key's daily allowance shows in the Google Cloud console |
-| **OpenAlex** | [openalex.org](https://openalex.org) | Optional: about 1,000 OpenAlex searches a day instead of about 100 |
+| **OpenAlex** | [openalex.org/settings/api](https://openalex.org/settings/api), with a free account | Optional: OpenAlex's own daily allowance, about ten times the small one it shares without a key among everyone on your network |
+| **Zotero** | [zotero.org/settings/keys](https://www.zotero.org/settings/keys/new), with *library* and *write* access | Optional: *Send to Zotero* without the Zotero app open, and on iPhone |
 | **CORE** | [core.ac.uk/services/api](https://core.ac.uk/services/api) | Optional: more CORE searches a minute |
 | **Unpaywall** | any valid email address | Better detection of free full text. It is also given, as the contact they ask apps for, to Crossref, NCBI and Open Library |
 
@@ -294,11 +304,12 @@ set the spend limit there.
 ## Privacy
 
 Everything runs on your machine. Searches, keys, history and saved searches stay in
-`~/.medsearch/` (on Windows, `.medsearch` in your user folder). The only traffic out is to
-the literature services you search (including OpenAlex, for the suggestions while you type
-an author or institution, WorldCat when you look for a book in a library, and your
-library's catalogue when you ask it for a book) and, with AI
-on, to the Anthropic API. The email address set for Unpaywall goes to Unpaywall, Crossref,
+`~/.medsearch/` (on Windows, `.medsearch` in your user folder; on iPhone and iPad, inside
+the app). The only traffic out is to the literature services you search (including
+OpenAlex, for the suggestions while you type an author or institution, WorldCat when you
+look for a book in a library, and your library's catalogue when you ask it for a book), to
+Zotero when you send results there with a Zotero key, to GitHub to check for a new
+version, and, with AI on, to the Anthropic API. The email address set for Unpaywall goes to Unpaywall, Crossref,
 NCBI and Open Library, as the contact they ask apps for, and nowhere else.
 
 ---
@@ -343,9 +354,9 @@ library login applies.
 
 **PubMed answers with HTTP 429.** Too many requests: add a free NCBI key in Settings.
 
-**OpenAlex says its daily allowance is used up.** Without a key OpenAlex allows about 100
-searches a day, renewed at midnight UTC. A free OpenAlex key in Settings raises that to
-about 1,000.
+**OpenAlex says its daily allowance is used up.** Without a key, OpenAlex shares one small
+daily allowance among everyone on your network, renewed at midnight UTC. A free OpenAlex
+key in Settings gives you your own, about ten times larger.
 
 **Semantic Scholar no longer accepts its key (403).** Semantic Scholar removes keys left
 unused for about 60 days; request a new one.
@@ -362,6 +373,14 @@ the *WebView2 Runtime* from microsoft.com and open MedSearch again.
 
 **A key doesn't seem to take effect.** Enter it again in Settings and press Save; restart
 MedSearch if it still doesn't.
+
+**The iPhone app stops opening after a week.** Its free signing ran out. Run
+`ios/build-for-my-iphone.sh` again (or let its renewal do it: the iPhone unlocked, on the
+Mac's Wi-Fi or plugged in, when the Mac asks for Touch ID).
+
+**`build-for-my-iphone.sh` finds no iPhone, or no team.** Plug the iPhone in, unlock it
+and tap *Trust*; turn on *Developer Mode* in its Settings ▸ Privacy & Security. For the
+team, add your Apple ID in Xcode ▸ Settings ▸ Accounts.
 
 **"Externally managed environment" from pip.** Use a virtual environment:
 

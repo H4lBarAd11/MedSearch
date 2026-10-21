@@ -6,9 +6,9 @@ shell is `src/medsearch/shell.py`; everything else is copied in from the
 repository root at build time (see `sources` in `pyproject.toml`), so a change
 to the desktop app is a change to this one.
 
-Spike of 19 October 2026: the unchanged engine starts in the app, the page
-renders, and a PubMed search comes back over HTTPS (iPad Pro 11-inch
-simulator, iOS 27).
+To build it for your own iPhone or iPad, signed with your own Apple ID, run
+`build-for-my-iphone.sh` (the main README says what it needs). What follows is
+for working on the app itself.
 
 ## Building
 
@@ -77,7 +77,12 @@ trusted under Settings › General › VPN & Device Management.
 The engine's files live in the app's own Library/Application Support/MedSearch
 (the container's root, where `~/.medsearch` would be, is read-only on a
 device; the simulator allows it, so a simulator proves nothing here).
-Exports and saved PDFs go to Documents, which the Files app shows.
+Exports and saved PDFs go to a folder picked once in Files (`exports.py`, a
+security-scoped bookmark); Settings names it. The shell also writes its own
+messages to `shell.log` there, which `xcrun devicectl device copy from
+--domain-type appDataContainer --domain-identifier <bundle id> --source
+"Library/Application Support/MedSearch/shell.log" --destination .` fetches:
+a device's console shows only the launcher's lines, not Python's.
 
 ## What the shell provides
 
@@ -123,5 +128,5 @@ Exports and saved PDFs go to Documents, which the Files app shows.
   packaging/sign-mac.sh): a personal team's profile lasts seven days, a paid
   Developer ID a year. The public download is unsigned and keeps its keys in
   the login keychain, as before.
-- Saving a PDF from the page's own viewer (the desktop writes to Downloads).
-- The update check (the Store, or Xcode, updates the app).
+- The update check: a new version is installed by running
+  `build-for-my-iphone.sh` again after a `git pull`.
