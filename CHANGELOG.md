@@ -4,6 +4,12 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 2.5
+
+- Appearance, in Settings: System, Light or Dark. System follows the computer's own setting as it changes; Light and Dark keep MedSearch that way whatever the computer does.
+- Confirmation messages appear in the window's bottom-right corner, beside the bottom bar, instead of floating above it.
+- If MedSearch can't open its window, it now says so in a message and closes, instead of staying open where nothing shows it.
+
 ## 2.4
 
 - Zotero without the Zotero app: add a Zotero API key in Settings, and Send to Zotero saves straight into your online library whenever the Zotero app isn't open. The items appear in the app at its next sync.

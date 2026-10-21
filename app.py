@@ -5007,6 +5007,36 @@ def _update_installed(kind):
     threading.Thread(target=_replace_and_exit, args=(plan,), daemon=True).start()
     return jsonify({"ok": True, "restarting": True, "new_version": version})
 
+def _tell_window_failed(text):
+    """The system's own error dialog: the one thing that still shows when
+    MedSearch's window can't."""
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, text, "MedSearch", 0x10 | 0x10000)   # MB_ICONERROR | MB_SETFOREGROUND
+    elif sys.platform == "darwin":
+        subprocess.run(["osascript", "-e", "on run argv", "-e",
+                        'display alert "MedSearch" message (item 1 of argv) as critical',
+                        "-e", "end run", text], timeout=600, check=False)
+
+def _window_failed(e):
+    """MedSearch's window could not be made (on Windows, the .NET part
+    pywebview draws it with would not load): say so and quit for good.
+    Before, the error went nowhere and the splash's and the menu's threads
+    kept MedSearch running with no window, unseen (a Windows on ARM build,
+    21 Oct)."""
+    import traceback
+    traceback.print_exc()                       # into medsearch.log
+    where = CONFIG_DIR / "medsearch.log"
+    text = ("MedSearch couldn't open its window, so it has closed.\n\n"
+            f"{type(e).__name__}: {str(e).splitlines()[0][:200] if str(e) else ''}\n\n"
+            f"The details are in {where}. Installing MedSearch again usually puts this right; "
+            "if it doesn't, please report it on GitHub with that file.")
+    try:
+        _tell_window_failed(text)
+    except Exception as shown:
+        print(f"  (the error dialog couldn't show either: {shown})")
+    os._exit(1)
+
 def _self_command(*args):
     """The command that starts this MedSearch: the installers' app is its own
     executable; run from source it is Python running app.py (on Windows through
@@ -6715,10 +6745,13 @@ if __name__ == "__main__":
             os.makedirs(browser_data_dir, exist_ok=True)
             # Windows puts this on every window's title bar and taskbar button.
             icon = {"icon": str(RESOURCE_DIR / "icon.ico")} if sys.platform == "win32" else {}
-            webview.start(_start_statusbar, private_mode=False, storage_path=browser_data_dir,
-                          **icon)
-        except TypeError:
-            webview.start(_start_statusbar)
+            try:
+                webview.start(_start_statusbar, private_mode=False, storage_path=browser_data_dir,
+                              **icon)
+            except TypeError:
+                webview.start(_start_statusbar)
+        except Exception as e:
+            _window_failed(e)
         print("  the window loop has ended: MedSearch is quitting")
     except ImportError:
         import webbrowser

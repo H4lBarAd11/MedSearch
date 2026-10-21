@@ -125,16 +125,16 @@ jobs:
           if-no-files-found: ignore
 
   windows:
-    # Intel and ARM: each builds its own installer and checks it, installed,
-    # started and searching, on its own kind of PC.
+    # x64 only for now. An arm64 leg (runner: windows-11-arm) builds, but its
+    # window never opens: clr-loader (0.3.1) ships its .NET Framework loader
+    # for amd64 and x86 only, so pythonnet falls back to CoreCLR, which has no
+    # Windows Forms (21 Oct). ARM PCs run the x64 build under emulation, and
+    # the updater falls back to it (app.py, _NO_ARM64).
     strategy:
-      fail-fast: false
       matrix:
         include:
           - arch: x64
             runner: windows-latest
-          - arch: arm64
-            runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -378,4 +378,4 @@ jobs:
           awk -v head="## $V" '$0 == head { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "MedSearch $V." > notes.md
           gh release create "v$V" --target "$GITHUB_SHA" --title "MedSearch $V" --notes-file notes.md \
-            "dist/MedSearch-$V-mac.dmg" "dist/MedSearch-$V-Setup.exe" "dist/MedSearch-$V-Setup-arm64.exe"
+            "dist/MedSearch-$V-mac.dmg" "dist/MedSearch-$V-Setup.exe"

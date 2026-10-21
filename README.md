@@ -134,7 +134,8 @@ articles from an address on a hospital or university intranet.
 
 ## Install (Windows)
 
-For Windows 10 and 11, 64-bit. Nothing else is needed, and no administrator rights.
+For Windows 10 and 11, 64-bit. Nothing else is needed, and no administrator rights. On a PC
+with an ARM processor it runs too, under Windows' own emulation.
 
 1. Download **`MedSearch-<version>-Setup.exe`** from the
    [latest release](https://github.com/H4lBarAd11/MedSearch/releases/latest).

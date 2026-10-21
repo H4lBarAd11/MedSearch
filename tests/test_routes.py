@@ -1198,3 +1198,14 @@ def test_appearance_is_kept_told_to_the_windows_and_set_before_the_page_draws(cl
 def test_an_unknown_saved_appearance_reads_as_the_systems():
     A.CONFIG["appearance"] = "neon"
     assert A.appearance() == "system"
+
+
+def test_a_window_that_cannot_open_says_so_and_quits_for_good(monkeypatch):
+    said, ended = [], []
+    monkeypatch.setattr(A, "_tell_window_failed", said.append)
+    monkeypatch.setattr(A.os, "_exit", ended.append)
+    A._window_failed(FileNotFoundError("Could not load file or assembly 'System.Windows.Forms'\nmore"))
+    assert ended == [1]
+    assert len(said) == 1 and "couldn't open its window" in said[0]
+    assert "FileNotFoundError: Could not load file or assembly 'System.Windows.Forms'" in said[0]
+    assert "more" not in said[0] and "medsearch.log" in said[0]
