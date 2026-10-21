@@ -217,14 +217,17 @@ class KeychainStore:
         if not self.available():
             return False
         import Security as S
-        self.forget(domain)
-        status, _ = S.SecItemAdd({
-            S.kSecClass: S.kSecClassGenericPassword,
-            S.kSecAttrService: self._service(domain),
-            S.kSecAttrAccount: user,
-            S.kSecAttrLabel: f"MedSearch — {label} sign-in",
-            S.kSecValueData: password.encode("utf-8"),
-        }, None)
+        # Changed in place, added only when there is none: deleting first
+        # lost the saved sign-in whenever the add then failed (the sweep,
+        # 20 Oct).
+        query = {S.kSecClass: S.kSecClassGenericPassword,
+                 S.kSecAttrService: self._service(domain)}
+        attrs = {S.kSecAttrAccount: user,
+                 S.kSecAttrLabel: f"MedSearch — {label} sign-in",
+                 S.kSecValueData: password.encode("utf-8")}
+        status = S.SecItemUpdate(query, attrs)
+        if status == -25300:                     # errSecItemNotFound
+            status, _ = S.SecItemAdd({**query, **attrs}, None)
         return status == 0
 
     def forget(self, domain) -> bool:

@@ -33,13 +33,32 @@ from flask import Flask, render_template, request, Response, jsonify, stream_wit
 
 LOG_LIMIT = 1_000_000          # bytes; past this the log is set aside as medsearch.log.1
 
+def _data_dir() -> Path:
+    """~/.medsearch: the settings, the history, the log. On iOS the app's own
+    Library/Application Support: the root of an app's container is read-only
+    on a device, though the simulator lets the app write there, which hid it:
+    his phone showed the welcome dialog at every launch (19 Oct) because
+    config.json was never written. Exports and saved PDFs go to Documents
+    there, which the Files app shows (UIFileSharingEnabled, ios/pyproject.toml)."""
+    if sys.platform == "ios":
+        return Path.home() / "Library" / "Application Support" / "MedSearch"
+    return Path.home() / ".medsearch"
+
+
+def _documents_dir(name: str) -> Path:
+    """~/<name> on the desktop; on iOS the app's Documents folder."""
+    if sys.platform == "ios":
+        return Path.home() / "Documents"
+    return Path.home() / name
+
+
 def _log_file():
     """~/.medsearch/medsearch.log, for the messages of a MedSearch that has no
     console to show them (his choice, 30 Sep: the first Windows walk crashed with
     nothing to read). Added to, not replaced: a second launch handing over to a
     running MedSearch must not wipe that one's log. Past LOG_LIMIT it is set
     aside once, so it never grows without end."""
-    folder = Path.home() / ".medsearch"
+    folder = _data_dir()
     try:
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / "medsearch.log"
@@ -138,7 +157,7 @@ _OPEN_PATHS = ("/", "/ping")
 #  CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
 
-CONFIG_DIR  = Path.home() / ".medsearch"
+CONFIG_DIR  = _data_dir()
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULTS = {
@@ -181,10 +200,15 @@ DEFAULTS = {
     # The update offer put off with "Later": {"version", "day"}. That version is
     # offered again from the next day, or when asked for in Settings.
     "update_later": None,
-    # A monthly ceiling in USD for what the AI features may spend. 0 = no
-    # ceiling. The hard limit belongs in the Anthropic console; this one is
-    # here so the spending is visible and stops before it surprises anyone.
+    # A monthly ceiling in USD for what the AI features may spend, and
+    # whether it applies. With the limit on, spending stops at the amount —
+    # at $0 before the first call (20 Oct: he set 0 and still got summaries,
+    # because 0 then meant "no limit"). A config from before the switch has
+    # no ai_cap_on, and keeps its old reading: an amount above 0 is a limit,
+    # 0 is none. The hard limit belongs in the Anthropic console; this one
+    # is here so the spending is visible and stops before it surprises anyone.
     "ai_monthly_cap": 0.0,
+    "ai_cap_on": None,
     # Mirror priority order. sci-hub.se was DNS-blocked in Jan 2026, so the
     # currently-active mirrors come first. We pass the full list to the UI so
     # users can fall through to a backup if a mirror is unreachable.
@@ -198,7 +222,208 @@ DEFAULTS = {
 SECRET_KEYS = ("anthropic_api_key", "pubmed_api_key", "scopus_api_key",
                "scopus_insttoken", "wos_api_key", "ieee_api_key",
                "semantic_scholar_api_key", "openalex_api_key", "core_api_key",
-               "google_books_api_key")
+               "google_books_api_key", "zotero_api_key")
+
+
+# THE LIBRARY SETUP TRAVELS WITH THE KEYS (his ask, 20 Oct: the phone showed
+# only UniTN because ASUIT's and FBK's proxy addresses lived in the Mac's
+# config file). Where the keys go to iCloud Keychain (secrets_store.syncs():
+# the iPhone app, and a Mac build signed by the same team), the libraries and
+# the library resources go beside them as ONE item, "library_setup", a JSON
+# with the moment it was saved. Each device keeps that moment in its config
+# file (library_setup_saved). Settled when the page is served and when
+# settings are saved:
+#   - the first time a device meets the item, the two are MERGED (each
+#     library and resource either has), never one thrown away for the other;
+#   - after that the newer wins, the item's coming down, this device's going up;
+#   - a Keychain that does not answer changes nothing.
+# What stays each device's own: which library is active, "Remember sign-in"
+# and the saved sign-ins themselves (a pull never deletes one), the history,
+# and the ticked databases. (The checks it runs the data through are defined
+# later in this file, so the settling waits for the first page.)
+LIBRARY_SETUP_ITEM = "library_setup"
+_PREDEFINED_LIBRARIES = ("unitn", "asuit", "fbk")    # the page's first three, in order
+_LIBRARY_SETUP = {"sent": None,     # the JSON last written up this run, to skip a repeat
+                  "known": None}    # the setup as last settled, to know a change
+_LIBRARY_LOCK = threading.RLock()
+
+
+def _library_key(p):
+    return str(p.get("id") or (p.get("url") or "").strip().lower() or (p.get("label") or "").lower())
+
+
+def _library_setup_of(cfg):
+    libs = [{k: v for k, v in p.items() if k != "remember_signin"}
+            for p in (cfg.get("institution_proxies") or []) if isinstance(p, dict)]
+    res = cfg.get("library_resources")
+    return {"institution_proxies": libs,
+            "library_resources": res if isinstance(res, dict) else {"on": [], "own": []}}
+
+
+def _library_setup_json(cfg):
+    return json.dumps(_library_setup_of(cfg), sort_keys=True)
+
+
+def _library_setup_payload(cfg):
+    return json.dumps({"saved": cfg.get("library_setup_saved") or 0, **_library_setup_of(cfg)},
+                      sort_keys=True)
+
+
+def _lenient(clean, items):
+    """Each entry checked on its own: one this version cannot read is left
+    out, not the whole setup with it."""
+    out = []
+    for item in items if isinstance(items, list) else []:
+        try:
+            out += clean([item])
+        except ValueError:
+            pass
+    return out
+
+
+def _read_library_setup():
+    """(known, stamp, setup). known is False when the Keychain refused to
+    answer; setup is None when there is no item, or none this can read."""
+    raw, known = secrets_store.read(LIBRARY_SETUP_ITEM)
+    if not known:
+        return False, 0, None
+    try:
+        data = json.loads(raw) if raw else None
+        if not isinstance(data, dict):
+            return True, 0, None
+        res = data.get("library_resources") if isinstance(data.get("library_resources"), dict) else {}
+        own = []
+        for r in res.get("own") or []:
+            try:
+                own += _clean_library_resources({"on": [], "own": [r]})["own"]
+            except ValueError:
+                pass
+        setup = {"institution_proxies": _lenient(_clean_libraries, data.get("institution_proxies")),
+                 "library_resources": {"on": _clean_library_resources({"on": res.get("on") or [], "own": []})["on"],
+                                       "own": own}}
+        return True, float(data.get("saved") or 0), setup
+    except Exception:
+        return True, 0, None
+
+
+def _write_library_setup(cfg):
+    """The setup up to the Keychain, stamped; True when it is there."""
+    payload = _library_setup_payload(cfg)
+    if payload == _LIBRARY_SETUP["sent"]:
+        return True
+    if secrets_store.set(LIBRARY_SETUP_ITEM, payload):
+        _LIBRARY_SETUP["sent"] = payload
+        return True
+    return False
+
+
+def _page_order(libs):
+    """The keys in the order the page lists the libraries (app.js
+    buildInstitutions): the three predefined, then the others as saved."""
+    return list(_PREDEFINED_LIBRARIES) + [_library_key(p) for p in libs
+                                          if p.get("id") not in _PREDEFINED_LIBRARIES]
+
+
+def _apply_library_setup(cfg, libs, resources):
+    """Put a setup in this device's config, keeping what is the device's
+    own: "Remember sign-in" on a library still there at the same address,
+    and the active library (by which library it is, not by its place)."""
+    before = [p for p in (cfg.get("institution_proxies") or []) if isinstance(p, dict)]
+    remembered = {_library_key(p): signins.domain_of(p.get("url") or "")
+                  for p in before if p.get("remember_signin") is True}
+    kept = []
+    for p in libs:
+        q = dict(p)
+        if remembered.get(_library_key(q)) == signins.domain_of(q.get("url") or ""):
+            q["remember_signin"] = True
+        kept.append(q)
+    try:
+        active = int(cfg.get("active_proxy", 0))
+    except Exception:
+        active = 0
+    order_before = _page_order(before)
+    if 0 <= active < len(order_before):
+        order_after = _page_order(kept)
+        key = order_before[active]
+        cfg["active_proxy"] = order_after.index(key) if key in order_after else -1
+    cfg["institution_proxies"] = kept
+    cfg["library_resources"] = resources
+
+
+def _merge_library_setups(mine, theirs):
+    """The first meeting of two devices: everything either has. A library
+    both have keeps this device's entry, with the other's address if this
+    one has none."""
+    libs, index = [], {}
+    for p in mine["institution_proxies"]:
+        index[_library_key(p)] = len(libs)
+        libs.append(dict(p))
+    for p in theirs["institution_proxies"]:
+        k = _library_key(p)
+        if k in index:
+            here = libs[index[k]]
+            if not (here.get("url") or "").strip() and (p.get("url") or "").strip():
+                here["url"] = p["url"]
+            if not here.get("openurl") and p.get("openurl"):
+                here["openurl"] = p["openurl"]
+        else:
+            index[k] = len(libs)
+            libs.append(dict(p))
+    a, b = mine["library_resources"], theirs["library_resources"]
+    on = list(a.get("on") or []) + [i for i in b.get("on") or [] if i not in (a.get("on") or [])]
+    urls = {r.get("url") for r in a.get("own") or []}
+    own = list(a.get("own") or []) + [r for r in b.get("own") or [] if r.get("url") not in urls]
+    return libs, {"on": on, "own": own}
+
+
+def _sync_library_setup(cfg):
+    """Settle the library setup between this device's file and the Keychain
+    item. Says whether cfg changed (so the file wants rewriting)."""
+    if not secrets_store.syncs():
+        return False
+    with _LIBRARY_LOCK:
+        known, stamp, setup = _read_library_setup()
+        if not known:
+            return False                    # no answer: nothing to go on
+        mine = float(cfg.get("library_setup_saved") or 0)
+        local = _library_setup_of(cfg)
+        changed = False
+        if setup is not None and not mine:
+            libs, res = _merge_library_setups(local, setup)
+            _apply_library_setup(cfg, libs, res)
+            cfg["library_setup_saved"] = time.time()
+            _write_library_setup(cfg)
+            print(f"  library setup: merged with the other device's ({len(libs)} libraries)")
+            changed = True
+        elif setup is not None and stamp > mine:
+            _apply_library_setup(cfg, setup["institution_proxies"], setup["library_resources"])
+            cfg["library_setup_saved"] = stamp
+            _LIBRARY_SETUP["sent"] = _library_setup_payload(cfg)
+            print(f"  library setup: from the other device ({len(setup['institution_proxies'])} libraries)")
+            changed = True
+        elif setup is None or stamp < mine:
+            # Nothing there, or something older: this device's goes up —
+            # unless it has never been stamped and holds nothing either.
+            if not mine:
+                if _library_setup_json(cfg) == _library_setup_json(DEFAULTS):
+                    _LIBRARY_SETUP["known"] = _library_setup_json(cfg)
+                    return False
+                cfg["library_setup_saved"] = time.time()
+                changed = True
+            _write_library_setup(cfg)
+        _LIBRARY_SETUP["known"] = _library_setup_json(cfg)
+        return changed
+
+
+def pull_library_setup():
+    """Settle the setup now (the page is being served), writing the file
+    when anything came down."""
+    try:
+        with _LIBRARY_LOCK:
+            if _sync_library_setup(CONFIG):
+                save_config(CONFIG)
+    except Exception as e:
+        print(f"  library setup: not synced ({e})")
 
 
 def _config_for_disk(cfg, stored):
@@ -256,6 +481,19 @@ def save_config(cfg):
         for k in SECRET_KEYS:
             if secrets_store.set(k, (cfg.get(k) or "").strip()):
                 stored.add(k)
+    # A changed library setup is stamped now and goes up with the keys.
+    if secrets_store.syncs():
+        try:
+            with _LIBRARY_LOCK:
+                if _LIBRARY_SETUP["known"] is None:      # saved before any page: settle first
+                    _sync_library_setup(cfg)
+                now = _library_setup_json(cfg)
+                if now != _LIBRARY_SETUP["known"]:
+                    cfg["library_setup_saved"] = time.time()
+                    _LIBRARY_SETUP["known"] = now
+                _write_library_setup(cfg)
+        except Exception as e:
+            print(f"  library setup: not synced ({e})")
     CONFIG_FILE.write_text(json.dumps(_config_for_disk(cfg, stored), indent=2))
     # The file no longer holds keys, but it still holds where this person
     # works and what they searched for: keep it to this account.
@@ -381,6 +619,29 @@ def get_quartile(j):
 #  HTTP HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
+# A fetch on behalf of a third-party page (the PDF viewer's, _fetch_url_bytes)
+# checks where it goes before it goes; a redirect is checked the same way, or
+# a public address answering "302 → 192.168.x.x" would reach into the
+# hospital network all the same (the sweep, 20 Oct). Only those fetches are
+# guarded: the thread says so while one runs.
+_FETCH_GUARD = threading.local()
+
+class _GuardedRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if getattr(_FETCH_GUARD, "on", False) and \
+                _is_private_host(urllib.parse.urlparse(newurl).hostname):
+            raise urllib.error.URLError("refusing to follow a redirect to a local-network address")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+def _install_opener(https=None):
+    """The engine's one opener: the guarded redirects, and the certificates
+    a fix below found, when one did."""
+    urllib.request.install_opener(urllib.request.build_opener(
+        _GuardedRedirects(), *([https] if https else [])))
+
+_HTTPS_HANDLER = None     # set by the two certificate fixes when they apply
+
+
 def _trust_the_macs_certificates():
     """Every outside call goes through urllib, which checks a server against
     Python's own list of certificates. Python from python.org comes WITHOUT that
@@ -402,8 +663,9 @@ def _trust_the_macs_certificates():
         ctx.load_verify_locations(cadata=roots)
     except Exception:
         return
-    urllib.request.install_opener(
-        urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx)))
+    global _HTTPS_HANDLER
+    _HTTPS_HANDLER = urllib.request.HTTPSHandler(context=ctx)
+    _install_opener(_HTTPS_HANDLER)
 
 _trust_the_macs_certificates()
 
@@ -425,10 +687,14 @@ def _add_the_public_roots_on_windows():
     except Exception as e:
         print(f"  (the public root certificates could not be added: {e})")
         return
-    urllib.request.install_opener(
-        urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx)))
+    global _HTTPS_HANDLER
+    _HTTPS_HANDLER = urllib.request.HTTPSHandler(context=ctx)
+    _install_opener(_HTTPS_HANDLER)
 
 _add_the_public_roots_on_windows()
+
+if _HTTPS_HANDLER is None:           # neither fix applied: the guard alone
+    _install_opener()
 
 class _RateLimiter:
     """Spaces calls to one service evenly across threads."""
@@ -983,28 +1249,50 @@ def record_usage(model, feature, input_tokens, output_tokens,
             u["output_tokens"] += int(output_tokens or 0)
             u["calls"][feature] = u["calls"].get(feature, 0) + 1
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            USAGE_FILE.write_text(json.dumps(u, indent=2))
+            # Written aside and moved into place: a limit check reading it
+            # meanwhile sees the old total or the new, never a half-written
+            # file it would take for "nothing spent" (the sweep, 20 Oct).
+            tmp = USAGE_FILE.with_name(USAGE_FILE.name + ".tmp")
+            tmp.write_text(json.dumps(u, indent=2))
+            os.replace(tmp, USAGE_FILE)
             return u
     except Exception:
         return None
 
 
-def ai_cap():
-    """The monthly ceiling in USD, or 0.0 for no ceiling."""
+def ai_cap_amount():
+    """The amount in the limit field, in USD, whether or not the limit is on."""
     try:
         return max(0.0, float(CONFIG.get("ai_monthly_cap") or 0))
     except Exception:
         return 0.0
 
 
+def ai_cap_on():
+    on = CONFIG.get("ai_cap_on")
+    if on is None:                  # before the switch, the amount alone said it
+        return ai_cap_amount() > 0
+    return bool(on)
+
+
+def ai_cap():
+    """The monthly ceiling in USD, or None for no ceiling. $0 is a ceiling:
+    nothing may be spent."""
+    return ai_cap_amount() if ai_cap_on() else None
+
+
 def ai_over_cap():
     cap = ai_cap()
-    return bool(cap) and load_usage()["cost"] >= cap
+    return cap is not None and load_usage()["cost"] >= cap
 
 
 def _over_cap_message():
-    return (f"This month's AI spending has reached the ${ai_cap():.2f} limit you set. "
-            "Raise it in Settings, or leave it and MedSearch keeps searching without AI.")
+    cap = ai_cap() or 0.0
+    if cap <= 0:
+        return ("AI spending is limited to $0.00 this month, so MedSearch is not using AI. "
+                "Raise the limit under AI in the bottom bar, or leave it and keep searching without AI.")
+    return (f"This month's AI spending has reached the ${cap:.2f} limit you set. "
+            "Raise it under AI in the bottom bar, or leave it and MedSearch keeps searching without AI.")
 
 
 def _anthropic_key():
@@ -1072,7 +1360,7 @@ def claude_stream(payload, timeout=120, feature="other"):
         yield _sse({"type": "done"})
         return
     if not CONFIG.get("ai_enabled", True):
-        yield _sse({"type": "error", "text": "AI features are turned off. Turn them on with AI on/off in the bottom bar."})
+        yield _sse({"type": "error", "text": "AI features are turned off. Turn them on under AI in the bottom bar."})
         yield _sse({"type": "done"})
         return
     if ai_over_cap():
@@ -1084,39 +1372,45 @@ def claude_stream(payload, timeout=120, feature="other"):
     # starts, the output count as it ends.
     used_in = used_out = used_cache_write = used_cache_read = 0
     try:
-        with _anthropic_open(payload, timeout) as r:
-            for raw in r:
-                line = raw.decode("utf-8", errors="replace").strip()
-                if not line.startswith("data:"):
-                    continue
-                try: ev = json.loads(line[5:].strip())
-                except Exception: continue
-                kind = ev.get("type")
-                if kind == "message_start":
-                    u0 = ((ev.get("message") or {}).get("usage") or {})
-                    used_in = u0.get("input_tokens", 0)
-                    used_cache_write = u0.get("cache_creation_input_tokens", 0)
-                    used_cache_read = u0.get("cache_read_input_tokens", 0)
-                elif kind == "message_delta":
-                    used_out = (ev.get("usage") or {}).get("output_tokens", used_out)
-                if kind == "content_block_delta":
-                    delta = ev.get("delta") or {}
-                    if delta.get("type") == "text_delta" and delta.get("text"):
-                        yield _sse({"type": "chunk", "text": delta["text"]})
-                elif kind == "message_delta":
-                    if (ev.get("delta") or {}).get("stop_reason") == "refusal":
-                        yield _sse({"type": "error", "text": "The model declined this request."})
-                elif kind == "error":
-                    msg = (ev.get("error") or {}).get("message") or "The AI service reported an error."
-                    yield _sse({"type": "error", "text": msg})
-                    break
-    except urllib.error.HTTPError as e:
-        yield _sse({"type": "error", "text": _api_error_text(e)})
-    except Exception as e:
-        yield _sse({"type": "error", "text": f"Request failed: {e}"})
-    if used_in or used_out or used_cache_read or used_cache_write:
-        record_usage(payload.get("model"), feature, used_in, used_out,
-                     used_cache_write, used_cache_read)
+        try:
+            with _anthropic_open(payload, timeout) as r:
+                for raw in r:
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    try: ev = json.loads(line[5:].strip())
+                    except Exception: continue
+                    kind = ev.get("type")
+                    if kind == "message_start":
+                        u0 = ((ev.get("message") or {}).get("usage") or {})
+                        used_in = u0.get("input_tokens", 0)
+                        used_cache_write = u0.get("cache_creation_input_tokens", 0)
+                        used_cache_read = u0.get("cache_read_input_tokens", 0)
+                    elif kind == "message_delta":
+                        used_out = (ev.get("usage") or {}).get("output_tokens", used_out)
+                    if kind == "content_block_delta":
+                        delta = ev.get("delta") or {}
+                        if delta.get("type") == "text_delta" and delta.get("text"):
+                            yield _sse({"type": "chunk", "text": delta["text"]})
+                    elif kind == "message_delta":
+                        if (ev.get("delta") or {}).get("stop_reason") == "refusal":
+                            yield _sse({"type": "error", "text": "The model declined this request."})
+                    elif kind == "error":
+                        msg = (ev.get("error") or {}).get("message") or "The AI service reported an error."
+                        yield _sse({"type": "error", "text": msg})
+                        break
+        except urllib.error.HTTPError as e:
+            yield _sse({"type": "error", "text": _api_error_text(e)})
+        except Exception as e:
+            yield _sse({"type": "error", "text": f"Request failed: {e}"})
+    finally:
+        # Counted however the stream ends: a page that stops it (Stop, or
+        # closing Explain) closes this generator at a yield, and what was
+        # already spent must still reach the meter and the limit (the sweep,
+        # 20 Oct: it never did).
+        if used_in or used_out or used_cache_read or used_cache_write:
+            record_usage(payload.get("model"), feature, used_in, used_out,
+                         used_cache_write, used_cache_read)
     yield _sse({"type": "done"})
 
 def ai_oneliner(title, abstract):
@@ -3571,11 +3865,104 @@ def _bib_key(a, i, used):
     used.add(key)
     return key
 
-def do_export(articles, query, fmt, synthesis=""):
+# ── Where exports go (his choice, 20 Oct) ──────────────────────────────────
+# The Mac: a folder INSIDE MedSearch.app (Contents/Exports), out of the home
+# folder. It goes with the app: the updater carries it into the new app
+# (_swap_script), and Uninstall puts it in the Trash with the app. When the
+# app cannot be written to (a source run, an app installed by another user
+# on a shared Mac), the home folder's medsearch_exports, as before.
+# iOS: the folder the person picked once in Files (Downloads), held by a
+# security-scoped bookmark the shell keeps (ios/src/medsearch/exports.py):
+# an app cannot write to Downloads without that one pick. The shell sets
+# EXPORTS_FOLDER to a function that opens that folder for the length of a
+# `with`, yielding its Path, or None when none is picked or it has gone.
+# Windows: the home folder's medsearch_exports, as before.
+EXPORTS_FOLDER = None
+# And a function giving that folder's name for Settings (None: none picked).
+EXPORTS_FOLDER_NAME = None
+
+
+def exports_folder_name():
+    """iOS: the picked folder's name, shown in Settings; None elsewhere or
+    while none is picked."""
+    try:
+        return EXPORTS_FOLDER_NAME() if EXPORTS_FOLDER_NAME else None
+    except Exception:
+        return None
+
+
+class NeedsFolder(Exception):
+    """iOS: no folder picked for exports yet (or it has gone)."""
+
+
+def _exports_in_app():
+    """MedSearch.app/Contents/Exports, when this is the installed Mac app and
+    it can be written to; else None."""
+    if sys.platform != "darwin" or not getattr(sys, "frozen", False):
+        return None
+    folder = _this_bundle() / "Contents" / "Exports"
+    try:
+        folder.mkdir(exist_ok=True)
+        probe = folder / ".medsearch-write-test"
+        probe.write_bytes(b"")
+        probe.unlink()
+    except OSError:
+        return None
+    return folder
+
+
+def _move_old_exports(into):
+    """The exports from before (~/medsearch_exports) move into the app's
+    folder once, and the emptied folder goes. A name already taken there is
+    left where it was."""
+    old = Path.home() / "medsearch_exports"
+    if not old.is_dir():
+        return
+    for f in old.iterdir():
+        target = into / f.name
+        if not target.exists():
+            try:
+                shutil.move(str(f), str(target))
+            except OSError:
+                pass
+    try:
+        old.rmdir()                     # only when emptied
+    except OSError:
+        pass
+
+
+from contextlib import contextmanager
+
+@contextmanager
+def exports_folder():
+    """The folder an export is written to, for the length of a `with`.
+    Raises NeedsFolder on iOS while no folder has been picked."""
+    if sys.platform == "ios":
+        if EXPORTS_FOLDER is None:          # no shell to ask: the app's own Documents
+            folder = _documents_dir("Documents")
+            folder.mkdir(parents=True, exist_ok=True)
+            yield folder
+            return
+        with EXPORTS_FOLDER() as folder:
+            if folder is None:
+                raise NeedsFolder()
+            yield Path(folder)
+        return
+    folder = _exports_in_app()
+    if folder is not None:
+        _move_old_exports(folder)
+    else:
+        folder = Path.home() / "medsearch_exports"
+        folder.mkdir(parents=True, exist_ok=True)
+    yield folder
+
+
+def do_export(articles, query, fmt, synthesis="", base=None):
     ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe = re.sub(r"[^\w]+", "_", query)[:40]
-    base = Path.home() / "medsearch_exports"
-    base.mkdir(parents=True, exist_ok=True)
+    if base is None:
+        with exports_folder() as folder:
+            return do_export(articles, query, fmt, synthesis, base=folder)
     paths = []
     if fmt in ("md", "all"):
         p = base / f"medsearch_{safe}_{ts}.md"
@@ -3782,6 +4169,84 @@ def zotero_save(articles):
         return False, f"Could not reach Zotero: {e}"
 
 
+# ── Zotero's web API: saving without the desktop app (20 Oct) ───────────────
+# The iPhone has no Zotero connector, and a Mac without Zotero open has none
+# either. With a Zotero API key (zotero.org/settings/keys, write access) the
+# items go straight into the person's online library, which every Zotero app
+# then syncs, the iPhone's included. The key is a secret like the others: in
+# the Keychain, and so on the iPhone too through iCloud Keychain. The items are
+# the connector's (article_to_zotero_item), whose fields are Zotero's own.
+ZOTERO_API = "https://api.zotero.org"
+_ZOTERO_USERS = {}                  # key -> the user id it belongs to
+
+
+def _zotero_key():
+    return (CONFIG.get("zotero_api_key") or "").strip()
+
+
+def _zotero_request(path, key, payload=None):
+    req = urllib.request.Request(
+        f"{ZOTERO_API}{path}",
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"Zotero-API-Key": key, "Zotero-API-Version": "3",
+                 "Content-Type": "application/json", "User-Agent": "MedSearch"},
+        method="POST" if payload is not None else "GET")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode() or "{}")
+
+
+def zotero_web_save(articles):
+    """POST items to the key owner's Zotero library. Returns (ok, message)."""
+    key = _zotero_key()
+    try:
+        uid = _ZOTERO_USERS.get(key)
+        if uid is None:
+            info = _zotero_request("/keys/current", key)
+            uid = info.get("userID")
+            if not uid:
+                return False, "Zotero did not say whose key this is. Check it at zotero.org/settings/keys."
+            if not (((info.get("access") or {}).get("user") or {}).get("write")):
+                return False, ("This Zotero key can only read. At zotero.org/settings/keys, edit it and "
+                               "tick \"Allow write access\".")
+            _ZOTERO_USERS[key] = uid
+        items = [article_to_zotero_item(a) for a in articles]
+        saved, failed = 0, []
+        for i in range(0, len(items), 50):              # the API takes 50 at a time
+            answer = _zotero_request(f"/users/{uid}/items", key, items[i:i + 50])
+            saved += len(answer.get("successful") or answer.get("success") or {})
+            failed += [f.get("message", "") for f in (answer.get("failed") or {}).values()]
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            _ZOTERO_USERS.pop(key, None)
+            return False, "Zotero refused the key. Check it at zotero.org/settings/keys, with write access."
+        return False, f"Zotero answered {e.code}. Try again in a minute."
+    except Exception as e:
+        return False, f"Could not reach Zotero: {e}"
+    if failed and not saved:
+        return False, f"Zotero did not take the item: {failed[0][:160]}"
+    word = "item" if saved == 1 else "items"
+    return True, (f"{saved} {word} saved to your Zotero library." +
+                  (f" {len(failed)} could not be saved." if failed else ""))
+
+
+def zotero_send(articles):
+    """The desktop app's connector when it is running (it files into the
+    collection open there); otherwise the web API with the person's key.
+    Returns a JSON-able answer for the page."""
+    if sys.platform != "ios" and zotero_ping():
+        ok, msg = zotero_save(articles)
+        return {"ok": ok, "available": True, "via": "app", "message": msg}
+    if _zotero_key():
+        ok, msg = zotero_web_save(articles)
+        return {"ok": ok, "available": True, "via": "web", "message": msg}
+    return {"ok": False, "available": False, "need_key": True,
+            "message": ("To save straight into your Zotero library, add a Zotero API key in "
+                        "Settings, where a link creates one at zotero.org."
+                        if sys.platform == "ios" else
+                        "Zotero isn't running. Open the Zotero desktop app, or add a Zotero API key "
+                        "in Settings to save without it.")}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  SESSION STORE  (in-memory, per-process)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3888,6 +4353,7 @@ def remember_sources():
 
 @app.route("/")
 def index():
+    pull_library_setup()      # the other device's libraries, if newer (iCloud Keychain)
     has_key = bool(_anthropic_key())
     ai_pref = CONFIG.get("ai_enabled", True)
     # Optional deep-link from a launch with --query: /?q=...&src=...
@@ -3918,6 +4384,10 @@ def index():
                            auto_query=auto_query,
                            auto_source=auto_source,
                            on_windows=(sys.platform == "win32"),
+                           # The iOS app is updated by the App Store (or Xcode):
+                           # no update check, no Updates field in Settings.
+                           on_ios=(sys.platform == "ios"),
+                           exports_folder_name=exports_folder_name(),
                            installed=(_install_kind() != "source"))
 
 @app.route("/ping")
@@ -3963,7 +4433,8 @@ def usage_report():
     u = load_usage()
     return jsonify({"month": u["month"], "cost": round(u["cost"], 4),
                     "calls": u["calls"], "unpriced_calls": u.get("unpriced_calls", 0),
-                    "cap": ai_cap(), "over_cap": ai_over_cap()})
+                    "cap": ai_cap(), "cap_on": ai_cap_on(), "cap_amount": ai_cap_amount(),
+                    "over_cap": ai_over_cap()})
 
 
 @app.route("/ai/toggle", methods=["POST"])
@@ -3999,6 +4470,18 @@ def guideline_bodies():
     # stable, country-name order
     out.sort(key=lambda x: x["country"])
     return jsonify({"bodies": out, "selected": CONFIG.get("guideline_country", "")})
+
+@app.route("/guidelines/country", methods=["POST"])
+def remember_guideline_country():
+    """The country picked in the guidelines panel, kept the moment it is
+    picked: kept only when its button was pressed, a pick without a press
+    was lost at the next start (every update, his Mac, 21 Oct)."""
+    code = (_json_body().get("country") or "").strip().lower()
+    if code not in NATIONAL_GUIDELINE_BODIES:
+        return jsonify({"ok": False, "message": "Unknown country."}), 400
+    CONFIG["guideline_country"] = code
+    save_config(CONFIG)
+    return jsonify({"ok": True, "country": code})
 
 @app.route("/guidelines/link", methods=["POST"])
 def guideline_link():
@@ -4280,7 +4763,12 @@ def _swap_script(pid, staged, target):
             f"rm -rf {q(old)}; "
             f"if [ -e {q(target)} ]; then "
             f"if mv {q(target)} {q(old)}; then "
-            f"if mv {q(staged)} {q(target)}; then rm -rf {q(old)}; else mv {q(old)} {q(target)}; fi; "
+            f"if mv {q(staged)} {q(target)}; then "
+            # The exports live in the app (exports_folder): they move into
+            # the new one, after its signature was checked without them.
+            f"if [ -d {q(old)}/Contents/Exports ]; then "
+            f"mv {q(old)}/Contents/Exports {q(target)}/Contents/Exports; fi; "
+            f"rm -rf {q(old)}; else mv {q(old)} {q(target)}; fi; "
             f"fi; "
             f"else mv {q(staged)} {q(target)}; fi; "
             f"open {q(target)}")
@@ -4762,6 +5250,14 @@ def citations(idx):
                             for r in reports]
     graph["source_title"] = art.get("title","")
     graph["source_year"]  = art.get("year","")
+    # Some services send their text HTML-escaped ("Anesthesia &amp; Analgesia");
+    # the page escapes once more, so it showed the entity (his phone, 20 Oct).
+    for key in ("references", "citations"):
+        for item in graph.get(key) or []:
+            if isinstance(item, dict):
+                for field in ("title", "journal", "authors"):
+                    if isinstance(item.get(field), str):
+                        item[field] = html.unescape(item[field])
     return jsonify(graph)
 
 # ── AI Assistant routes ────────────────────────────────────────────────────
@@ -4942,7 +5438,11 @@ def _fetch_url_bytes(url, timeout=30, referer=None):
     parsed = urllib.parse.urlparse(url)
     headers["Referer"] = referer or f"{parsed.scheme}://{parsed.netloc}/"
     req = urllib.request.Request(url, headers=headers)
-    upstream = urllib.request.urlopen(req, timeout=timeout)
+    _FETCH_GUARD.on = True
+    try:
+        upstream = urllib.request.urlopen(req, timeout=timeout)
+    finally:
+        _FETCH_GUARD.on = False
     raw = upstream.read()
     enc = (upstream.headers.get("Content-Encoding", "") or "").lower()
     try:
@@ -5025,7 +5525,7 @@ def _try_scihub_chain(mirrors):
 # quitting was the way back. The page now hands the bytes here, and they are
 # saved to Downloads as an article window's files are: named after the
 # article, never replacing a file (his choice).
-DOWNLOADS_DIR = Path.home() / "Downloads"
+DOWNLOADS_DIR = _documents_dir("Downloads")
 
 @app.route("/save_pdf", methods=["POST"])
 def save_pdf():
@@ -5037,19 +5537,28 @@ def save_pdf():
     name = article_windows.safe_name(request.args.get("name") or "article.pdf")
     if not name.lower().endswith(".pdf"):
         name += ".pdf"
-    try:
-        DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+    def write_into(folder):
+        folder.mkdir(parents=True, exist_ok=True)
         while True:
-            path = article_windows.free_path(DOWNLOADS_DIR, name)
+            path = article_windows.free_path(folder, name)
             try:
                 with open(path, "xb") as fh:      # a name taken meanwhile is skipped
                     fh.write(data)
-                break
+                return path
             except FileExistsError:
                 continue
+    try:
+        if sys.platform == "ios":                 # the picked folder, as exports
+            with exports_folder() as folder:
+                path = write_into(folder)
+        else:
+            path = write_into(DOWNLOADS_DIR)
+    except NeedsFolder:
+        return jsonify({"need_folder": True}), 409
     except OSError as e:
         return jsonify({"error": f"The PDF couldn't be saved in Downloads: {e.strerror or e}"}), 500
-    return jsonify({"name": path.name})
+    return jsonify({"name": path.name, "folder": path.parent.name})
 
 @app.route("/pdf_proxy")
 def pdf_proxy():
@@ -5213,24 +5722,53 @@ def export():
     articles  = _selected_articles(data)
     query     = SESSION.get("query","")
     if not articles: return jsonify({"error":"No articles to export"}), 400
-    paths = do_export(articles, query, fmt, synthesis)
-    return jsonify({"paths": paths, "count": len(articles)})
+    try:
+        with exports_folder() as folder:
+            paths = do_export(articles, query, fmt, synthesis, base=folder)
+            where = folder.name
+    except NeedsFolder:
+        return jsonify({"need_folder": True})
+    except OSError as e:
+        return jsonify({"error": f"The export couldn't be written: {e.strerror or e}"}), 500
+    return jsonify({"paths": paths, "count": len(articles), "folder": where,
+                    "names": [Path(p).name for p in paths],
+                    "can_show": sys.platform in ("darwin", "win32")})
+
+
+@app.route("/exports/show", methods=["POST"])
+def show_exports():
+    """The exports folder in Finder (or Explorer): inside MedSearch.app it is
+    not a place Finder offers on its own."""
+    try:
+        with exports_folder() as folder:
+            target = str(folder)
+    except (NeedsFolder, OSError) as e:
+        return jsonify({"ok": False, "message": f"The exports folder isn't there: {e}"}), 200
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", target], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    elif sys.platform == "win32":
+        os.startfile(target)                       # noqa: the folder MedSearch owns
+    else:
+        return jsonify({"ok": False, "message": "Not available here."}), 200
+    return jsonify({"ok": True})
 
 @app.route("/export/zotero/check")
 def export_zotero_check():
-    """Tell the frontend whether Zotero's connector is reachable right now."""
-    return jsonify({"available": zotero_ping()})
+    """Tell the frontend how Zotero can be reached right now: the desktop
+    app's connector, the web API with a key, or neither."""
+    if sys.platform != "ios" and zotero_ping():
+        return jsonify({"available": True, "via": "app"})
+    if _zotero_key():
+        return jsonify({"available": True, "via": "web"})
+    return jsonify({"available": False, "via": None})
 
 @app.route("/export/zotero", methods=["POST"])
 def export_zotero():
     articles = _selected_articles(_json_body())
     if not articles:
         return jsonify({"ok": False, "message": "No articles to send."}), 200
-    if not zotero_ping():
-        return jsonify({"ok": False, "available": False,
-                        "message": "Zotero isn't running. Open the Zotero desktop app and try again."}), 200
-    ok, msg = zotero_save(articles)
-    return jsonify({"ok": ok, "available": True, "message": msg})
+    return jsonify(zotero_send(articles))
 
 @app.route("/export/zotero/single", methods=["POST"])
 def export_zotero_single():
@@ -5243,11 +5781,7 @@ def export_zotero_single():
     articles = SESSION.get("articles", [])
     if idx < 0 or idx >= len(articles) or articles[idx] is None:
         return jsonify({"ok": False, "message": "Article not found."}), 200
-    if not zotero_ping():
-        return jsonify({"ok": False, "available": False,
-                        "message": "Zotero isn't running. Open the Zotero desktop app and try again."}), 200
-    ok, msg = zotero_save([articles[idx]])
-    return jsonify({"ok": ok, "available": True, "message": msg})
+    return jsonify(zotero_send([articles[idx]]))
 
 # ── Open at login ────────────────────────────────────────────────────────────
 # macOS: a LaunchAgent that starts MedSearch in the menu bar, window hidden.
@@ -5505,6 +6039,8 @@ def settings():
         for k in data.get("clear") or []:
             if k in secret_fields:
                 CONFIG[k] = ""
+                if k in SECRET_KEYS:
+                    secrets_store.delete(k)     # on purpose, so even an unread one goes
         for k in secret_fields:
             if isinstance(data.get(k), str) and data[k].strip():
                 CONFIG[k] = data[k].strip()
@@ -5519,6 +6055,8 @@ def settings():
                 CONFIG["ai_monthly_cap"] = max(0.0, float(data["ai_monthly_cap"] or 0))
             except Exception:
                 CONFIG["ai_monthly_cap"] = 0.0
+        if "ai_cap_on" in data:
+            CONFIG["ai_cap_on"] = bool(data["ai_cap_on"])
         if "active_proxy" in data:
             try:
                 # -1 is a valid value meaning "no library / don't proxy"
@@ -5558,7 +6096,10 @@ def settings():
     safe["institution_proxies"] = CONFIG.get("institution_proxies", [])
     safe["library_resources"] = library_resources()
     safe["active_proxy"] = CONFIG.get("active_proxy", 0)
-    safe["ai_monthly_cap"] = ai_cap()
+    safe["ai_monthly_cap"] = ai_cap_amount()
+    safe["ai_cap_on"] = ai_cap_on()
+    safe["has_ai_key"] = bool(_anthropic_key())
+    safe["ai_enabled"] = bool(CONFIG.get("ai_enabled", True))
     safe["can_open_at_login"] = _open_at_login_supported()
     safe["open_at_login"] = _open_at_login_enabled()
     return jsonify(safe)

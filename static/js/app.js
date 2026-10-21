@@ -14,16 +14,16 @@ const ONBOARD_CONTENT = {
       {
         title: '<svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-key\"/></svg> Set up your API key (for AI features)',
         steps: [
-          'Click <strong>Settings</strong> in the bar at the bottom of the window.',
+          '{Click} <strong>Settings</strong> in the bar {window}.',
           'Paste your <strong>Anthropic key</strong> to enable AI summaries and synthesis. Get one free at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>.',
-          'Click <strong>Save</strong>. That\'s the only key you need for the AI features.',
+          '{Click} <strong>Save</strong>. That\'s the only key you need for the AI features.',
         ],
       },
       {
         title: '<svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-search\"/></svg> How to search',
         steps: [
           'Type your topic in the bar at the top and press <strong>Search</strong>.',
-          'Click the <strong>sources</strong> button beside Search to tick the databases you want (PubMed, Cochrane and others are free).',
+          '{Click} the <strong>sources</strong> button {sourcesWhere} to tick the databases you want (PubMed, Cochrane and others are free).',
           'Keep <strong>Strict</strong> on for focused results; turn it off to search more broadly.',
           'To find a paper you already know, paste its <strong>DOI</strong>, a doi.org link or the article\'s link (several DOIs work too).',
         ],
@@ -31,7 +31,7 @@ const ONBOARD_CONTENT = {
       {
         title: '<svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-sparkle\"/></svg> Useful features',
         steps: [
-          '<strong><svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-star\"/></svg> Save</strong> a search to re-run it later with one click.',
+          '<strong><svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-star\"/></svg> Save</strong> a search to re-run it later with one {click}.',
           '<strong><svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-sparkle\"/></svg> Explain</strong> any article for a plain-language breakdown.',
           '<strong><svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-cite\"/></svg> Citations</strong> shows what a paper cites and what cites it.',
           '<strong>Institutional access:</strong> add your university\'s library proxy in Settings, and paywalled papers your institution subscribes to open through your library login. Pick it under <strong>Options</strong> in the bottom bar.',
@@ -50,16 +50,16 @@ const ONBOARD_CONTENT = {
       {
         title: '<svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-key\"/></svg> Configura la tua chiave API (per le funzioni IA)',
         steps: [
-          'Clicca <strong>Settings</strong> nella barra in basso nella finestra.',
+          '{Click} <strong>Settings</strong> nella barra {window}.',
           'Incolla la tua <strong>chiave Anthropic</strong> per attivare i riassunti e la sintesi IA. Ottienine una gratis su <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a>.',
-          'Clicca <strong>Save</strong>. È l\'unica chiave necessaria per le funzioni IA.',
+          '{Click} <strong>Save</strong>. È l\'unica chiave necessaria per le funzioni IA.',
         ],
       },
       {
         title: '<svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-search\"/></svg> Come cercare',
         steps: [
           'Scrivi l\'argomento nella barra in alto e premi <strong>Search</strong>.',
-          'Clicca il pulsante delle <strong>fonti</strong> accanto a Search per scegliere i database (PubMed, Cochrane e altri sono gratuiti).',
+          '{Click} il pulsante delle <strong>fonti</strong> {sourcesWhere} per scegliere i database (PubMed, Cochrane e altri sono gratuiti).',
           'Tieni <strong>Strict</strong> attivo per risultati mirati; disattivalo per cercare in modo più ampio.',
           'Per trovare un articolo che conosci già, incolla il suo <strong>DOI</strong>, un link doi.org o il link dell\'articolo (anche più DOI insieme).',
         ],
@@ -67,7 +67,7 @@ const ONBOARD_CONTENT = {
       {
         title: '<svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-sparkle\"/></svg> Funzioni utili',
         steps: [
-          '<strong><svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-star\"/></svg> Save</strong> salva una ricerca per rieseguirla con un clic.',
+          '<strong><svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-star\"/></svg> Save</strong> salva una ricerca per rieseguirla con un {click}.',
           '<strong><svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-sparkle\"/></svg> Explain</strong> spiega qualsiasi articolo in linguaggio semplice.',
           '<strong><svg class=\"ico\" aria-hidden=\"true\"><use href=\"#i-cite\"/></svg> Citations</strong> mostra cosa cita un articolo e da chi è citato.',
           '<strong>Accesso istituzionale:</strong> aggiungi il proxy della biblioteca universitaria nelle Impostazioni e gli articoli a pagamento a cui la tua istituzione è abbonata si apriranno con le tue credenziali. Selezionalo in <strong>Options</strong> nella barra in basso.',
@@ -81,6 +81,33 @@ const ONBOARD_CONTENT = {
 
 let _onboardLang = 'en';
 
+// WHERE THINGS ARE, AND WHAT A FINGER DOES, IN WORDS. The sources button sits
+// beside Search in a wide window, and above the bottom bar on a phone and
+// under the iOS app's own bars; a finger taps where a mouse clicks (his
+// phone, 20 Oct: "beside it" was untrue there). {name} in the text is
+// replaced at the moment it is shown.
+function sourcesAtBottom() {
+  return document.documentElement.classList.contains('native-chrome') ||
+         window.matchMedia('(max-width: 700px)').matches;
+}
+function layoutWords(text, lang) {
+  const touch = window.matchMedia('(pointer: coarse)').matches;
+  const bottom = sourcesAtBottom();
+  const w = (lang || 'en') === 'it'
+    ? {Click: touch ? 'Tocca' : 'Clicca', click: touch ? 'tocco' : 'clic',
+       window: touch ? 'in basso' : 'in basso nella finestra',
+       sourcesWhere: bottom ? 'sopra la barra in basso' : 'accanto a Search'}
+    : {Click: touch ? 'Tap' : 'Click', click: touch ? 'tap' : 'click',
+       window: touch ? 'at the bottom of the screen' : 'at the bottom of the window',
+       sourcesWhere: bottom ? 'just above the bottom bar' : 'beside Search'};
+  return String(text).replace(/\{(\w+)\}/g, (m, k) => (k in w ? w[k] : m));
+}
+function emptyHint() {
+  return sourcesAtBottom()
+    ? 'Type your question in the bar above, pick your sources just above the bottom bar, and press Search.'
+    : 'Type your question in the bar above, pick your sources beside it, and press Search.';
+}
+
 function renderOnboardBody() {
   const t = ONBOARD_CONTENT[_onboardLang];
   let html = `<div class="onboard-welcome">${t.welcome}</div>
@@ -90,7 +117,7 @@ function renderOnboardBody() {
     sec.steps.forEach((step, i) => {
       html += `<div class="onboard-step">
         <span class="onboard-step-num">${i+1}</span>
-        <span>${step}</span></div>`;
+        <span>${layoutWords(step, _onboardLang)}</span></div>`;
     });
     html += `</div>`;
   });
@@ -161,6 +188,7 @@ function checkForUpdate(manual) {
 // viewer: the next time the window comes back will do. Before the page has loaded, the load
 // handler below decides, since the welcome dialog may be about to open.
 function autoCheckForUpdate() {
+  if (MS.onIOS) return;        // the App Store (or Xcode) updates the iOS app
   if (document.readyState !== 'complete') return;
   if (Date.now() - _lastUpdateCheck < 60000) return;
   if (document.querySelector('.modal-overlay.open, .pdf-overlay.open')) return;
@@ -289,7 +317,24 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // Apply the initial AI on/off state to the UI (hides the dock's Assistant button if off)
-window.addEventListener('load', () => { applyAIState(); renderProxyPicker(); loadGuidelineBodies(); maybeAutoSearch(); startPendingSearchPolling(); });
+// Under the iOS app's native bars, the filter chips leave the hidden top bar
+// for a row of their own under the status line.
+function placeFilterChips() {
+  if (!document.documentElement.classList.contains('native-chrome')) return;
+  const host = document.getElementById('nativeFilterHost');
+  if (!host) return;
+  ['peopleChips', 'languageChip'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && el.parentElement !== host) host.appendChild(el);
+  });
+  host.hidden = false;
+  // Each chip and its X is a pair of capsules, so the chips often take two
+  // or three rows: the results move down by however tall the rows are.
+  if (window.ResizeObserver) new ResizeObserver(() => {
+    document.documentElement.style.setProperty('--filter-chips-h', host.offsetHeight + 'px');
+  }).observe(host);
+}
+window.addEventListener('load', () => { placeFilterChips(); const hint = document.querySelector('#emptyState .empty-sub'); if (hint) hint.textContent = emptyHint(); applyAIState(); renderProxyPicker(); loadGuidelineBodies(); maybeAutoSearch(); startPendingSearchPolling(); });
 
 // If launched with a search (/?q=...&src=...), pre-select the
 // requested source(s), fill the query, and run the search immediately.
@@ -360,7 +405,11 @@ async function loadGuidelineBodies() {
     ).join('');
     updateGuidelineHint();
   } catch(e) { /* leave empty */ }
-  sel.onchange = updateGuidelineHint;
+  sel.onchange = () => {
+    updateGuidelineHint();
+    fetch('/guidelines/country', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                  body: JSON.stringify({country: sel.value})}).catch(() => {});
+  };
 }
 
 // The body names are long; show a short tag in the dropdown
@@ -1113,7 +1162,7 @@ function runSearch(isLoadMore) {
          'under Options.', 'No search terms');
     return;
   }
-  if (!dbs.length) { fail('Click the sources button beside Search and tick at least one database.', 'No database selected'); return; }
+  if (!dbs.length) { fail(layoutWords('{Click} the sources button {sourcesWhere} and tick at least one database.'), 'No database selected'); return; }
   if (searchRunning) return;
 
   searchRunning = true;
@@ -1371,7 +1420,7 @@ function resetToHome() {
     <div class="empty-state" id="emptyState">
       <div class="wordmark">Med<span>Search</span></div>
       <div class="wordmark-sub">RN · ${escHtml(APP_VERSION)}</div>
-      <div class="empty-sub">Type your question in the bar above, pick your sources beside it, and press Search.</div>
+      <div class="empty-sub">${emptyHint()}</div>
     </div>`;
   setStatus('idle', 'Ready — choose sources and enter a query');
 
@@ -1776,8 +1825,10 @@ function makeCard(a) {
     : '';
   // when there's no cite button, explain takes the right-push
   const explainBtn = `<button class="link-btn explain-btn${a.doi ? '' : ' push-right'}" onclick="openExplain(${a._idx})">${ico('sparkle')} Explain</button>`;
-  // Send this one article straight to Zotero (if the desktop app is running)
-  const zoteroBtn = `<button class="link-btn zotero-btn" onclick="sendSingleToZotero(${a._idx}, event)" title="Send to Zotero">${ico('download')} Zotero</button>`;
+  // Send this one article straight to Zotero: the desktop app's connector
+  // when it is running, else Zotero's web API with the person's key (the
+  // iPhone's only way; his phone, 20 Oct: the share sheet was not saving).
+  const zoteroBtn = `<button class="link-btn zotero-btn" onclick="sendSingleToZotero(${a._idx}, event)" title="Save to Zotero">${ico('download')} Zotero</button>`;
 
   // Study design, from PubMed's publication types (and the source for
   // preprints / registered trials). Strongest evidence first.
@@ -1830,7 +1881,10 @@ function openSynthesis() {
   if (!allArticles.length) { fail('Run a search first.'); return; }
   const panel = document.getElementById('synthesisPanel');
   const text  = document.getElementById('synthesisText');
+  if (synthesisEventSource) { synthesisEventSource.close(); synthesisEventSource = null; }
+  panel.getAnimations().forEach(x => x.cancel());   // a slide-out still running
   panel.classList.add('open');
+  if (_sheetsSlide() || _sheetsCentred()) _sheetIn(panel);
   setMd(text, '');
   synthesisOpen = true;
   document.getElementById('synthesisStopBtn').style.display = '';
@@ -1874,25 +1928,32 @@ function stopSynthesis() {
 
 function closeSynthesis() {
   stopSynthesis();   // also halts any in-progress generation
-  document.getElementById('synthesisPanel').classList.remove('open');
+  const panel = document.getElementById('synthesisPanel');
+  const a = (_sheetsSlide() || _sheetsCentred()) && panel.classList.contains('open') ? _sheetOut(panel) : null;
   synthesisOpen = false;
+  if (a) a.onfinish = () => { if (!synthesisOpen) panel.classList.remove('open'); };
+  else panel.classList.remove('open');
 }
 
-// ── AI on/off toggle ────────────────────────────────────────────────────────
+// ── The AI tab: the switch and the monthly limit ────────────────────────────
 let aiEnabled = MS.aiOn;
-const aiHasKey = MS.hasAiKey;
+let aiHasKey = MS.hasAiKey;     // follows a Settings save (saveSettings)
 let assistantOpen = false;   // declared here so applyAIState() can read it safely on load
 
-function toggleAI() {
-  // If there's no API key at all, turning "on" makes no sense — guide them.
-  if (!aiHasKey && !aiEnabled) {
+// The switch in the AI panel. Without a key, "on" makes no sense: Settings
+// opens instead and the switch stays off.
+function setAI(on) {
+  if (on && !aiHasKey && !aiEnabled) {
+    const sw = document.getElementById('aiSwitch');
+    if (sw) sw.checked = false;
     fail('Add your Anthropic API key in Settings to use AI features.');
+    closePanels(true);
     openSettings();
     return;
   }
-  aiEnabled = !aiEnabled;
+  if (on === aiEnabled) return;
+  aiEnabled = on;
   applyAIState();
-  // Persist the preference
   fetch('/ai/toggle', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
@@ -1900,16 +1961,20 @@ function toggleAI() {
   }).catch(() => {});
   showToast(aiEnabled ? 'AI features enabled.' : 'AI features turned off.', aiEnabled ? 'green' : null);
 }
+function toggleAI() { setAI(!aiEnabled); }
 
 // Reflect the current AI state across the badge and all AI UI elements
 function applyAIState() {
   const badge = document.getElementById('aiBadge');
   if (badge) {
     document.getElementById('aiBadgeLabel').textContent = aiEnabled ? 'AI on' : 'AI off';
-    badge.classList.toggle('on', aiEnabled);
-    badge.classList.toggle('off', !aiEnabled);
-    badge.setAttribute('aria-pressed', aiEnabled ? 'true' : 'false');
+    badge.classList.toggle('ai-on', aiEnabled);
+    badge.classList.toggle('ai-off', !aiEnabled);
   }
+  const sw = document.getElementById('aiSwitch');
+  if (sw) sw.checked = aiEnabled;
+  const keyHint = document.getElementById('aiKeyHint');
+  if (keyHint) keyHint.hidden = !!aiHasKey;
   // The dock's Assistant button only exists while AI is on
   const dockAssistant = document.getElementById('dockAssistant');
   if (dockAssistant) dockAssistant.hidden = !aiEnabled;
@@ -1921,6 +1986,71 @@ function applyAIState() {
   });
 }
 
+// The limit: a switch and an amount, saved as soon as either changes. With
+// the switch on, spending stops at the amount — at $0 before the first call.
+let _aiCapSaving = null;
+function _aiCapFields() {
+  const sw = document.getElementById('aiCapSwitch');
+  const amount = document.getElementById('set_ai_cap');
+  return sw && amount ? {sw, amount} : null;
+}
+function _showAICap(capOn, amount, cost, overCap) {
+  const f = _aiCapFields();
+  if (!f) return;
+  f.sw.checked = !!capOn;
+  f.amount.value = Number.isFinite(amount) ? amount : 0;
+  f.amount.disabled = !capOn;
+  const row = document.getElementById('aiCapRow');
+  if (row) row.classList.toggle('off', !capOn);
+  const state = document.getElementById('aiCapState');
+  if (state) {
+    if (!capOn) state.textContent = 'No limit.';
+    else if (overCap) state.textContent = 'Reached: the AI is paused until you raise it.';
+    else state.textContent = `$${(Math.max(0, amount - (cost || 0))).toFixed(2)} left this month.`;
+  }
+}
+async function saveAICap() {
+  const f = _aiCapFields();
+  if (!f) return;
+  const capOn = f.sw.checked;
+  let amount = parseFloat(f.amount.value);
+  if (!Number.isFinite(amount) || amount < 0) amount = 0;
+  f.amount.value = amount;
+  f.amount.disabled = !capOn;
+  try {
+    _aiCapSaving = fetch('/settings', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ai_monthly_cap: amount, ai_cap_on: capOn})
+    });
+    const res = await (await _aiCapSaving).json();
+    if (!res.ok) throw new Error(res.message || 'not saved');
+  } catch (e) {
+    fail('The limit could not be saved: ' + (e.message || e));
+    return;
+  }
+  loadUsage();
+}
+
+// What the AI has cost this month and where the limit stands, shown in the
+// AI panel. Counted from what the API reports it used, so it follows the
+// real calls rather than guessing.
+async function loadUsage() {
+  const el = document.getElementById('aiSpend');
+  if (!el) return;
+  try {
+    const u = await (await fetch('/usage')).json();
+    const jobs = Object.entries(u.calls || {})
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, n]) => `${n} ${name}`)
+      .join(' · ');
+    el.textContent = `$${(u.cost || 0).toFixed(2)}` + (jobs ? `  —  ${jobs}` : '  —  nothing yet');
+    el.classList.toggle('over', !!u.over_cap);
+    _showAICap(!!u.cap_on, Number(u.cap_amount) || 0, u.cost || 0, !!u.over_cap);
+  } catch (e) {
+    el.textContent = 'not available';
+  }
+}
 
 let assistantHistory = [];      // [{role, content}, ...]
 let assistantStreaming = false;
@@ -1931,12 +2061,17 @@ function toggleAssistant() {
   const panel  = document.getElementById('assistantPanel');
   document.getElementById('dockAssistant').classList.toggle('on', assistantOpen);
   if (assistantOpen) {
+    panel.getAnimations().forEach(x => x.cancel());   // a slide-out still running
+    panel.classList.remove('closing');
     panel.classList.add('open');
+    if (_sheetsSlide() || _sheetsCentred()) _sheetIn(panel);
     renderAssistantMessages();
     loadAssistantSuggestions();   // suggestions appear when opened
     setTimeout(() => document.getElementById('assistantInput').focus(), 100);
   } else {
-    panel.classList.remove('open');
+    const a = (_sheetsSlide() || _sheetsCentred()) ? _sheetOut(panel) : null;
+    if (a) a.onfinish = () => { if (!assistantOpen) panel.classList.remove('open'); };
+    else panel.classList.remove('open');
   }
 }
 
@@ -2111,7 +2246,28 @@ function tellWindowReady() {
 if (window.pywebview && window.pywebview.api && window.pywebview.api.page_ready) tellWindowReady();
 else window.addEventListener('pywebviewready', tellWindowReady, {once: true});
 
+// ── The phone: the sources chip in its own pill above the dock ────────────
+// A phone-narrow window (touch.css, 700px) shows the search pill with the
+// field and Search alone, and the sources chip in a pill of its own at the
+// bottom (his choice, 19 Oct). The chip is moved rather than duplicated, so
+// it keeps its state and its handlers; a widening window puts it back.
+const _phoneQuery = window.matchMedia('(max-width: 700px)');
+function placeSourcesChip() {
+  const chip = document.getElementById('dockSources');
+  const host = document.getElementById('phoneSourcesHost');
+  const bar = document.getElementById('topbar');
+  if (!chip || !host || !bar) return;
+  if (_phoneQuery.matches) {
+    if (chip.parentElement !== host) { host.appendChild(chip); host.hidden = false; }
+  } else if (chip.parentElement === host) {
+    bar.insertBefore(chip, document.getElementById('searchBtn'));
+    host.hidden = true;
+  }
+}
+try { _phoneQuery.addEventListener('change', placeSourcesChip); } catch (e) { /* an old engine */ }
+
 document.addEventListener('DOMContentLoaded', () => {
+  placeSourcesChip();
   const ai = document.getElementById('assistantInput');
   if (ai) ai.addEventListener('input', () => {
     ai.style.height = 'auto';
@@ -2120,15 +2276,21 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ── Explain ────────────────────────────────────────────────────────────────
+// One explanation at a time: closing the dialog stops its stream, and a
+// second paper's never shares the text with the first's.
+let _explainSource = null;
 function openExplain(idx) {
   const a = allArticles[idx];
   if (!a) return;
+  if (_explainSource) { _explainSource.close(); _explainSource = null; }
   document.getElementById('explainTitle').textContent = a.title;
   setMd(document.getElementById('explainText'), '');
   openOverlay('explainOverlay');
 
   const es = new EventSource(withToken('/explain/' + idx));
+  _explainSource = es;
   es.onmessage = e => {
+    if (_explainSource !== es) { es.close(); return; }
     const d = JSON.parse(e.data);
     if (d.type === 'chunk') { const el = document.getElementById('explainText'); setMd(el, el._raw + d.text); }
     if (d.type === 'done')  { es.close(); }
@@ -2136,6 +2298,7 @@ function openExplain(idx) {
   };
   es.onerror = () => {
     es.close();
+    if (_explainSource !== es) return;
     if (!document.getElementById('explainText')._raw) {
       closeExplain(); fail('The connection to MedSearch dropped. Try again.', "Couldn't explain this paper");
     }
@@ -2143,6 +2306,7 @@ function openExplain(idx) {
 }
 
 function closeExplain() {
+  if (_explainSource) { _explainSource.close(); _explainSource = null; }
   closeOverlay('explainOverlay');
 }
 
@@ -2179,7 +2343,15 @@ function _slugifyPdfName(title) {
   return (base || 'article') + '.pdf';
 }
 
+// Each opening of the viewer is one load: closing it, or opening another,
+// aborts the fetch and makes whatever comes back of the old one do nothing
+// (no browser window for a paper given up on, no pages under another title).
+let _pdfLoad = 0, _pdfAbort = null;
 function openPdf(url, title) {
+  const load = ++_pdfLoad;
+  if (_pdfAbort) _pdfAbort.abort();
+  _pdfAbort = typeof AbortController === 'function' ? new AbortController() : null;
+  const current = () => load === _pdfLoad;
   const loading = document.getElementById('pdfLoading');
   const titleEl = document.getElementById('pdfTitle');
   const extLink = document.getElementById('pdfOpenExternal');
@@ -2214,8 +2386,9 @@ function openPdf(url, title) {
 
   const proxyUrl = '/pdf_proxy?url=' + encodeURIComponent(url);
 
-  fetch(proxyUrl)
+  fetch(proxyUrl, _pdfAbort ? {signal: _pdfAbort.signal} : {})
     .then(async res => {
+      if (!current()) return null;
       const ct = res.headers.get('Content-Type') || '';
       if (!res.ok || !ct.includes('pdf')) {
         // The server couldn't return a direct PDF (paywall, login-gated, or a
@@ -2227,7 +2400,7 @@ function openPdf(url, title) {
       return res.arrayBuffer();
     })
     .then(async buf => {
-      if (!buf) return;
+      if (!buf || !current()) return;
       pdfBytes = buf.slice(0);          // keep a copy for Save (getDocument consumes it)
       try {
         pdfDoc = await pdfjsLib.getDocument({data: buf}).promise;
@@ -2240,15 +2413,15 @@ function openPdf(url, title) {
         await renderAllPages();
       } catch(e) {
         // Couldn't render the bytes as a PDF — fall through to the browser.
-        openInAppBrowser(url, title);
+        if (current()) openInAppBrowser(url, title);
       }
     })
-    .catch(e => openInAppBrowser(url, title));
+    .catch(e => { if (current()) openInAppBrowser(url, title); });
 }
 
 // Save the currently-open PDF to Downloads. MedSearch writes the file (/save_pdf):
 // a download link here showed the PDF in place of the whole window (26 Sep).
-async function savePdf() {
+async function savePdf(retried) {
   if (!pdfBytes) { fail('PDF still loading — try again in a moment.'); return; }
   try {
     const res = await fetch('/save_pdf?name=' + encodeURIComponent(pdfFilename), {
@@ -2257,11 +2430,16 @@ async function savePdf() {
       body: pdfBytes
     });
     const data = await res.json().catch(() => ({}));
+    if (data.need_folder && !retried) {         // iOS, no folder picked yet
+      if (await pickExportFolder()) return savePdf(true);
+      fail('Pick a folder, such as Downloads, for MedSearch to save PDFs in.', 'PDF not saved');
+      return;
+    }
     if (!res.ok || !data.name) {
       fail(data.error || `MedSearch answered ${res.status}.`, "Couldn't save the PDF");
       return;
     }
-    showToast('Saved to Downloads: ' + data.name, 'green');
+    showToast(`Saved to ${data.folder || 'Downloads'}: ${data.name}`, 'green');
   } catch(e) {
     fail('Could not save the PDF: ' + e.message, "Couldn't save the PDF");
   }
@@ -2327,6 +2505,8 @@ async function pdfFitWidth() {
 }
 
 function closePdf() {
+  _pdfLoad++;
+  if (_pdfAbort) { _pdfAbort.abort(); _pdfAbort = null; }
   closeOverlay('pdfOverlay');
   const container = document.getElementById('pdfCanvasContainer');
   container.innerHTML = '';
@@ -2416,9 +2596,20 @@ function citeItemHtml(item) {
   </div>`;
 }
 
-// Radial SVG: center node = this paper, references LEFT, citations RIGHT
+// Radial SVG: center node = this paper, references LEFT, citations RIGHT.
+// Every node inside the drawing: the outer row used to be placed beyond its
+// edges, so on a phone, where the drawing shrinks to a third, the lines ran
+// off both sides (his phone, 20 Oct). A narrow screen gets a narrower,
+// taller drawing, with this paper's title under it and larger lettering.
 function buildCiteGraph(article, refs, cits) {
-  const W = 860, H = 320, cx = W/2, cy = H/2;
+  const narrow = typeof window !== 'undefined' && window.matchMedia &&
+                 window.matchMedia('(max-width: 700px)').matches;
+  const W = narrow ? 380 : 860, H = narrow ? 400 : 320;
+  const cx = W/2, cy = narrow ? (H - 34) / 2 : H/2;
+  const fs = narrow ? 11 : 9;                     // label size, in the drawing's units (inline: app.css sets 9px)
+  const inner = narrow ? 46 : 140;                // the gap kept around this paper
+  const reach = cx - inner - 22;                  // so the outer row stays inside, label and all
+  const vSpan = narrow ? H - 120 : 210;           // vertical spread (clears the side headings)
   const maxPer = 8;  // nodes shown per side in the graph (lists show all)
   const r = refs.slice(0, maxPer);
   const c = cits.slice(0, maxPer);
@@ -2428,29 +2619,29 @@ function buildCiteGraph(article, refs, cits) {
   function place(items, side) {
     const n = items.length;
     if (!n) return;
-    const rx = 300;            // horizontal reach
-    const vSpan = 210;         // vertical spread (clears the side headings)
     const dir = (side === 'left' ? -1 : 1);
     items.forEach((it, i) => {
-      const x = cx + dir * (140 + rx * (0.35 + 0.65 * (i % 2)));  // stagger depth
+      const x = cx + dir * (inner + reach * (0.35 + 0.65 * (i % 2)));  // stagger depth
       const frac = n === 1 ? 0.5 : i / (n - 1);
       const y = cy - vSpan/2 + frac * vSpan;
       const cls = side === 'left' ? 'cite-node-ref' : 'cite-node-cit';
       links += `<line class="cite-link" x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/>`;
       nodes += `<circle class="${cls}" cx="${x}" cy="${y}" r="8"/>`;
-      if (it.year) nodes += `<text class="cite-node-label" x="${x}" y="${y - 13}" text-anchor="middle">${it.year}</text>`;
+      if (it.year) nodes += `<text class="cite-node-label" x="${x}" y="${y - 13}" text-anchor="middle" style="font-size:${fs}px">${escHtml(String(it.year))}</text>`;
     });
   }
   place(r, 'left');
   place(c, 'right');
 
-  // Center node + label
+  // Center node + label: under the node on a wide drawing, under the whole
+  // drawing on a narrow one, where the nodes come close to the middle.
   nodes += `<circle class="cite-node-center" cx="${cx}" cy="${cy}" r="12"/>`;
   const shortTitle = (article.title || '').slice(0, 34) + ((article.title||'').length>34?'…':'');
-  nodes += `<text class="cite-node-label" x="${cx}" y="${cy + 30}" text-anchor="middle" style="font-weight:700">${escHtml(shortTitle)}</text>`;
-  // side headers
-  nodes += `<text class="cite-axis-label" x="${cx - 300}" y="16" text-anchor="middle">↓ REFERENCES</text>`;
-  nodes += `<text class="cite-axis-label" x="${cx + 300}" y="16" text-anchor="middle">↑ CITED BY</text>`;
+  nodes += `<text class="cite-node-label" x="${cx}" y="${narrow ? H - 8 : cy + 30}" text-anchor="middle" style="font-size:${fs}px;font-weight:700">${escHtml(shortTitle)}</text>`;
+  // side headers, over the middle of each side
+  const hx = inner + reach * 0.675;
+  nodes += `<text class="cite-axis-label" x="${cx - hx}" y="16" text-anchor="middle">↓ REFERENCES</text>`;
+  nodes += `<text class="cite-axis-label" x="${cx + hx}" y="16" text-anchor="middle">↑ CITED BY</text>`;
 
   return `<div class="cite-graph-wrap">
     <svg class="cite-graph-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
@@ -2487,7 +2678,7 @@ function openExport() {
     : (sel.total === 1 ? 'Exports the 1 result.' : `Exports all ${sel.total} results.`);
   document.getElementById('exportSuccess').style.display = 'none';
   openOverlay('exportOverlay');
-  checkZoteroAvailable();
+  if (document.getElementById('zoteroRow')) checkZoteroAvailable();   // not on iOS: no connector there
 }
 function closeExport() {
   closeOverlay('exportOverlay');
@@ -2505,11 +2696,15 @@ function checkZoteroAvailable() {
     .then(d => {
       if (d.available) {
         row.classList.remove('unavailable');
-        status.textContent = 'Adds all results straight into your Zotero library.';
+        status.textContent = d.via === 'web'
+          ? 'Adds all results to your online Zotero library, which your Zotero apps sync.'
+          : 'Adds all results straight into your Zotero library.';
         btn.disabled = false;
       } else {
         row.classList.add('unavailable');
-        status.innerHTML = 'Zotero isn\'t running. Open the Zotero desktop app, then reopen this.';
+        status.textContent = MS.onIOS
+          ? 'Add a Zotero API key in Settings to save results to your Zotero library.'
+          : 'Zotero isn\'t running. Open the Zotero desktop app, or add a Zotero API key in Settings.';
         btn.disabled = true;
       }
     })
@@ -2549,6 +2744,15 @@ async function sendToZotero() {
   }
 }
 
+// No desktop Zotero and no key: offer Settings, where the key goes.
+async function askForZoteroKey(message) {
+  const yes = await ask({title: 'Save to Zotero', text: message, okLabel: 'Open Settings'});
+  if (!yes) return;
+  await openSettings();
+  const field = document.getElementById('set_zotero');
+  if (field) setTimeout(() => { field.scrollIntoView({block: 'center'}); field.focus(); }, 300);
+}
+
 // Send a single article (by index) to Zotero from its card button
 async function sendSingleToZotero(idx, ev) {
   const btn = ev && ev.currentTarget ? ev.currentTarget : null;
@@ -2562,10 +2766,11 @@ async function sendSingleToZotero(idx, ev) {
     const data = await res.json();
     if (data.ok) {
       if (btn) btn.innerHTML = `${ico('download')} Sent`;
-      showToast('Sent to Zotero!', 'green');
+      showToast(data.message || 'Sent to Zotero!', 'green');
       if (btn) setTimeout(() => { btn.innerHTML = `${ico('download')} Zotero`; btn.disabled = false; }, 2500);
     } else {
       if (btn) { btn.innerHTML = `${ico('download')} Zotero`; btn.disabled = false; }
+      if (data.need_key) { askForZoteroKey(data.message); return; }
       fail(data.message || 'Could not send to Zotero.');
     }
   } catch(e) {
@@ -2574,23 +2779,64 @@ async function sendSingleToZotero(idx, ev) {
   }
 }
 
-async function doExport() {
+// iOS: the folder exports and saved PDFs go to is picked once in Files
+// (Downloads), the system's own folder picker; true once one is picked.
+// The answer is the folder's name ('' when none was picked), which Settings
+// then shows: before, the pick left no trace there (his phone, 21 Oct).
+async function pickExportFolder() {
+  const native = globalThis.__msNative;
+  if (!native || !native.pickFolder) return '';
+  const got = await native.pickFolder();
+  if (!got) return '';
+  const name = typeof got === 'string' ? got : 'the folder you picked';
+  const text = document.getElementById('exportsFolderText');
+  const btn = document.getElementById('exportsFolderBtn');
+  if (text) { text.textContent = 'Saving to '; text.append(Object.assign(document.createElement('b'), {textContent: name}), ', picked in Files.'); }
+  if (btn) btn.textContent = 'Change folder…';
+  return name;
+}
+
+async function doExport(retried) {
   const fmt = document.querySelector('input[name=exportFmt]:checked').value;
-  const res  = await fetch('/export', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({format: fmt, indices: exportSelection().indices})
-  });
-  const data = await res.json();
-  if (data.error) { fail(data.error); return; }
+  let data;
+  try {
+    const res = await fetch('/export', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({format: fmt, indices: exportSelection().indices})
+    });
+    data = await res.json();
+  } catch (e) { fail('MedSearch did not answer: ' + e.message, "Couldn't export"); return; }
+  if (data.need_folder && !retried) {
+    if (await pickExportFolder()) return doExport(true);
+    fail('Pick a folder, such as Downloads, for MedSearch to save exports in.', 'Nothing exported');
+    return;
+  }
+  if (data.error || !data.paths) { fail(data.error || 'The export did not finish.', "Couldn't export"); return; }
   const succ = document.getElementById('exportSuccess');
   succ.style.display = 'block';
-  succ.textContent   = '✓ Saved to: ' + data.paths.join(', ');
+  succ.textContent = `✓ Saved in ${data.folder}: ${(data.names || data.paths).join(', ')}`;
+  if (data.can_show) {
+    const show = document.createElement('button');
+    show.type = 'button';
+    show.className = 'btn-secondary export-show-btn';
+    show.textContent = MS.onWindows ? 'Show in Explorer' : 'Show in Finder';
+    show.onclick = () => fetch('/exports/show', {method: 'POST'}).then(r => r.json())
+      .then(d => { if (!d.ok) fail(d.message, "Couldn't show the exports"); })
+      .catch(e => fail(e.message, "Couldn't show the exports"));
+    succ.appendChild(document.createTextNode(' '));
+    succ.appendChild(show);
+  }
   showToast('Export complete!', 'green');
 }
 
 // ── Settings ───────────────────────────────────────────────────────────────
+// The library edits in Settings act on the live list, so leaving without
+// saving puts back what was there (the sweep, 20 Oct).
+let _settingsSaved = false, _librariesBefore = null;
 async function openSettings() {
+  _settingsSaved = false;
+  _librariesBefore = {list: JSON.parse(JSON.stringify(institutionProxies)), active: activeProxy};
   openOverlay('settingsOverlay');
   // Load which keys are already saved and indicate them in each field.
   const fields = {
@@ -2602,6 +2848,7 @@ async function openSettings() {
     ieee_api_key:      'set_ieee',
     semantic_scholar_api_key: 'set_semanticscholar',
     google_books_api_key: 'set_googlebooks',
+    zotero_api_key:    'set_zotero',
     openalex_api_key:  'set_openalex',
     core_api_key:      'set_core',
     unpaywall_email:   'set_email',
@@ -2623,8 +2870,6 @@ async function openSettings() {
     const res  = await fetch('/settings');
     const data = await res.json();
     document.getElementById('loginField').hidden = !data.can_open_at_login;
-    document.getElementById('set_ai_cap').value = data.ai_monthly_cap || 0;
-    loadUsage();
     document.getElementById('set_open_at_login').checked = !!data.open_at_login;
     for (const [key, id] of Object.entries(fields)) {
       const el  = document.getElementById(id);
@@ -2680,25 +2925,14 @@ function _addRemoveKeyButton(input, key) {
 }
 
 function closeSettings() {
-  closeOverlay('settingsOverlay');
-}
-
-// What the AI has cost this month, shown in Settings. Counted from what the
-// API reports it used, so it follows the real calls rather than guessing.
-async function loadUsage() {
-  const el = document.getElementById('aiSpend');
-  if (!el) return;
-  try {
-    const u = await (await fetch('/usage')).json();
-    const jobs = Object.entries(u.calls || {})
-      .sort((a, b) => b[1] - a[1])
-      .map(([name, n]) => `${n} ${name}`)
-      .join(' · ');
-    el.textContent = `$${(u.cost || 0).toFixed(2)}` + (jobs ? `  —  ${jobs}` : '  —  nothing yet');
-    el.classList.toggle('over', !!u.over_cap);
-  } catch (e) {
-    el.textContent = 'not available';
+  if (!_settingsSaved && _librariesBefore) {
+    institutionProxies = _librariesBefore.list;
+    activeProxy = _librariesBefore.active;
+    renderProxyPicker();
   }
+  _librariesBefore = null;
+  _settingsSaved = false;
+  closeOverlay('settingsOverlay');
 }
 
 // ── Institutional proxy management ──────────────────────────────────────────
@@ -2737,7 +2971,10 @@ function pickActiveInSettings(i) {
 
 function deleteCustomInstitution(i) {
   institutionProxies.splice(i, 1);
-  if (activeProxy >= institutionProxies.length) activeProxy = Math.max(-1, institutionProxies.length - 1);
+  // The active one stays the same library: the ones after it move up one;
+  // the active one itself gone means no library.
+  if (i < activeProxy) activeProxy--;
+  else if (i === activeProxy) activeProxy = -1;
   renderProxyRows();
   renderProxyPicker();
 }
@@ -2865,6 +3102,7 @@ async function saveSettings() {
     ieee_api_key:      document.getElementById('set_ieee').value.trim(),
     semantic_scholar_api_key: document.getElementById('set_semanticscholar').value.trim(),
     google_books_api_key: document.getElementById('set_googlebooks').value.trim(),
+    zotero_api_key:    document.getElementById('set_zotero').value.trim(),
     openalex_api_key:  document.getElementById('set_openalex').value.trim(),
     core_api_key:      document.getElementById('set_core').value.trim(),
     unpaywall_email:   document.getElementById('set_email').value.trim(),
@@ -2898,7 +3136,6 @@ async function saveSettings() {
   }
   if (!document.getElementById('loginField').hidden)
     payload.open_at_login = document.getElementById('set_open_at_login').checked;
-  payload.ai_monthly_cap = parseFloat(document.getElementById('set_ai_cap').value) || 0;
 
   const saved = await (await fetch('/settings', {
     method: 'POST',
@@ -2920,7 +3157,14 @@ async function saveSettings() {
   try {
     const s = await (await fetch('/settings')).json();
     refreshDbKeyBadges(s);
+    // A key added makes AI possible; a key removed turns it off here too.
+    if (typeof s.has_ai_key === 'boolean') {
+      aiHasKey = s.has_ai_key;
+      aiEnabled = s.has_ai_key && s.ai_enabled !== false;
+      applyAIState();
+    }
   } catch(e) {}
+  _settingsSaved = true;
   closeSettings();
   showToast('Settings saved.', 'green');
 }
@@ -2959,11 +3203,22 @@ document.addEventListener('click', () => {
 });
 
 // Reveal alternative Sci-Hub mirrors for one article card
-function toggleScihubAlts(event, idx) {
+async function toggleScihubAlts(event, idx) {
   event.stopPropagation();
   event.preventDefault();
   const menu = document.getElementById('scihub_alts_' + idx);
   if (!menu) return;
+  // In the iOS app: the system's action sheet, not the page's card (his ask,
+  // 21 Oct: everything as Liquid Glass). undefined: it could not show.
+  const native = globalThis.__msNative;
+  if (native && native.choose) {
+    const items = [...menu.querySelectorAll('.scihub-alt-item')];
+    const r = event.currentTarget ? event.currentTarget.getBoundingClientRect() : null;
+    const i = await native.choose('Other Sci-Hub mirrors', "If this one doesn't work, try:",
+                                  items.map(b => b.textContent),
+                                  r && {x: r.left, y: r.top, w: r.width, h: r.height});
+    if (i !== undefined) { if (i !== null && items[i]) items[i].click(); return; }
+  }
   const wasOpen = menu.classList.contains('open');
   // close any other open ones
   document.querySelectorAll('.scihub-alts.open').forEach(m => m.classList.remove('open'));
@@ -3027,7 +3282,7 @@ function renderSaved(items) {
   }
   list.innerHTML = items.map(s => `
     <div class="saved-item" data-id="${s.id}">
-      <div class="saved-item-main" onclick='runSaved(${JSON.stringify(s).replace(/'/g,"&#39;")})'>
+      <div class="saved-item-main" onclick='runSaved(${JSON.stringify(s).replace(/&/g,"&amp;").replace(/'/g,"&#39;")})'>
         <div class="saved-name">${escHtml(s.name)}</div>
         <div class="saved-sub">${escHtml(describeSearch(s))}</div>
       </div>
@@ -3135,27 +3390,84 @@ const _reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const _EASE = 'cubic-bezier(0.2, 0, 0, 1)';
 function _panelOf(overlay) { return overlay.firstElementChild; }
 
+// ON A PHONE UNDER THE NATIVE CHROME (the iOS app), whatever a tab opens is
+// a screen, and it comes and goes as the system's sheets do: up from the
+// bottom on the system's curve, and down again. The desktop keeps its fade
+// and settle. Transform only, and nothing scaled: a scale on a sheet of
+// glass re-blurs the page behind on every frame, which is what he saw as
+// rough and bumpy (19 Oct); the native bars fade over the same time
+// (chrome.py).
+const _sheetsSlide = () => document.documentElement.classList.contains('native-chrome') &&
+                           window.matchMedia('(max-width: 700px)').matches;
+// On an iPad under the native chrome the sheets and panels are centred by a
+// transform (touch.css), which an animated transform would replace while it
+// runs: they fade instead (the sweep, 20 Oct).
+const _sheetsCentred = () => document.documentElement.classList.contains('native-chrome') &&
+                             !window.matchMedia('(max-width: 700px)').matches;
+const _SHEET_EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
+// Out: shorter, and quickening as it leaves, as the system's sheets do. On
+// the rising curve it crawled the last stretch, and the X and the bars
+// waited for it (too slow, his phone, 21 Oct).
+const _SHEET_OUT_EASE = 'cubic-bezier(0.4, 0, 1, 1)';
+const _SHEET_IN = 480, _SHEET_OUT = 240;
+function _sheetIn(el) {
+  el.classList.remove('closing');     // see _sheetOut
+  if (_reduceMotion.matches || !el.animate) return null;
+  if (_sheetsSlide()) return el.animate([{transform: 'translateY(100%)'}, {transform: 'none'}],
+                                        {duration: _SHEET_IN, easing: _SHEET_EASE});
+  if (_sheetsCentred()) return el.animate([{opacity: 0}, {opacity: 1}], {duration: 220, easing: _EASE});
+  return el.animate([{opacity: 0, transform: 'translateY(8px) scale(0.985)'},
+                     {opacity: 1, transform: 'none'}], {duration: 220, easing: _EASE});
+}
+function _sheetOut(el) {
+  if (_reduceMotion.matches || !el.animate) return null;
+  const a = _sheetsSlide()
+    ? el.animate([{transform: 'none'}, {transform: 'translateY(100%)'}],
+                 {duration: _SHEET_OUT, easing: _SHEET_OUT_EASE})
+    : _sheetsCentred() ? el.animate([{opacity: 1}, {opacity: 0}], {duration: 160, easing: _EASE})
+    : el.animate([{opacity: 1, transform: 'none'},
+                  {opacity: 0, transform: 'translateY(8px) scale(0.985)'}], {duration: 160, easing: _EASE});
+  // .closing while it leaves: the iOS app's chrome counts it gone at once,
+  // so the X and the bars change over WITH the sheet, not after it. It stays
+  // once the sheet is gone, until _sheetIn opens it again: taken off as the
+  // slide finished, it went a moment before the caller's onfinish closed the
+  // sheet, the page reported the sheet open again for that moment, and the
+  // bars came back, went and came back — the flinch on every close (his
+  // phone, 21 Oct). A slide turned round (cancelled) takes it off.
+  el.classList.add('closing');
+  a.addEventListener('cancel', () => el.classList.remove('closing'));
+  return a;
+}
+
 function openOverlay(id) {
   const ov = document.getElementById(id);
-  if (!ov || ov.classList.contains('open')) return;
-  ov.classList.add('open');
+  if (!ov) return;
+  if (ov.classList.contains('open') && !ov._closing) return;
   const panel = _panelOf(ov);
+  if (ov._closing) {               // still sliding out: turn it round
+    ov._closing = false;
+    ov.getAnimations().forEach(a => a.cancel());
+    if (panel) panel.getAnimations().forEach(a => a.cancel());
+  }
+  ov.classList.add('open');
+  if (panel) panel.classList.remove('closing');
   if (_reduceMotion.matches || !panel || !panel.animate) return;
-  ov.animate([{opacity: 0}, {opacity: 1}], {duration: 180, easing: 'linear'});
-  panel.animate([{opacity: 0, transform: 'translateY(8px) scale(0.985)'},
-                 {opacity: 1, transform: 'none'}], {duration: 220, easing: _EASE});
+  ov.animate([{opacity: 0}, {opacity: 1}], {duration: _sheetsSlide() ? 250 : 180, easing: 'linear'});
+  _sheetIn(panel);
 }
 
 function closeOverlay(id) {
   const ov = document.getElementById(id);
-  if (!ov || !ov.classList.contains('open')) return;
+  if (!ov || !ov.classList.contains('open') || ov._closing) return;
   const panel = _panelOf(ov);
   if (_reduceMotion.matches || !panel || !panel.animate) { ov.classList.remove('open'); return; }
-  ov.animate([{opacity: 1}, {opacity: 0}], {duration: 160, easing: 'linear'});
-  const a = panel.animate([{opacity: 1, transform: 'none'},
-                           {opacity: 0, transform: 'translateY(8px) scale(0.985)'}],
-                          {duration: 160, easing: _EASE});
-  a.onfinish = () => ov.classList.remove('open');
+  ov._closing = true;
+  ov.animate([{opacity: 1}, {opacity: 0}], {duration: _sheetsSlide() ? _SHEET_OUT : 160, easing: 'linear'});
+  _sheetOut(panel).onfinish = () => {
+    if (!ov._closing) return;      // opened again meanwhile
+    ov._closing = false;
+    ov.classList.remove('open');
+  };
 }
 
 // ── Dock panels ────────────────────────────────────────────────────────────
@@ -3166,13 +3478,14 @@ function _openPanel() { return document.querySelector('.dock-panel:not([hidden])
 
 function togglePanel(id, trigger) {
   const panel = document.getElementById(id);
-  const wasOpen = !panel.hidden;
+  const wasOpen = !panel.hidden && !panel._closing;
   closePanels(true);
   if (wasOpen) return;
   const fromTop = !!trigger.closest('.topbar');
   panel.classList.toggle('from-top', fromTop);
   panel.classList.toggle('from-bottom', !fromTop);
   panel.hidden = false;
+  panel.classList.remove('closing');
   const r = trigger.getBoundingClientRect();
   const w = panel.offsetWidth;
   const left = Math.max(12, Math.min(window.innerWidth - w - 12, r.left + r.width / 2 - w / 2));
@@ -3182,22 +3495,30 @@ function togglePanel(id, trigger) {
   trigger.classList.add('on');
   trigger.setAttribute('aria-expanded', 'true');
   if (!_reduceMotion.matches && panel.animate) {
-    panel.animate([{opacity: 0, transform: 'scale(0.96)'}, {opacity: 1, transform: 'none'}],
-                  {duration: 200, easing: _EASE});
+    if (_sheetsSlide() || _sheetsCentred()) _sheetIn(panel);
+    else panel.animate([{opacity: 0, transform: 'scale(0.96)'}, {opacity: 1, transform: 'none'}],
+                       {duration: 200, easing: _EASE});
   }
+  if (id === 'panelAI') { loadUsage(); return; }   // nothing to type first: no focus
   const first = panel.querySelector('input, select, button, [tabindex]');
   if (first && fromTop === false) setTimeout(() => first.focus({preventScroll: true}), 30);
 }
 
 function closePanels(instant) {
+  // A panel still fading out goes at once: one panel at a time.
+  document.querySelectorAll('.dock-panel').forEach(p => {
+    if (p._closing) { p.getAnimations().forEach(a => a.cancel()); p._closing = false; p.hidden = true; }
+  });
   const panel = _openPanel();
   if (!panel) return;
   const t = panel._trigger;
   if (t) { t.classList.remove('on'); t.setAttribute('aria-expanded', 'false'); }
   if (instant || _reduceMotion.matches || !panel.animate) { panel.hidden = true; return; }
-  const a = panel.animate([{opacity: 1, transform: 'none'}, {opacity: 0, transform: 'scale(0.96)'}],
+  const a = (_sheetsSlide() || _sheetsCentred()) ? _sheetOut(panel)
+          : panel.animate([{opacity: 1, transform: 'none'}, {opacity: 0, transform: 'scale(0.96)'}],
                           {duration: 150, easing: _EASE});
-  a.onfinish = () => { panel.hidden = true; };
+  panel._closing = true;
+  a.onfinish = () => { if (panel._closing) { panel._closing = false; panel.hidden = true; } };
 }
 
 // A click outside the open panel (and outside the bar that opened it) closes it.
@@ -3221,7 +3542,8 @@ function closeTopDialog() {
   const closers = {failOverlay: closeFail, askOverlay: () => closeAsk(null), explainOverlay: closeExplain, citeOverlay: closeCitations,
                    settingsOverlay: closeSettings, exportOverlay: closeExport,
                    apiKeyPromptOverlay: closeApiKeyPrompt, proxyEditorOverlay: closeProxyEditor,
-                   pdfOverlay: closePdf, updateOverlay: closeUpdate};
+                   pdfOverlay: closePdf, updateOverlay: closeUpdate,
+                   onboardOverlay: closeOnboarding};
   if (!closers[top.id]) return false;
   closers[top.id]();
   return true;
@@ -3240,8 +3562,19 @@ document.addEventListener('keydown', e => {
 // ask({title, text, input, okLabel, danger}) → Promise. With `input` (the
 // starting value) it resolves to the typed text, else to true; Cancel,
 // Escape or a click outside resolve to null.
+//
+// IN THE iOS APP both are the system's own alert (his ask, 20 Oct: errors and
+// warnings as Liquid Glass popups, not whole screens): the shell's bridge
+// (ios/src/medsearch/shell.py) puts window.__msNative in the page, and these
+// hand it the words. Everywhere else, and if the bridge cannot, the page's
+// own dialogs below.
 let _askResolve = null, _askReturnFocus = null;
 function ask(o) {
+  const native = globalThis.__msNative;
+  if (native && native.ask) return native.ask(o);
+  return _pageAsk(o);
+}
+function _pageAsk(o) {
   document.getElementById('askTitle').textContent = o.title || '';
   document.getElementById('askText').textContent  = o.text || '';
   const field = document.getElementById('askField');
@@ -3299,6 +3632,11 @@ async function uninstallMedSearch() {
 
 let _failReturnFocus = null;
 function fail(message, title) {
+  const native = globalThis.__msNative;
+  if (native && native.alert && native.alert(title || "Couldn't do that", message || '')) return;
+  _pageFail(message, title);
+}
+function _pageFail(message, title) {
   document.getElementById('failTitle').textContent = title || "Couldn't do that";
   document.getElementById('failText').textContent  = message || '';
   _failReturnFocus = document.activeElement;
@@ -3311,6 +3649,11 @@ function closeFail() {
 }
 
 function showToast(msg, type) {
+  const native = globalThis.__msNative;
+  if (native && native.toast && native.toast(msg, type)) return;
+  _pageToast(msg, type);
+}
+function _pageToast(msg, type) {
   const t = document.getElementById('toast');
   t.textContent = msg;
   t.className   = 'toast show' + (type ? ' '+type : '');
@@ -3325,7 +3668,11 @@ function escHtml(s) {
 function escAttr(s) {
   // Used inside single-quoted JS string literals in onclick="..." handlers.
   // Escape backslashes first, then quotes and newlines, to avoid breakout.
+  // The & first: the HTML parser decodes character references inside the
+  // attribute before the script runs, so a title holding a literal "&#39;"
+  // came out as a quote and ended the string (found in the sweep, 20 Oct).
   return String(s)
+    .replace(/&/g, '&amp;')
     .replace(/\\/g, '\\\\')
     .replace(/'/g, "\\'")
     .replace(/"/g, '&quot;')

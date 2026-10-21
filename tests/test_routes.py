@@ -287,7 +287,8 @@ def _save(client, auth, body, name="recognition_of_white_matter.pdf"):
 
 def test_save_puts_the_pdf_in_downloads_under_the_article_name(client, auth, downloads):
     r = _save(client, auth, PDF)
-    assert r.status_code == 200 and r.json == {"name": "recognition_of_white_matter.pdf"}
+    assert r.status_code == 200 and r.json == {"name": "recognition_of_white_matter.pdf",
+                                               "folder": "Downloads"}
     assert (downloads / "recognition_of_white_matter.pdf").read_bytes() == PDF
 
 
@@ -797,8 +798,60 @@ def test_the_limit_stops_the_ai_and_says_so(client, auth, monkeypatch, tmp_path)
 def test_no_limit_means_no_limit(tmp_path, monkeypatch):
     _usage_in(tmp_path, monkeypatch)
     A.CONFIG["ai_monthly_cap"] = 0
+    A.CONFIG["ai_cap_on"] = False
     A.record_usage("claude-sonnet-5", "syntheses", 50_000_000, 0)   # $100
     assert A.ai_over_cap() is False
+    assert A.ai_cap() is None
+
+
+def test_a_limit_of_zero_stops_the_ai_before_the_first_call(tmp_path, monkeypatch):
+    # 20 Oct: he set the limit to 0 and still got summaries, because 0 then
+    # meant "no limit". With the switch on, $0 is a limit like any other.
+    _usage_in(tmp_path, monkeypatch)
+    A.CONFIG["anthropic_api_key"] = "sk-test"
+    A.CONFIG["ai_monthly_cap"] = 0
+    A.CONFIG["ai_cap_on"] = True
+    assert A.ai_cap() == 0.0
+    assert A.ai_over_cap() is True
+    attempts = []
+    monkeypatch.setattr(A, "_anthropic_open", lambda payload, timeout: attempts.append(payload))
+    assert A.ai_oneliner("t", "abstract") is None
+    events = [json.loads(c[6:]) for c in
+              A.claude_stream({"model": A.MODEL_MAIN, "messages": []}, feature="syntheses")]
+    assert events[0]["type"] == "error" and "$0.00" in events[0]["text"]
+    assert attempts == []
+
+
+def test_the_switch_off_means_no_limit_whatever_the_amount(tmp_path, monkeypatch):
+    _usage_in(tmp_path, monkeypatch)
+    A.CONFIG["ai_monthly_cap"] = 5.0
+    A.CONFIG["ai_cap_on"] = False
+    A.record_usage("claude-sonnet-5", "syntheses", 3_000_000, 0)   # $6
+    assert A.ai_over_cap() is False
+    assert A.ai_cap_amount() == 5.0        # the amount is kept for when it is switched on
+
+
+def test_a_config_from_before_the_switch_keeps_its_reading(tmp_path, monkeypatch):
+    # No ai_cap_on saved: an amount above 0 was a limit, 0 was none.
+    _usage_in(tmp_path, monkeypatch)
+    A.CONFIG["ai_cap_on"] = None
+    A.CONFIG["ai_monthly_cap"] = 0
+    assert A.ai_cap() is None
+    A.CONFIG["ai_monthly_cap"] = 5.0
+    assert A.ai_cap() == 5.0 and A.ai_cap_on() is True
+
+
+def test_the_ai_tab_saves_the_limit_and_reads_it_back(client, auth, tmp_path, monkeypatch):
+    _usage_in(tmp_path, monkeypatch)
+    r = client.post("/settings", json={"ai_monthly_cap": 0, "ai_cap_on": True}, headers=auth, base_url=BASE)
+    assert r.get_json()["ok"] is True
+    u = client.get("/usage", headers=auth, base_url=BASE).get_json()
+    assert u["cap"] == 0 and u["cap_on"] is True and u["cap_amount"] == 0 and u["over_cap"] is True
+    s = client.get("/settings", headers=auth, base_url=BASE).get_json()
+    assert s["ai_monthly_cap"] == 0 and s["ai_cap_on"] is True
+    client.post("/settings", json={"ai_cap_on": False}, headers=auth, base_url=BASE)
+    u = client.get("/usage", headers=auth, base_url=BASE).get_json()
+    assert u["cap"] is None and u["cap_on"] is False and u["over_cap"] is False
 
 
 def test_the_usage_route_reports_the_month(client, auth, tmp_path, monkeypatch):
@@ -1029,3 +1082,99 @@ def test_the_order_is_left_alone_when_the_first_mirror_works(monkeypatch):
     A._promote_mirror("https://one.example")
     assert A.CONFIG["scihub_mirrors"] == ["https://one.example", "https://two.example"]
     assert saved == []          # nothing to write
+
+
+def test_a_stream_the_page_stops_still_counts(tmp_path, monkeypatch):
+    # The sweep, 20 Oct: closing the generator at a yield (the page's Stop)
+    # skipped the recording; the tokens were spent all the same.
+    _usage_in(tmp_path, monkeypatch)
+    A.CONFIG["anthropic_api_key"] = "sk-test"
+    lines = [b'data: {"type":"message_start","message":{"usage":{"input_tokens":1000000}}}\n',
+             b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}\n',
+             b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":" there"}}\n']
+
+    class Fake:
+        def __enter__(self): return iter(lines)
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(A, "_anthropic_open", lambda payload, timeout: Fake())
+    gen = A.claude_stream({"model": "claude-sonnet-5", "messages": []}, feature="syntheses")
+    next(gen)                    # the first chunk reaches the page
+    gen.close()                  # then the page stops it
+    assert A.load_usage()["cost"] == pytest.approx(2.0)     # 1M input tokens at $2
+
+
+def test_a_redirect_into_the_local_network_is_refused(monkeypatch):
+    A._FETCH_GUARD.on = True
+    try:
+        with pytest.raises(A.urllib.error.URLError):
+            A._GuardedRedirects().redirect_request(
+                A.urllib.request.Request("https://example.org/paper.pdf"), None, 302, "Found",
+                {}, "http://127.0.0.1:8080/admin")
+    finally:
+        A._FETCH_GUARD.on = False
+
+
+
+# ── Zotero's web API (20 Oct): saving without the desktop app ───────────────
+
+class _ZoteroFake:
+    """api.zotero.org, as far as MedSearch uses it."""
+    def __init__(self, write=True):
+        self.write, self.posted = write, []
+
+    def __call__(self, req, timeout=None):
+        import io
+        url = req.full_url
+        assert req.headers.get("Zotero-api-key") == "zk-test"
+        if url.endswith("/keys/current"):
+            body = {"userID": 4242, "access": {"user": {"library": True, "write": self.write}}}
+        elif url.endswith("/users/4242/items"):
+            items = json.loads(req.data)
+            self.posted.append(items)
+            body = {"successful": {str(i): {"key": f"K{i}"} for i in range(len(items))}, "failed": {}}
+        else:
+            raise AssertionError(url)
+
+        class R(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        return R(json.dumps(body).encode())
+
+
+def test_zotero_without_the_desktop_app_saves_through_the_web_api(client, auth, monkeypatch):
+    fake = _ZoteroFake()
+    monkeypatch.setattr(A, "zotero_ping", lambda: False)
+    monkeypatch.setattr(A.urllib.request, "urlopen", fake)
+    A._ZOTERO_USERS.clear()
+    A.CONFIG["zotero_api_key"] = "zk-test"
+    A.SESSION["articles"] = [{"title": "Awake mapping", "source": "PubMed", "year": "2024",
+                              "authors": "Smith, J.", "doi": "10.1/x", "_idx": 0}]
+    r = client.post("/export/zotero/single", json={"idx": 0}, headers=auth, base_url=BASE).json
+    assert r["ok"] is True and r["via"] == "web" and "1 item saved" in r["message"]
+    [[item]] = fake.posted
+    assert item["itemType"] == "journalArticle" and item["DOI"] == "10.1/x"
+
+
+def test_a_read_only_zotero_key_is_named_as_the_problem(monkeypatch):
+    monkeypatch.setattr(A.urllib.request, "urlopen", _ZoteroFake(write=False))
+    A._ZOTERO_USERS.clear()
+    A.CONFIG["zotero_api_key"] = "zk-test"
+    ok, msg = A.zotero_web_save([{"title": "T", "year": "2024", "authors": "A"}])
+    assert ok is False and "write access" in msg
+
+
+def test_on_ios_without_a_key_zotero_asks_for_one(client, auth, monkeypatch):
+    monkeypatch.setattr(A.sys, "platform", "ios")
+    A.CONFIG["zotero_api_key"] = ""
+    A.SESSION["articles"] = [{"title": "T", "source": "PubMed", "year": "2024", "authors": "A", "_idx": 0}]
+    r = client.post("/export/zotero/single", json={"idx": 0}, headers=auth, base_url=BASE).json
+    assert r["ok"] is False and r["need_key"] is True and "Settings" in r["message"]
+
+
+def test_the_guidelines_country_is_kept_when_picked_not_only_when_opened(client, auth):
+    code = sorted(A.NATIONAL_GUIDELINE_BODIES)[-1]
+    r = client.post("/guidelines/country", json={"country": code.upper()}, headers=auth, base_url=BASE)
+    assert r.json == {"ok": True, "country": code} and A.CONFIG["guideline_country"] == code
+    assert client.get("/guidelines/bodies", headers=auth, base_url=BASE).json["selected"] == code
+    assert client.post("/guidelines/country", json={"country": "zz"}, headers=auth,
+                       base_url=BASE).status_code == 400

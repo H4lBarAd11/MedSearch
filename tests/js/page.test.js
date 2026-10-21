@@ -122,7 +122,7 @@ function withOpenDialogs(ids, run) {
   const closed = [];
   const saved = {};
   const closers = ["closeFail", "closeAsk", "closeExplain", "closeCitations", "closeSettings",
-                   "closeExport", "closeApiKeyPrompt", "closeProxyEditor", "closePdf", "closeUpdate"];
+                   "closeExport", "closeApiKeyPrompt", "closeProxyEditor", "closePdf", "closeUpdate", "closeOnboarding"];
   for (const n of ["document", ...closers]) saved[n] = globalThis[n];
   globalThis.document = { querySelectorAll: () => ids.map((id) => ({ id })) };
   for (const n of closers) globalThis[n] = (...a) => closed.push([n, ...a]);
@@ -162,7 +162,7 @@ test("with nothing open it says no, so the window is hidden as before", () => {
 });
 
 test("a dialog it has no closer for is left alone and it says no", () => {
-  withOpenDialogs(["onboardOverlay"], (closed) => {
+  withOpenDialogs(["someOtherOverlay"], (closed) => {
     assert.equal(closeTopDialog(), false);
     assert.deepEqual(closed, []);
   });
@@ -211,4 +211,37 @@ test("a Save MedSearch refuses is said in a popup, not a toast", async () => {
     assert.deepEqual(seen.failed, [["not a PDF", "Couldn't save the PDF"]]);
     assert.deepEqual(seen.toasts, []);
   });
+});
+
+// The HTML parser decodes &#39; inside onclick="…" before the script runs, so
+// a title holding a literal "&#39;" must not come out as a closing quote.
+test("escAttr survives the attribute's own decoding: a literal entity stays text", () => {
+  const out = escAttr("Parkinson&#39;s x');alert(1)//");
+  const decoded = out.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+  // Decoded as the browser would, it is still one JS string literal.
+  const js = `'${decoded}'`;
+  assert.equal(new Function(`return ${js};`)(), "Parkinson&#39;s x');alert(1)//");
+});
+
+
+// The citation graph's outer row used to sit beyond the drawing's edges, so
+// on a phone the lines ran off both sides (20 Oct). Every node inside, wide
+// and narrow.
+test("every node of the citation graph is inside the drawing, wide and narrow", () => {
+  const { buildCiteGraph } = load(["escHtml", "buildCiteGraph"]);
+  const items = Array.from({length: 8}, (_, k) => ({year: 2000 + k}));
+  for (const narrow of [false, true]) {
+    globalThis.window = {matchMedia: () => ({matches: narrow})};
+    try {
+      const svg = buildCiteGraph({title: "A paper"}, items, items);
+      const [, W, H] = svg.match(/viewBox="0 0 (\d+) (\d+)"/).map(Number);
+      const nodes = [...svg.matchAll(/<circle[^>]*cx="([\d.]+)" cy="([\d.]+)"/g)].map(m => [+m[1], +m[2]]);
+      assert.equal(nodes.length, 17);
+      for (const [x, y] of nodes) {
+        assert.ok(x - 8 >= 0 && x + 8 <= W && y - 21 >= 0 && y + 8 <= H, `node at ${x},${y} outside ${W}x${H}`);
+      }
+    } finally {
+      delete globalThis.window;
+    }
+  }
 });

@@ -485,3 +485,56 @@ def test_an_error_body_is_only_returned_when_asked_for(monkeypatch):
     assert A.http_get("https://api.example/x") == (None, 401)
     assert A.http_get("https://api.example/x", error_body=True) == ('{"why":"x"}', 401)
     assert A.fetch_json("https://api.example/x", error_body=True) == ({"why": "x"}, 401)
+
+
+# ── Where exports go (20 Oct) ───────────────────────────────────────────────
+
+def _installed_mac(monkeypatch, tmp_path):
+    app = tmp_path / "Applications" / "MedSearch.app"
+    (app / "Contents").mkdir(parents=True)
+    monkeypatch.setattr(A.sys, "platform", "darwin")
+    monkeypatch.setattr(A.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(A, "_this_bundle", lambda: app)
+    monkeypatch.setattr(A.Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    return app
+
+
+def test_the_mac_app_keeps_its_exports_inside_itself(monkeypatch, tmp_path):
+    app = _installed_mac(monkeypatch, tmp_path)
+    [path] = A.do_export([{"title": "T", "source": "PubMed", "year": "2024", "authors": "A"}], "q", "md")
+    assert A.Path(path).parent == app / "Contents" / "Exports"
+
+
+def test_the_old_exports_move_into_the_app_once(monkeypatch, tmp_path):
+    app = _installed_mac(monkeypatch, tmp_path)
+    old = tmp_path / "home" / "medsearch_exports"
+    old.mkdir(parents=True)
+    (old / "before.md").write_text("kept")
+    with A.exports_folder() as folder:
+        assert (folder / "before.md").read_text() == "kept"
+    assert not old.exists()
+
+
+def test_an_app_that_cannot_be_written_to_falls_back_to_the_home_folder(monkeypatch, tmp_path):
+    app = _installed_mac(monkeypatch, tmp_path)
+    app.joinpath("Contents").chmod(0o500)
+    try:
+        with A.exports_folder() as folder:
+            assert folder == tmp_path / "home" / "medsearch_exports"
+    finally:
+        app.joinpath("Contents").chmod(0o700)
+
+
+def test_ios_without_a_picked_folder_asks_for_one(monkeypatch, client, auth):
+    from contextlib import contextmanager
+    from conftest import BASE
+
+    @contextmanager
+    def nothing_picked():
+        yield None
+    monkeypatch.setattr(A.sys, "platform", "ios")
+    monkeypatch.setattr(A, "EXPORTS_FOLDER", nothing_picked)
+    A.SESSION["articles"] = [{"title": "T", "source": "PubMed", "year": "2024", "authors": "A", "_idx": 0}]
+    r = client.post("/export", json={"format": "md"}, headers=auth, base_url=BASE)
+    assert r.json == {"need_folder": True}
+

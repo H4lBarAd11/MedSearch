@@ -145,6 +145,20 @@ def test_the_swap_puts_the_new_app_in_place_and_opens_it(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="the swap is a shell's")
+def test_the_swap_carries_the_exports_into_the_new_app(tmp_path):
+    # Exports live inside MedSearch.app since 20 Oct: an update must not
+    # throw them away with the old app.
+    target = _app(tmp_path / "Applications" / "MedSearch.app", "old")
+    (target / "Contents" / "Exports").mkdir()
+    (target / "Contents" / "Exports" / "medsearch_q.md").write_text("mine")
+    staged = _app(tmp_path / "Applications" / ".MedSearch-update.app", "new")
+    env = _open_recorder(tmp_path)
+    subprocess.run(["/bin/sh", "-c", A._swap_script(99999999, staged, target)], env=env, check=True)
+    assert (target / "Contents" / "v").read_text() == "new"
+    assert (target / "Contents" / "Exports" / "medsearch_q.md").read_text() == "mine"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="the swap is a shell's")
 def test_the_swap_puts_the_old_app_back_if_the_new_one_is_gone(tmp_path):
     target = _app(tmp_path / "MedSearch.app", "old")
     env = _open_recorder(tmp_path)

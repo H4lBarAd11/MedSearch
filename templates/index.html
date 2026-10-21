@@ -2,9 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- viewport-fit=cover: the page reaches under the status bar and the home
+     indicator on a phone, and lays its bars out with env(safe-area-inset-*). -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>MedSearch</title>
 <link rel="stylesheet" href="/static/css/app.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/touch.css?v={{ asset_v }}">
 <!-- PDF.js ships with the app (static/vendor/pdfjs), so the viewer works
      offline and on hospital networks that block CDNs. -->
 <script src="/static/vendor/pdfjs/pdf.min.js"></script>
@@ -14,6 +17,7 @@
     token:              {{ token | tojson }},
     appVersion:         {{ app_version | tojson }},
     onWindows:          {{ on_windows | tojson }},
+    onIOS:              {{ on_ios | default(false) | tojson }},
     showOnboarding:     {{ 'true' if show_onboarding else 'false' }},
     autoQuery:          {{ auto_query | tojson }},
     autoSource:         {{ auto_source | tojson }},
@@ -66,6 +70,7 @@
   <symbol id="i-fit" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></g></symbol>
   <symbol id="i-stop" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></g></symbol>
   <symbol id="i-send" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></g></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5V14M8 7l4-3.5L16 7"/><path d="M8.5 10H6v10.5h12V10h-2.5"/></g></symbol>
   <symbol id="i-close" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></g></symbol>
 </svg>
 
@@ -124,6 +129,15 @@
   <button class="search-btn" id="searchBtn" onclick="runSearch()">Search</button>
 </header>
 
+<!-- On a phone the sources chip leaves the search pill for a pill of its own
+     above the dock (his choice, 19 Oct); app.js moves it here and back. -->
+<div class="phone-sources-host" id="phoneSourcesHost" hidden></div>
+
+<!-- Under the iOS app's own bars the page's top bar is hidden, and with it the
+     author, institution and language chips: app.js moves them here, under the
+     status line, so a narrowed search always says so (the sweep, 20 Oct). -->
+<div class="native-filter-host" id="nativeFilterHost" hidden></div>
+
 <!-- ── The dock ─────────────────────────────────────────────────────────
      Everything that used to live in the sidebar, in one floating bar at
      the bottom. Labels under the icons: these users read words, not glyphs. -->
@@ -148,9 +162,10 @@
           title="Ask the research assistant about these results">
     <svg class="ico" aria-hidden="true"><use href="#i-chat"/></svg><span class="dock-label">Assistant</span>
   </button>
-  <button class="dock-btn ai-badge {{ 'on' if ai_on else 'off' }}" type="button" id="aiBadge"
-          onclick="toggleAI()" data-has-key="{{ 'true' if has_ai_key else 'false' }}"
-          title="Turn AI features on or off" aria-pressed="{{ 'true' if ai_on else 'false' }}">
+  <button class="dock-btn ai-badge {{ 'ai-on' if ai_on else 'ai-off' }}" type="button" id="aiBadge"
+          aria-haspopup="dialog" aria-expanded="false" onclick="togglePanel('panelAI', this)"
+          data-has-key="{{ 'true' if has_ai_key else 'false' }}"
+          title="AI features: on or off, and the monthly spending limit">
     <svg class="ico" aria-hidden="true"><use href="#i-sparkle"/></svg><span class="dock-label" id="aiBadgeLabel">{{ 'AI on' if ai_on else 'AI off' }}</span>
   </button>
   <button class="dock-btn" type="button" onclick="closePanels(); openSettings()" title="Settings and API keys">
@@ -332,6 +347,7 @@
         <button class="dots-item" onclick="clearAllSaved()">Clear all saved</button>
       </div>
     </div>
+    <button class="section-clear" id="savedClear" type="button" onclick="clearAllSaved()" aria-label="Remove all saved searches">Clear</button>
   </div>
   <div class="saved-list" id="savedList">
     {% for s in saved %}
@@ -354,6 +370,7 @@
         <button class="dots-item" onclick="clearAllRecent()">Clear all recent</button>
       </div>
     </div>
+    <button class="section-clear" id="recentClear" type="button" onclick="clearAllRecent()" aria-label="Clear all recent searches">Clear</button>
   </div>
   <div class="history-list" id="historyList">
     {% for q in history|reverse %}
@@ -375,6 +392,30 @@
   <div class="natl-guideline-hint" id="natlGuidelineHint"></div>
 </div>
 
+<!-- ── The AI tab: the switch and the monthly limit (his ask, 20 Oct:
+     its own tab in the bottom bar, with both). Each change saves itself. -->
+<div class="dock-panel" id="panelAI" role="dialog" aria-label="AI features" hidden>
+  <div class="panel-title">AI features</div>
+  <div class="ai-row">
+    <span class="ai-row-text" id="aiSwitchText">Use AI
+      <small>Summaries, synthesis, Explain and the assistant, through your Anthropic key</small></span>
+    <input type="checkbox" id="aiSwitch" aria-labelledby="aiSwitchText" onchange="setAI(this.checked)"{{ ' checked' if ai_on }}>
+  </div>
+  <div class="settings-hint" id="aiKeyHint"{{ '' if not has_ai_key else ' hidden' }}>Needs an Anthropic API key: add one in Settings.</div>
+  <div class="panel-title panel-title-2">Spending this month</div>
+  <div class="ai-spend" id="aiSpend">—</div>
+  <div class="ai-row">
+    <span class="ai-row-text" id="aiCapText">Monthly limit
+      <small>MedSearch stops using AI when the month's spending reaches it; searching goes on. At $0 it uses no AI at all.</small></span>
+    <input type="checkbox" id="aiCapSwitch" aria-labelledby="aiCapText" onchange="saveAICap()">
+  </div>
+  <div class="ai-cap-row" id="aiCapRow">
+    <label for="set_ai_cap">US$</label>
+    <input type="number" id="set_ai_cap" min="0" step="1" value="0" inputmode="decimal" aria-label="Monthly AI limit in US dollars" onchange="saveAICap()">
+    <span class="settings-hint" id="aiCapState"></span>
+  </div>
+</div>
+
 <!-- ── Explain modal ────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="explainOverlay" onclick="if(event.target===this)closeExplain()">
   <div class="modal">
@@ -385,7 +426,7 @@
       <div class="modal-text" id="explainText">Loading…</div>
     </div>
     <div class="settings-footer">
-      <button class="btn-secondary" onclick="closeExplain()">Close</button>
+      <button class="btn-secondary close-action" onclick="closeExplain()">Close</button>
     </div>
   </div>
 </div>
@@ -404,7 +445,7 @@
       <div class="pdf-header-actions">
         <button class="pdf-action" id="pdfSaveBtn" onclick="savePdf()" title="Save PDF to your computer"><svg class="ico" aria-hidden="true"><use href="#i-download"/></svg> Save</button>
         <button class="pdf-action" id="pdfOpenExternal" title="Open in built-in browser"><svg class="ico" aria-hidden="true"><use href="#i-external"/></svg> Browser</button>
-        <button class="pdf-action" onclick="closePdf()">Close</button>
+        <button class="pdf-action pdf-close-action" onclick="closePdf()">Close</button>
       </div>
     </div>
     <div class="pdf-body" id="pdfBody">
@@ -427,7 +468,7 @@
       <div class="cite-loading">Loading citation graph…</div>
     </div>
     <div class="settings-footer">
-      <button class="btn-secondary" onclick="closeCitations()">Close</button>
+      <button class="btn-secondary close-action" onclick="closeCitations()">Close</button>
     </div>
   </div>
 </div>
@@ -441,43 +482,61 @@
     <div class="settings-body">
       <div class="settings-field">
         <label>Anthropic API key (AI summaries &amp; synthesis)</label>
-        <input type="password" id="set_anthropic" placeholder="sk-ant-… (get at console.anthropic.com)">
+        <input type="password" id="set_anthropic" placeholder="sk-ant-…">
+        <div class="settings-hint"><a href="https://console.anthropic.com/settings/keys" target="_blank" onclick="openInAppBrowser(this.href, 'Anthropic — API keys'); return false">Create a key at console.anthropic.com</a>: sign in, add some credit under Billing (AI use is paid by the token), then Create Key and copy it.</div>
+        <div class="settings-hint">Switch the AI on or off, and set a monthly spending limit, under AI in the bottom bar.</div>
       </div>
       <div class="settings-field">
         <label>NCBI / PubMed API key (optional — higher rate limits)</label>
-        <input type="password" id="set_pubmed" placeholder="get free at ncbi.nlm.nih.gov/account">
+        <input type="password" id="set_pubmed" placeholder="paste the key here">
+        <div class="settings-hint"><a href="https://account.ncbi.nlm.nih.gov/settings/" target="_blank" onclick="openInAppBrowser(this.href, 'NCBI — account settings'); return false">Open your NCBI account settings</a>: sign in (Google, ORCID or your institution work), and under API Key Management press Create an API key.</div>
       </div>
       <div class="settings-field">
         <label>Scopus API key</label>
-        <input type="password" id="set_scopus" placeholder="get free at dev.elsevier.com">
+        <input type="password" id="set_scopus" placeholder="paste the key here">
+        <div class="settings-hint"><a href="https://dev.elsevier.com/apikey/manage" target="_blank" onclick="openInAppBrowser(this.href, 'Elsevier — API keys'); return false">Create a key at dev.elsevier.com</a>: sign in with an Elsevier account (your university email works best), press Create API Key, give it a name and accept the terms.</div>
       </div>
       <div class="settings-field">
         <label>Scopus institutional token <span style="font-weight:normal;color:var(--text3)">— only if working off-campus</span></label>
-        <input type="password" id="set_scopus_insttoken" placeholder="optional — for remote access (request from Elsevier)">
+        <input type="password" id="set_scopus_insttoken" placeholder="optional">
+        <div class="settings-hint">Elsevier gives this to institutions, not to people: ask your library, which can request one from Elsevier for your API key. Without it, Scopus works on your institution’s network only.</div>
       </div>
       <div class="settings-field">
         <label>Web of Science API key</label>
-        <input type="password" id="set_wos" placeholder="apply at developer.clarivate.com">
+        <input type="password" id="set_wos" placeholder="paste the key here">
+        <div class="settings-hint"><a href="https://developer.clarivate.com/apis/wos-starter" target="_blank" onclick="openInAppBrowser(this.href, 'Clarivate — WoS Starter API'); return false">Open the Web of Science Starter API</a>: sign in, register an application with this API (the Free Trial plan: 50 searches a day; your institution may offer more), and copy its key.</div>
       </div>
       <div class="settings-field">
         <label>IEEE Xplore API key</label>
-        <input type="password" id="set_ieee" placeholder="get free at developer.ieee.org">
+        <input type="password" id="set_ieee" placeholder="paste the key here">
+        <div class="settings-hint"><a href="https://developer.ieee.org/member/register" target="_blank" onclick="openInAppBrowser(this.href, 'IEEE — developer registration'); return false">Register at developer.ieee.org</a> and ask for a key for the Metadata Search API. It is free; turning it on can take a few days.</div>
       </div>
       <div class="settings-field">
         <label>Semantic Scholar API key</label>
-        <input type="password" id="set_semanticscholar" placeholder="apply free at semanticscholar.org/product/api">
+        <input type="password" id="set_semanticscholar" placeholder="paste the key here">
+        <div class="settings-hint"><a href="https://www.semanticscholar.org/product/api#api-key-form" target="_blank" onclick="openInAppBrowser(this.href, 'Semantic Scholar — API key'); return false">Fill in Semantic Scholar’s request form</a>: it is free, and the key comes by email.</div>
       </div>
       <div class="settings-field">
         <label>Google Books API key</label>
-        <input type="password" id="set_googlebooks" placeholder="begins AIza…, from console.cloud.google.com">
+        <input type="password" id="set_googlebooks" placeholder="AIza…">
+        <div class="settings-hint"><a href="https://console.cloud.google.com/apis/library/books.googleapis.com" target="_blank" onclick="openInAppBrowser(this.href, 'Google Cloud — Books API'); return false">Turn on the Books API in Google Cloud</a>: make a project, press Enable, then under Credentials choose Create credentials › API key, and copy it.</div>
+      </div>
+      <div class="settings-field">
+        <label>Zotero API key <span style="font-weight:normal;color:var(--text3)">— saves to Zotero without the desktop app, and on iPhone</span></label>
+        <input type="password" id="set_zotero" placeholder="paste the key here">
+        <div class="settings-hint"><a href="https://www.zotero.org/settings/keys/new?name=MedSearch&amp;library_access=1&amp;write_access=1"
+             target="_blank" onclick="openInAppBrowser(this.href, 'Zotero — new key'); return false">Create a key at zotero.org</a>:
+          sign in, leave “Allow library access” and “Allow write access” ticked, press Save Key and copy the key it shows.</div>
       </div>
       <div class="settings-field">
         <label>OpenAlex API key <span style="font-weight:normal;color:var(--text3)">— optional, ten times more searches a day</span></label>
-        <input type="password" id="set_openalex" placeholder="get free at openalex.org">
+        <input type="password" id="set_openalex" placeholder="paste the key here">
+        <div class="settings-hint"><a href="https://openalex.org/settings/api" target="_blank" onclick="openInAppBrowser(this.href, 'OpenAlex — API key'); return false">Get a key at openalex.org</a>: make a free account and copy the key the page shows.</div>
       </div>
       <div class="settings-field">
         <label>CORE API key <span style="font-weight:normal;color:var(--text3)">— optional, more searches a minute</span></label>
-        <input type="password" id="set_core" placeholder="get free at core.ac.uk/services/api">
+        <input type="password" id="set_core" placeholder="paste the key here">
+        <div class="settings-hint"><a href="https://core.ac.uk/services/api" target="_blank" onclick="openInAppBrowser(this.href, 'CORE — API'); return false">Register on CORE’s API page</a>: the form is free, and the key comes by email.</div>
       </div>
       <div class="settings-field">
         <label>Email for Unpaywall (open-access lookup)</label>
@@ -498,23 +557,22 @@
         <button class="btn-secondary proxy-add-btn" type="button" onclick="addOwnResource()">+ Add your own</button>
         <div class="settings-hint">Platforms your library subscribes to that can't be searched from MedSearch. Each ticked one gets a Search button under Search Google Scholar, which opens it through your library with your search filled in. To add another, search it for one word, copy the address, and put {q} in place of the word.</div>
       </div>
-      <div class="settings-field" id="aiSpendField">
-        <label>AI spending this month</label>
-        <div class="ai-spend" id="aiSpend">—</div>
-        <label for="set_ai_cap" class="ai-cap-label">Monthly limit (US$) — 0 means no limit</label>
-        <input type="number" id="set_ai_cap" min="0" step="1" value="0" aria-label="Monthly AI limit in US dollars">
-        <div class="settings-hint">MedSearch stops using AI once the month's spending reaches this
-          amount; searching is unaffected. Your Anthropic console can set a hard limit as well.</div>
-      </div>
       <div class="settings-field" id="loginField" hidden>
         <label class="settings-check"><input type="checkbox" id="set_open_at_login"> Open at login</label>
         <div class="settings-hint">{% if on_windows %}MedSearch starts by the clock, in the notification area, with its window closed, ready for a quick search.{% else %}MedSearch starts in the menu bar with its window closed, ready for a quick search.{% endif %}</div>
       </div>
-      <div class="settings-field">
+      {% if on_ios %}<div class="settings-field">
+        <label>Exports and saved PDFs</label>
+        <div class="settings-hint" id="exportsFolderText">{% if exports_folder_name %}Saving to <b>{{ exports_folder_name }}</b>, picked in Files.{% else %}No folder chosen yet: pick one in Files, such as Downloads.{% endif %}</div>
+        <button class="btn-secondary update-check-btn" id="exportsFolderBtn" type="button" onclick="pickExportFolder().then(name => { if (name) showToast('Exports go to ' + name + '.', 'green'); })">{{ 'Change folder…' if exports_folder_name else 'Choose folder…' }}</button>
+      </div>{% endif %}
+      {% if not on_ios %}<div class="settings-field">
         <label>Updates</label>
         <div class="settings-version">This is MedSearch {{ app_version }}.</div>
         <button class="btn-secondary update-check-btn" id="updateCheckBtn" onclick="checkForUpdatesNow()">Check for updates</button>
-      </div>
+      </div>{% else %}<div class="settings-field">
+        <div class="settings-version">This is MedSearch {{ app_version }}.</div>
+      </div>{% endif %}
       {% if installed %}<div class="settings-field" id="uninstallField">
         <label>Uninstall</label>
         <button class="btn-secondary update-check-btn" type="button" onclick="uninstallMedSearch()">Uninstall MedSearch…</button>
@@ -522,7 +580,7 @@
       </div>{% endif %}
     </div>
     <div class="settings-footer">
-      <button class="btn-secondary" onclick="closeSettings()">Cancel</button>
+      <button class="btn-secondary close-action" onclick="closeSettings()">Cancel</button>
       <button class="btn-primary" onclick="saveSettings()">Save</button>
     </div>
   </div>
@@ -536,7 +594,8 @@
     </div>
     <div class="export-options">
       <div class="export-scope" id="exportScope"></div>
-      <!-- Direct-to-Zotero (one click, no file) -->
+      <!-- Direct-to-Zotero (one click, no file): the desktop app's connector,
+           or Zotero's web API with the key from Settings (the iPhone's way). -->
       <div class="zotero-export-row" id="zoteroRow">
         <div class="zotero-info">
           <div class="export-opt-label"><svg class="ico" aria-hidden="true"><use href="#i-library"/></svg> Send directly to Zotero</div>
@@ -572,12 +631,12 @@
         <input type="radio" name="exportFmt" value="all">
         <div>
           <div class="export-opt-label">All three formats</div>
-          <div class="export-opt-sub">Saved to ~/medsearch_exports/</div>
+          <div class="export-opt-sub">{% if on_ios %}Saved in the folder you picked in Files{% elif on_windows %}Saved in medsearch_exports in your home folder{% else %}Kept inside MedSearch: Show in Finder opens them{% endif %}</div>
         </div>
       </label>
     </div>
     <div class="settings-footer">
-      <button class="btn-secondary" onclick="closeExport()">Cancel</button>
+      <button class="btn-secondary close-action" onclick="closeExport()">Cancel</button>
       <button class="btn-primary" onclick="doExport()">Save file</button>
     </div>
     <div class="export-success" id="exportSuccess" style="display:none"></div>
@@ -684,7 +743,7 @@
       <div class="settings-hint">With it, books and chapters get a <strong>Get it at</strong> button: your library's own page for the book, which says whether it has the book or the e-book and lets you request it or ask for an interlibrary loan. Libraries call it their OpenURL or link resolver address; ask yours if unsure. Left empty, there is no button.</div>
     </div>
     <div class="proxy-editor-actions">
-      <button class="btn-secondary" onclick="closeProxyEditor()">Close</button>
+      <button class="btn-secondary close-action" onclick="closeProxyEditor()">Close</button>
       <button class="btn-primary" onclick="saveProxyEditor()">Save</button>
     </div>
   </div>

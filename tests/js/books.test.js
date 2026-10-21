@@ -240,7 +240,8 @@ test("Get it at the library comes first, opens in a MedSearch window, and shows 
   globalThis.activeLibrary = () => null;
   assert.deepEqual([...html.matchAll(/<\/svg> ([^<]+)<\/button>/g)].map(m => m[1]),
                    ["Get it at Uni &lt;Example&gt;", "Find in a library"]);
-  assert.ok(html.includes("openInAppBrowser('https://find.example.edu/openurl?vid=X&url_ver=Z39.88-2004&ctx_ver="));
+  // & is written &amp; inside the attribute; the browser decodes it back.
+  assert.ok(html.includes("openInAppBrowser('https://find.example.edu/openurl?vid=X&amp;url_ver=Z39.88-2004&amp;ctx_ver="));
   assert.ok(html.includes("rft.btitle=Example%20Handbook', 'Example Handbook')"));
 });
 

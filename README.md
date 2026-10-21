@@ -249,11 +249,13 @@ The one-line summaries use the smallest Claude model, the assistant reuses a cac
 trimmed context from one question to the next, and every answer is capped. A typical
 conversation with the assistant costs a few cents.
 
-**Settings shows what it has actually cost this month**, counted from the token usage each
-reply reports, broken down by what was asked of it. A **monthly limit** can be set beside
+**The AI tab in the bottom bar** has the switch that turns the AI features on or off and
+shows what they have actually cost this month, counted from the token usage each reply
+reports, broken down by what was asked of it. A **monthly limit** can be switched on beside
 it: once the month's spending reaches it, the AI features stop and say so, and searching
-carries on untouched. For a limit that MedSearch itself cannot exceed, give the machine its
-own API key in its own Anthropic console workspace and set the spend limit there.
+carries on untouched (a limit of $0 means no AI at all). For a limit that MedSearch itself
+cannot exceed, give the machine its own API key in its own Anthropic console workspace and
+set the spend limit there.
 
 ## Privacy
 
