@@ -119,6 +119,59 @@ def test_a_refusal_is_not_mistaken_for_an_empty_keychain(monkeypatch):
     S._KNOWN.clear()
 
 
+def test_a_refused_read_then_a_save_deletes_no_key(monkeypatch):
+    """The sweep, 20 Oct: a keychain locked at a login start refused every
+    read, the settings came up empty, and the next ordinary save deleted
+    every key. A save may remove only what this run has seen there."""
+    S._KNOWN.clear()
+    monkeypatch.setattr(S, "_backend", lambda: "security")
+    monkeypatch.setattr(S, "available", lambda: True)
+    monkeypatch.setattr(S.subprocess, "run", lambda argv, **kw: FakeSecurity._r(51))
+    assert S.get("anthropic_api_key") == ""                 # refused
+    fake = FakeSecurity({"anthropic_api_key": "sk-ant-keepme"})
+    monkeypatch.setattr(S.subprocess, "run", fake.run)
+    assert S.set("anthropic_api_key", "") is False           # the save: nothing removed
+    assert fake.items == {"anthropic_api_key": "sk-ant-keepme"}
+    assert S.delete("anthropic_api_key") is True             # Settings' clear still does
+    assert fake.items == {}
+    S._KNOWN.clear()
+
+
+def test_on_a_signed_mac_a_removed_key_does_not_come_back(monkeypatch):
+    """Removing a key from iCloud Keychain also removes the login keychain's
+    copy the move left behind, or the next launch moved it back."""
+    S._KNOWN.clear()
+    icloud = {"anthropic_api_key": "sk-ant-old"}
+    login = FakeSecurity({"anthropic_api_key": "sk-ant-old"})
+    monkeypatch.setattr(S, "_backend", lambda: "secitem")
+    monkeypatch.setattr(S, "available", lambda: True)
+    monkeypatch.setattr(S.sys, "platform", "darwin")
+    monkeypatch.setattr(S.subprocess, "run", login.run)
+    monkeypatch.setattr(S.secitem, "read", lambda n: (S.secitem.OK, icloud[n]) if n in icloud
+                        else (S.secitem.NOT_FOUND, ""))
+    monkeypatch.setattr(S.secitem, "write", lambda n, v: icloud.__setitem__(n, v) or S.secitem.OK)
+    monkeypatch.setattr(S.secitem, "remove", lambda n: icloud.pop(n, None) and S.secitem.OK or S.secitem.OK)
+    assert S.get("anthropic_api_key") == "sk-ant-old"
+    assert S.delete("anthropic_api_key") is True
+    S._KNOWN.clear()
+    assert S.get("anthropic_api_key") == ""                  # not moved back
+    assert "anthropic_api_key" not in icloud
+    S._KNOWN.clear()
+
+
+def test_a_failed_move_to_icloud_still_answers_with_the_key(monkeypatch):
+    S._KNOWN.clear()
+    login = FakeSecurity({"anthropic_api_key": "sk-ant-here"})
+    monkeypatch.setattr(S, "_backend", lambda: "secitem")
+    monkeypatch.setattr(S, "available", lambda: True)
+    monkeypatch.setattr(S.sys, "platform", "darwin")
+    monkeypatch.setattr(S.subprocess, "run", login.run)
+    monkeypatch.setattr(S.secitem, "read", lambda n: (S.secitem.NOT_FOUND, ""))
+    monkeypatch.setattr(S.secitem, "write", lambda n, v: -34018)   # refused
+    assert S.get("anthropic_api_key") == "sk-ant-here"
+    S._KNOWN.clear()
+
+
 # ── Windows: Credential Manager ──────────────────────────────────────────────
 class FakeAdvapi:
     """advapi32's credential calls, over a dict, speaking the real structures:
@@ -218,7 +271,7 @@ def test_windows_skips_writing_what_is_already_there(credman):
 
 
 def test_windows_removes_a_key_and_treats_missing_as_removed(credman):
-    assert S.set("pubmed_api_key", "") is True
+    assert S.delete("pubmed_api_key") is True          # removal on purpose (a save of "" no longer removes an unread key)
     assert "MedSearch/pubmed_api_key" not in credman.items
     assert W.delete("MedSearch/never-there") is True
 

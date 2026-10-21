@@ -1,0 +1,35 @@
+# MedSearch — the Mac provisioning probe.
+# A one-file app with MedSearch's bundle identifier and the keychain-sharing
+# entitlement, built by Xcode only so that Xcode makes (and renews) the "Mac
+# Team Provisioning Profile" for com.halbarad.medsearch under the developer's
+# team. packaging/sign-mac.sh then embeds that profile in the real MedSearch.app
+# and signs it with the same entitlements, which is what lets its API keys
+# live in iCloud Keychain beside the iPhone's. Nothing here ships.
+#
+#   .venv/bin/pip install briefcase          (any venv with Briefcase)
+#   cd packaging/macsign && briefcase create macOS Xcode
+#   xcodebuild -project build/medsearch/macos/xcode/MedSearch.xcodeproj \
+#       -scheme MedSearch -allowProvisioningUpdates DEVELOPMENT_TEAM=<team> \
+#       CODE_SIGN_STYLE=Automatic MACOSX_DEPLOYMENT_TARGET=12.0 build
+#
+# sign-mac.sh runs those two steps itself when the profile is missing or old.
+
+[tool.briefcase]
+project_name = "MedSearch"
+bundle = "com.halbarad"
+version = "0.0.1"
+license = "Apache-2.0"
+license-files = ["../../LICENSE"]
+author = "Riccardo Nevoso"
+author_email = "279025724+H4lBarAd11@users.noreply.github.com"
+
+[tool.briefcase.app.medsearch]
+formal_name = "MedSearch"
+description = "The Mac provisioning probe: builds nothing that ships."
+sources = ["src/medsearch"]
+requires = []
+
+[tool.briefcase.app.medsearch.macOS]
+requires = ["toga-cocoa~=0.5.0"]
+# The one entitlement the real app needs a profile for.
+entitlement."keychain-access-groups" = ["$(AppIdentifierPrefix)com.halbarad.medsearch"]

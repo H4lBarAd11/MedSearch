@@ -22,6 +22,12 @@ cd "$ROOT"
 "$PY" -m PyInstaller --noconfirm --clean --distpath dist --workpath build \
   packaging/MedSearch.spec
 
+# MEDSEARCH_TEAM=<team id>: the developer's own build, signed for iCloud
+# Keychain (packaging/sign-mac.sh). The public build goes out unsigned.
+if [ -n "${MEDSEARCH_TEAM:-}" ]; then
+  packaging/sign-mac.sh dist/MedSearch.app
+fi
+
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 ditto dist/MedSearch.app "$STAGE/MedSearch.app"
