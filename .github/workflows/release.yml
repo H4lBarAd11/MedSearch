@@ -39,7 +39,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Python from python.org
         run: |
@@ -111,13 +111,13 @@ jobs:
           kill "$APP" || true
           python -c "import json,sys; v=json.load(open('ping.json'))['version']; print('Intel:', v); sys.exit(v != '$V')"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: installer-mac
           path: dist/MedSearch-*-mac.dmg
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: screenshots-mac
@@ -125,15 +125,27 @@ jobs:
           if-no-files-found: ignore
 
   windows:
-    runs-on: windows-latest
+    # Intel and ARM: each builds its own installer and checks it, installed,
+    # started and searching, on its own kind of PC.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    env:
+      ARCH: ${{ matrix.arch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_SERIES }}
-          architecture: x64
+          architecture: ${{ matrix.arch }}
 
       - name: Dependencies
         run: |
@@ -194,11 +206,18 @@ jobs:
             [System.Drawing.Image]::FromHbitmap($h).Save("shots\$name.png")
           }
 
-          $setup = Start-Process "dist\MedSearch-$V-Setup.exe" -Wait -PassThru `
+          $SetupExe = if ($env:ARCH -eq "arm64") { "dist\MedSearch-$V-Setup-arm64.exe" } else { "dist\MedSearch-$V-Setup.exe" }
+          $setup = Start-Process $SetupExe -Wait -PassThru `
                      -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
           if ($setup.ExitCode -ne 0) { throw "Setup exited with $($setup.ExitCode)" }
           $dir = "$env:LOCALAPPDATA\Programs\MedSearch"
           if (-not (Test-Path "$dir\MedSearch.exe")) { throw "MedSearch.exe was not installed" }
+          # The program is the architecture it says: its PE header's machine.
+          $pe = [System.IO.File]::ReadAllBytes("$dir\MedSearch.exe")
+          $machine = [BitConverter]::ToUInt16($pe, [BitConverter]::ToInt32($pe, 0x3C) + 4)
+          $want = if ($env:ARCH -eq "arm64") { 0xAA64 } else { 0x8664 }
+          Write-Host ("MedSearch.exe machine: 0x{0:X4}" -f $machine)
+          if ($machine -ne $want) { throw ("MedSearch.exe is 0x{0:X4}, not {1}" -f $machine, $env:ARCH) }
 
           $h = "$env:RUNNER_TEMP\home"
           New-Item -ItemType Directory -Force $h | Out-Null
@@ -273,7 +292,7 @@ jobs:
           # asks it to end, as Windows shutting down does), install, and open it
           # again.
           # Setup itself only: -Wait would also wait for the MedSearch it reopens.
-          $setup2 = Start-Process "dist\MedSearch-$V-Setup.exe" -PassThru `
+          $setup2 = Start-Process $SetupExe -PassThru `
                       -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/RELAUNCH=1'
           $null = $setup2.Handle
           if (-not $setup2.WaitForExit(180000)) { throw "The update's Setup did not finish in 3 minutes" }
@@ -304,16 +323,16 @@ jobs:
           Start-Process "$dir\unins000.exe" -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES'
           if (Test-Path "$dir\MedSearch.exe") { throw "Uninstalling left MedSearch.exe behind" }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
-          name: installer-windows
-          path: dist/MedSearch-*-Setup.exe
+          name: installer-windows-${{ matrix.arch }}
+          path: dist/MedSearch-*-Setup*.exe
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: screenshots-windows
+          name: screenshots-windows-${{ matrix.arch }}
           path: shots/
           if-no-files-found: ignore
 
@@ -324,9 +343,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: installer-*
           path: dist
@@ -346,4 +365,4 @@ jobs:
           awk -v head="## $V" '$0 == head { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "MedSearch $V." > notes.md
           gh release create "v$V" --target "$GITHUB_SHA" --title "MedSearch $V" --notes-file notes.md \
-            "dist/MedSearch-$V-mac.dmg" "dist/MedSearch-$V-Setup.exe"
+            "dist/MedSearch-$V-mac.dmg" "dist/MedSearch-$V-Setup.exe" "dist/MedSearch-$V-Setup-arm64.exe"
