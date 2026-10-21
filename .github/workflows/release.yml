@@ -228,13 +228,26 @@ jobs:
           foreach ($t in 1, 2, 3) {
             Start-Sleep 1; try { Shot "windows-splash-$($t)s" } catch { Write-Warning "no screenshot: $_" }
           }
+          # When MedSearch doesn't come up: what it wrote, and whether this PC
+          # has Edge's web engine (the ARM run once waited 20 min on a /ping
+          # that never answered, with no limit on the request).
+          function Explain($why) {
+            Write-Host "---- medsearch.log"
+            Get-Content "$h\.medsearch\medsearch.log" -Encoding utf8 -ErrorAction SilentlyContinue | Write-Host
+            $wv = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue | Select-Object -First 1
+            Write-Host "WebView2: $(if ($wv) { $wv.pv } else { 'not found' })"
+            Write-Host "MedSearch running: $(-not $app.HasExited)"
+            throw $why
+          }
           $portFile = "$h\.medsearch\server_port"
           for ($i = 0; $i -lt 90 -and -not (Test-Path $portFile); $i++) { Start-Sleep 1 }
+          if (-not (Test-Path $portFile)) { Explain "MedSearch wrote no server port within 90 s" }
           $port = (Get-Content $portFile -Raw).Trim()
           $ping = $null
           for ($i = 0; $i -lt 30 -and -not $ping; $i++) {
-            try { $ping = Invoke-RestMethod "http://127.0.0.1:$port/ping" } catch { Start-Sleep 1 }
+            try { $ping = Invoke-RestMethod "http://127.0.0.1:$port/ping" -TimeoutSec 5 } catch { Start-Sleep 1 }
           }
+          if (-not $ping) { Explain "MedSearch's server, on port $port, did not answer within about 3 minutes" }
           if ($ping.version -ne $V) { throw "MedSearch answered '$($ping.version)', not $V" }
           Write-Host "running $($ping.version)"
 
