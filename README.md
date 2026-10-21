@@ -137,6 +137,40 @@ The first time, Windows warns that it *protected your PC*, because MedSearch is 
 with a paid certificate. Press **More info ▸ Run anyway**, once. Setup also installs
 Microsoft's WebView2, which draws MedSearch's window, on the rare PC that lacks it.
 
+## On your iPhone or iPad (build it yourself)
+
+MedSearch also runs on iPhone and iPad, with the same engine and the system's own Liquid
+Glass bars, but it is not on the App Store. You build it on your Mac, signed with your own
+Apple ID: a free one is enough.
+
+You need a Mac with **Xcode** (free, from the App Store, opened once), **Python 3.12 or
+newer** ([python.org](https://www.python.org/downloads/macos/); the app is tested with
+3.14), and your iPhone or iPad with a cable.
+
+1. In Xcode › Settings › Accounts, press **+** and add your Apple ID.
+2. On the iPhone, turn on Settings › Privacy & Security › **Developer Mode** (it restarts).
+   Plug it into the Mac, unlock it and tap **Trust**.
+3. In a Terminal:
+
+   ```bash
+   git clone https://github.com/H4lBarAd11/MedSearch.git
+   cd MedSearch
+   ios/build-for-my-iphone.sh
+   ```
+
+   The first run takes a few minutes. It finds your team and your iPhone, builds the app,
+   signs it as yours, installs it and opens it.
+4. The first time only, iOS asks you to trust your own apps: Settings › General ›
+   **VPN & Device Management** › your Apple ID › **Trust**, then tap MedSearch.
+
+A free Apple ID's signing lasts **seven days**. The script also sets up a small job on your
+Mac that checks twice a day and, about a day before the signing runs out, asks for Touch ID
+and installs the app again (with the iPhone unlocked, on the Mac's Wi-Fi or plugged in).
+`ios/build-for-my-iphone.sh --remove-renewal` turns that off. A paid Apple Developer account
+makes it a year. Running the script again after a `git pull` installs the new version.
+
+API keys typed on the iPhone are kept in its Keychain.
+
 ## Updates
 
 When MedSearch opens, and each time its window comes back, it checks GitHub for a newer
@@ -280,6 +314,9 @@ MedSearch/
 ├── secrets_store.py          the keys: Keychain, or Credential Manager (wincred.py)
 ├── signins.py                library sign-ins, remembered and filled in
 ├── article_windows.py        article windows' new tabs and downloads
+├── secitem.py                the Keychain items that iCloud Keychain syncs (iOS, and a signed Mac build)
+├── ios/                      the iPhone and iPad app: the native shell around the same engine,
+│                             and build-for-my-iphone.sh, which builds it signed as yours
 ├── templates/index.html      the page
 ├── static/css, static/js     its style and behaviour
 ├── static/fonts, vendor/     DM Sans (OFL) and PDF.js, bundled so it works offline

@@ -42,6 +42,14 @@ To open on a search, as the desktop's `--query`: the environment variables
 
 ## On a device
 
+`build-for-my-iphone.sh` does all of the below for anyone's own Apple ID: it finds the
+team (Xcode's preferences) and the device (`devicectl`), creates and patches the project,
+builds with `PRODUCT_BUNDLE_IDENTIFIER=com.halbarad.medsearch.<team>` (no two teams may
+register one id; `patch_xcode.py` makes Info.plist read that setting, and
+`MEDSEARCH_BUNDLE_ID` sets another), installs and opens it, and sets up `renew/`: a launch
+agent that rebuilds and reinstalls it, after Touch ID, when the seven-day signing has less
+than 30 hours left. By hand:
+
 `briefcase open iOS` opens the Xcode project. With an Apple ID added under
 Xcode › Settings › Accounts, its Personal Team signs the app for a device
 plugged into this Mac (no paid account: the install lapses after 7 days, up to

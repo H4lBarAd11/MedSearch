@@ -192,6 +192,23 @@ def launch_keys() -> str:
     return "launch screen: the storyboard, UILaunchScreen removed"
 
 
+def bundle_id_from_build_setting() -> str:
+    """CFBundleIdentifier as $(PRODUCT_BUNDLE_IDENTIFIER), as Xcode's own
+    templates have it, not the id written out: a build signed by another
+    team (build-for-my-iphone.sh) gives PRODUCT_BUNDLE_IDENTIFIER on the
+    command line, since no two teams may register one id, and the app's
+    Info.plist must then say the same."""
+    import plistlib
+    with PLIST.open("rb") as fh:
+        plist = plistlib.load(fh)
+    if plist.get("CFBundleIdentifier") == "$(PRODUCT_BUNDLE_IDENTIFIER)":
+        return "bundle id: from the build setting"
+    plist["CFBundleIdentifier"] = "$(PRODUCT_BUNDLE_IDENTIFIER)"
+    with PLIST.open("wb") as fh:
+        plistlib.dump(plist, fh)
+    return "bundle id: now from the build setting"
+
+
 def main() -> None:
     if not XCODE.is_dir():
         raise SystemExit(f"no Xcode project at {XCODE}: run `briefcase create iOS` first")
@@ -201,6 +218,7 @@ def main() -> None:
     print(shrink_image())
     print(patch_storyboard())
     print(launch_keys())
+    print(bundle_id_from_build_setting())
 
 
 if __name__ == "__main__":
