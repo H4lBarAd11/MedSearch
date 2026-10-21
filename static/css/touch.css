@@ -1,0 +1,728 @@
+/* ══════════════════════════════════════════════════════════════════════
+   TOUCH AND THE PHONE. Loaded after app.css, so the desktop sheet stays
+   the desktop sheet and this one speaks only where a finger is the pointer
+   (iPhone, iPad) and where the window is phone-narrow. Two layers:
+
+   1. (pointer: coarse)  — touch targets, the system text size, the chrome
+      as Liquid Glass: the material Apple's own bars wear from iOS 26.
+      The glass is for the NAVIGATION LAYER ONLY (the top bar, the dock,
+      the status line), never for content: a card or a dialog on glass is
+      the thing Apple's guidance names first as a mistake.
+   2. (max-width: 700px) — one column, the bars edge to edge above the
+      safe areas, panels and dialogs as sheets rising from the bottom.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Touch ──────────────────────────────────────────────────────────── */
+@media (pointer: coarse) {
+  /* THE SYSTEM'S TEXT SIZE. -apple-system-body is the body style of
+     Dynamic Type: 17px at the default setting and whatever the person
+     chose in Settings › Accessibility otherwise. The page's rem follows
+     it, so every size in app.css scales with the person's own choice
+     (and the 14px desktop base, which reads small on a phone, is gone).
+     The family is put back: the house face, not San Francisco. */
+  @supports (font: -apple-system-body) {
+    html { font: -apple-system-body; font-family: var(--font); }
+  }
+  html { -webkit-text-size-adjust: 100%; }
+  body { overscroll-behavior-y: none; }
+  * { -webkit-tap-highlight-color: transparent; }
+  button, [role="button"], a, input, select, label, .db-item, .saved-item, .history-item {
+    touch-action: manipulation;        /* no double-tap-to-zoom wait on a tap */
+  }
+  /* Hover states don't exist under a finger: what hid until hover shows. */
+  .saved-delete { opacity: 1; }
+
+  /* 44pt: the smallest thing a finger can be asked to hit (HIG). */
+  .dock-btn { min-width: 44px; min-height: 44px; }
+  .db-item { min-height: 44px; padding: 8px 12px; }
+  .saved-item, .history-item { min-height: 44px; }
+  .link-btn, .action-btn, .select-all-btn, .sources-chip {
+    min-height: 36px; padding-top: 7px; padding-bottom: 7px;
+  }
+  .btn-primary, .btn-secondary, .search-btn, .onboard-dismiss { min-height: 44px; }
+  .people-chip-x { padding: 10px 8px; }
+  /* iOS zooms into a field whose text is under 16px: never under 16px. */
+  input, select, textarea, .search-input, .filter-input, .assistant-input {
+    font-size: max(1rem, 16px);
+  }
+
+  /* LIQUID GLASS, THROUGHOUT (his ask, 19 Oct: "quite maxed out", and the
+     first attempt "more smoked than liquid"). Glass, not frost: a faint
+     fill, so the content stays visible through it; a mild blur with the
+     light turned up a little; a bright rim all round, brightest along the
+     top edge where light lands; a soft shadow beneath. No milky wash and
+     no gradient across the face: those made the first attempt look like
+     smoked plastic. Two grades: bars and pills are the clearer; sheets and
+     panels, which carry text to read, are a little fuller. The controls
+     wear the same rim and fill without the blur, which dozens of them per
+     screen would make the scroll pay for and which, over flat ivory, would
+     show nothing anyway. Light and dark derived from the house ground. */
+  :root {
+    --glass:           rgba(255,255,255,0.30);
+    --glass-strong:    rgba(255,255,255,0.62);
+    --glass-edge:      rgba(255,255,255,0.78);
+    --glass-rim:       inset 0 1px 1px rgba(255,255,255,0.95), inset 0 0 0 0.5px rgba(255,255,255,0.55),
+                       inset 0 -1px 1px rgba(64,64,64,0.05);
+    --glass-shadow:    0 8px 24px rgba(64,64,64,0.12), 0 1px 2px rgba(64,64,64,0.06);
+    --glass-blur:      blur(20px) saturate(170%) brightness(1.06);
+    --glass-blur-deep: blur(32px) saturate(180%) brightness(1.10);
+    --scrim:           rgba(64,64,64,0.14);      /* lighter: the blur does the dimming */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --glass:           rgba(255,255,255,0.07);
+      --glass-strong:    rgba(40,39,35,0.62);
+      --glass-edge:      rgba(255,255,255,0.18);
+      --glass-rim:       inset 0 1px 1px rgba(255,255,255,0.22), inset 0 0 0 0.5px rgba(255,255,255,0.10),
+                         inset 0 -1px 1px rgba(0,0,0,0.25);
+      --glass-shadow:    0 8px 24px rgba(0,0,0,0.45), 0 1px 2px rgba(0,0,0,0.3);
+      --glass-blur:      blur(20px) saturate(160%) brightness(1.15);
+      --glass-blur-deep: blur(32px) saturate(170%) brightness(1.2);
+      --scrim:           rgba(0,0,0,0.35);
+    }
+  }
+  /* The bars and the pills: the clearer glass. */
+  .topbar, .dock, .status-hud, .results-header {
+    background: var(--glass);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-edge);
+    box-shadow: var(--glass-rim), var(--glass-shadow);
+  }
+  /* The sheets, panels and menus: the fuller glass, for reading on. */
+  .dock-panel, .modal-overlay > div, .synthesis-panel, .assistant-panel,
+  .dots-menu, .people-list, .scihub-alt-menu, .pdf-header {
+    background: var(--glass-strong);
+    -webkit-backdrop-filter: var(--glass-blur-deep);
+    backdrop-filter: var(--glass-blur-deep);
+    border: 1px solid var(--glass-edge);
+    box-shadow: var(--glass-rim), var(--glass-shadow);
+  }
+  .synthesis-header { background: transparent; }
+  /* Behind a sheet the page is blurred, not merely dimmed. */
+  .modal-overlay, .pdf-overlay {
+    -webkit-backdrop-filter: blur(10px) saturate(120%);
+    backdrop-filter: blur(10px) saturate(120%);
+  }
+
+  /* EVERY CONTROL A CAPSULE OF GLASS (his ask, 19 Oct): buttons, chips,
+     tags, selects and text fields alike. Each keeps its own tint (open
+     access green, library sage, Sci-Hub caramel, AI blue), thinned so the
+     ground shows through, under the same rim. */
+  button:not(.dock-btn):not(.db-item), select, .meta-tag, .mesh-tag, .source-count,
+  .sources-chip, .link-btn, .action-btn, .select-all-btn, .pdf-action, .pdf-zoom-btn,
+  .expand-btn, .onboard-dismiss, .scihub-alt-item, .people-option, .proxy-picker, .rf-select,
+  html input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=submit]):not([type=button]),
+  .filter-input, .assistant-input, textarea {
+    border-radius: 999px;
+    box-shadow: var(--glass-rim), 0 1px 2px rgba(64,64,64,0.05);
+  }
+  /* The Sci-Hub button and its mirrors tab: ONE capsule. The tab is a
+     button, so the capsule rule above (two :nots deep) rounded all four of
+     its corners and left it a loose pill beside a flat-ended button (his
+     phone, 20 Oct); the selectors here outweigh it. The group wears the
+     rim and the halves draw none of their own. */
+  .scihub-group {
+    border-radius: 999px;          /* no overflow:hidden — the mirrors menu hangs below */
+    box-shadow: var(--glass-rim), 0 1px 2px rgba(64,64,64,0.05);
+  }
+  .scihub-group button.link-btn.scihub { border-radius: 999px 0 0 999px; box-shadow: none; }
+  .scihub-group button.scihub-alt-toggle {
+    border-radius: 0 999px 999px 0; box-shadow: none;
+    min-height: 36px; padding: 0 12px 0 10px; align-self: stretch;
+  }
+  /* A filter chip and its X (author, institution, languages, in the top bar
+     and in Options): TWO capsules side by side, the name and a round X.
+     The capsule rule above rounded both buttons inside the chip, which
+     showed a pill and a circle inside a pill (his phone, 21 Oct). The chip
+     itself draws nothing now; the X sits closer to its own name than to
+     the next chip, so each pair reads as one. */
+  .sources-chip.people-chip {
+    padding: 0; gap: 4px; min-height: 0; max-width: 320px;
+    border: 0; border-radius: 0; background: none; box-shadow: none;
+  }
+  .people-chip .people-chip-name, .people-chip .people-chip-x {
+    display: inline-flex; align-items: center; min-height: 36px;
+    border: 1px solid var(--glass-edge); border-radius: 999px;
+    background-color: var(--glass);
+    box-shadow: var(--glass-rim), 0 1px 2px rgba(64,64,64,0.05);
+  }
+  .people-chip .people-chip-name { padding: 0 14px; }
+  .people-chip .people-chip-name span { min-width: 0; }
+  .people-chip .people-chip-x { width: 36px; padding: 0; justify-content: center; flex: none; }
+  .language-field { gap: 8px 12px; }
+  .proxy-picker, .rf-select { padding: 8px 14px; }
+  /* Saved and Recent: a Clear capsule in the heading, as iOS's own lists
+     have, in place of a ⋯ menu that held that one action and dropped a
+     card over the next heading (his phone, 21 Oct). Only while the list
+     has something to clear. */
+  .section-with-menu .dots-menu-wrap { display: none; }
+  .section-clear {
+    display: inline-flex; align-items: center; min-height: 32px; padding: 0 14px;
+    border: 1px solid var(--glass-edge); background-color: var(--glass);
+    color: var(--accent-text); font: inherit; font-size: 0.82rem; font-weight: 600;
+    text-transform: none; letter-spacing: 0; cursor: pointer;
+  }
+  #panelHistory:not(:has(#savedList .saved-item)) #savedClear,
+  #panelHistory:not(:has(#historyList .history-item)) #recentClear { display: none; }
+  /* A one-of-several choice (export format, the library in use) as the
+     system's own lists show it: no radio circle, a sage checkmark beside
+     the chosen row, nothing beside the others (21 Oct). The input stays,
+     so the row still chooses and VoiceOver still reads it. */
+  input[type="radio"] {
+    -webkit-appearance: none; appearance: none; flex: none;
+    width: 22px; height: 22px; margin: 0; border: 0; border-radius: 0;
+    background: transparent; box-shadow: none;
+  }
+  input[type="radio"]:checked {
+    background-color: var(--accent);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4.5 12.5l5 5L19.5 7' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+            mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4.5 12.5l5 5L19.5 7' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
+  input[type="radio"]:focus, input[type="radio"]:focus-visible { outline: none; }
+  .db-check, input[type="checkbox"] { border-radius: 7px; }
+  /* A tapped select draws the keyboard's focus ring round its capsule
+     while its menu is up (his phone, 20 Oct); the border says it instead. */
+  select:focus, select:focus-visible { outline: none; border-color: var(--accent); }
+  html input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=submit]):not([type=button]),
+  .filter-input, .assistant-input, textarea { padding-left: 16px; padding-right: 16px; }
+  textarea { border-radius: 20px; }
+  /* Thinned tints: each colour mixed down to let the glass show. */
+  .link-btn.zotero-btn, .action-btn, .pdf-action, .pdf-zoom-btn, .btn-secondary, .sources-chip,
+  .select-all-btn, .meta-tag.ptype, .mesh-tag, .onboard-lang button, .onboard-dismiss, .expand-btn {
+    background-color: var(--glass); border-color: var(--glass-edge);
+  }
+  .link-btn.open-access, .link-btn.cite-btn { background-color: color-mix(in srgb, var(--green-tint) 65%, transparent); }
+  .link-btn.doi { background-color: color-mix(in srgb, var(--accent-tint) 65%, transparent); }
+  .link-btn.scihub, .scihub-alt-toggle { background-color: color-mix(in srgb, var(--yellow-tint) 65%, transparent); }
+  .link-btn.explain-btn, .action-btn.primary { background-color: color-mix(in srgb, var(--purple-tint) 65%, transparent); }
+  .meta-tag, .source-count { background-color: color-mix(in srgb, var(--bg3) 70%, transparent); }
+  /* The fields one types in: mostly glass (his ask, 19 Oct: more
+     transparent), the rim and a hairline drawing the edge. */
+  html input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=submit]):not([type=button]), .filter-input, .assistant-input, textarea {
+    background-color: color-mix(in srgb, var(--input-bg) 22%, transparent);
+    border-color: color-mix(in srgb, var(--border2) 70%, transparent);
+  }
+  html input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=submit]):not([type=button]):focus, .filter-input:focus, .assistant-input:focus, textarea:focus {
+    background-color: color-mix(in srgb, var(--input-bg) 40%, transparent);
+    border-color: var(--accent);
+  }
+  /* The filled action keeps its sage, as glass: light through it and a
+     bright rim. */
+  .search-btn, .btn-primary {
+    background-color: rgba(110,139,110,0.82);
+    border: 1px solid rgba(255,255,255,0.45);
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.55), inset 0 -1px 1px rgba(0,0,0,0.08),
+                0 6px 16px rgba(79,104,79,0.26);
+  }
+  @media (prefers-color-scheme: dark) {
+    .search-btn, .btn-primary { background-color: rgba(147,178,147,0.82); }
+  }
+  .dock-btn { border-radius: 999px; }
+  .dock-btn.on { background-color: var(--accent-tint2); box-shadow: var(--glass-rim); }
+  /* A pressed glass control darkens a little, as the system's do. */
+  .dock-btn:active, button:active { filter: brightness(0.96); }
+  /* The Order switch (Relevance / Recent): two capsules side by side. The
+     desktop's frame around the halves showed as a square around two pills
+     on his phone (19 Oct); the half that is on fills with sage, as a chip. */
+  .sort-toggle { border: 0; border-radius: 0; background: none; box-shadow: none; overflow: visible; gap: 8px; }
+  .sort-opt {
+    min-height: 40px; border-radius: 999px; border: 1px solid var(--glass-edge);
+    background-color: var(--glass); box-shadow: var(--glass-rim); color: var(--text);
+  }
+  .sort-opt:hover { background-color: var(--glass); color: var(--text); }
+  .sort-opt.active {
+    background-color: color-mix(in srgb, var(--accent) 88%, transparent);
+    border-color: rgba(255,255,255,0.45); color: var(--on-accent);
+  }
+
+  /* Above the safe areas: the iPad's status bar sits where the desktop's top
+     bar did, and its home indicator where the dock did. */
+  .topbar { top: calc(env(safe-area-inset-top) + 10px); }
+  .status-hud { top: calc(env(safe-area-inset-top) + 68px); }
+  .dock { bottom: calc(env(safe-area-inset-bottom) + 10px); }
+  .results-scroll {
+    padding-top: calc(env(safe-area-inset-top) + 118px);
+    padding-bottom: calc(env(safe-area-inset-bottom) + 120px);
+  }
+  .dock-panel.from-bottom { bottom: calc(env(safe-area-inset-bottom) + 84px); }
+  .synthesis-panel, .assistant-panel { bottom: calc(env(safe-area-inset-bottom) + 88px); }
+}
+
+/* The iPad has the width for the words under the dock's icons, which the
+   desktop drops under 1080px. */
+@media (pointer: coarse) and (min-width: 701px) {
+  .dock-btn { min-width: 66px; }
+  .dock-label { display: block; }
+}
+
+/* ── 2. The phone ──────────────────────────────────────────────────────── */
+@media (max-width: 700px) {
+  /* dvh: the height with the browser's own bars and the keyboard out of
+     the way; 100vh overshoots on a phone. */
+  .main, .results-scroll { height: 100dvh; }
+
+  /* The search pill: one row, the field and Search alone (the sources chip
+     has gone to the bottom), a capsule under the status bar. */
+  .topbar {
+    top: calc(env(safe-area-inset-top) + 8px);
+    left: 12px; right: 12px; width: auto; transform: none;
+    gap: 6px;
+    padding: 6px;
+    border-radius: 999px;
+  }
+  .topbar .search-input-wrap { flex: 1 1 auto; }
+  .topbar .search-input { min-height: 44px; padding: 10px 12px 10px 40px; border-radius: 999px; }
+  .topbar .search-icon { left: 14px; }
+  .sources-chip.people-chip { flex: 0 1 auto; max-width: 100%; }
+  .topbar .search-btn { min-height: 44px; padding: 10px 18px; border-radius: 999px; }
+  /* The status line sits under the pill. */
+  .status-hud { top: calc(env(safe-area-inset-top) + 74px); }
+
+  /* The sources pill: the chip in a glass capsule of its own above the dock,
+     where it opens the Databases sheet. */
+  .phone-sources-host {
+    position: fixed; z-index: 1300;
+    left: 50%; transform: translateX(-50%);
+    bottom: calc(env(safe-area-inset-bottom) + 74px);
+    max-width: calc(100vw - 24px);
+  }
+  .phone-sources-host .sources-chip {
+    min-height: 44px; max-width: none; padding: 0 20px; gap: 8px;
+    border-radius: 999px;
+    background: var(--glass);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-edge);
+    box-shadow: var(--glass-rim), var(--glass-shadow);
+    color: var(--text);
+  }
+  .phone-sources-host .sources-chip.on { border-color: var(--accent); }
+
+  /* The toast: above the sources pill, the width of the screen. At the
+     desktop's right-hand spot it sat on the pill ("Settings saved." over
+     PubMed, his phone, 20 Oct). */
+  .toast {
+    left: 16px; right: 16px; max-width: none;
+    bottom: calc(env(safe-area-inset-bottom) + 130px);
+    text-align: center;
+  }
+
+  /* The results: one column, 16px gutters, the bars cleared above and
+     below (bar 108 + status line 36 above; dock 60 above the home
+     indicator below). */
+  .results-scroll {
+    padding: calc(env(safe-area-inset-top) + 124px) 16px calc(env(safe-area-inset-bottom) + 136px);
+  }
+  .results-area { max-width: none; }
+  .results-header { flex-wrap: wrap; gap: 8px; }
+  .article-title { padding-right: 0; font-size: 1rem; }
+  /* The buttons under a paper fill their rows evenly: the desktop pushes
+     Citations to the right, which on a phone left a row of three, a hole,
+     and a row of three (seen on his phone, 19 Oct). */
+  .article-links { gap: 8px; }
+  .article-links .link-btn, .article-links .scihub-group { flex: 1 1 auto; justify-content: center; }
+  .scihub-group .link-btn.scihub { flex: 1 1 auto; }
+  .link-btn.cite-btn, .link-btn.push-right { margin-left: 0; }
+  /* The article count scrolls with the results: stuck under the bar it sat
+     in the middle of the screen (his phone, 19 Oct). */
+  .results-header {
+    position: static; margin: 0 0 12px; padding: 0 0 10px;
+    background: none;
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+    border: 0; border-bottom: 1px solid var(--border); border-radius: 0; box-shadow: none;
+  }
+  .article-abstract { font-size: 0.9rem; }
+  /* The citation graph keeps its own proportions (app.js draws it narrower
+     and taller here) rather than the desktop's fixed height. */
+  .cite-graph-svg { height: auto; }
+  .article-authors { font-size: 0.82rem; }
+  .empty-state { min-height: calc(100dvh - 300px); }
+  .wordmark { font-size: 2.6rem; }
+
+  /* The dock: a capsule above the home indicator, icons only, spread to
+     the width. */
+  .dock {
+    bottom: calc(env(safe-area-inset-bottom) + 8px);
+    left: 12px; right: 12px; width: auto; transform: none;
+    justify-content: space-between;
+    padding: 6px;
+    border-radius: 999px;
+  }
+  .dock-btn { min-width: 0; flex: 1; padding: 6px 2px; border-radius: 999px; }
+  .dock-sep { display: none; }
+
+  /* Panels: sheets rising from the dock, the width of the screen, where the
+     desktop's rise from the button that opened them (the script's left is
+     overridden here, hence the !important). */
+  .dock-panel, #panelOptions {
+    left: 12px !important; right: 12px; width: auto !important; max-width: none;
+    max-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 200px);
+    border-radius: 20px;
+    padding: 16px 16px 18px;
+  }
+  .dock-panel.from-bottom, .dock-panel.from-top {
+    top: auto; bottom: calc(env(safe-area-inset-bottom) + 72px);
+  }
+  .opt-grid { grid-template-columns: 1fr; gap: 6px; }
+  .opt-grid .people-label { margin-top: 0; }
+
+  /* Dialogs: sheets from the bottom, the way the system presents them. */
+  .modal-overlay { padding: 0; align-items: flex-end; }
+  .modal-overlay > div {
+    max-width: none; width: 100%;
+    max-height: calc(100dvh - env(safe-area-inset-top) - 12px);
+    border-radius: 20px 20px 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .modal-header { padding: 14px 20px 8px; }
+  /* The system's grabber, on every sheet. */
+  .modal-overlay > div::before, .dock-panel.from-bottom::before,
+  .synthesis-panel::before, .assistant-panel::before {
+    content: ''; display: block; width: 36px; height: 5px; border-radius: 3px;
+    background: var(--border2); margin: 6px auto 4px; flex: none;
+  }
+  .synthesis-panel::before { margin-bottom: 10px; }
+  .dock-panel.from-bottom { padding-top: 8px; }
+  .dock-panel.from-bottom .panel-title { margin-top: 6px; }
+  .modal-body { padding: 6px 20px 14px; }
+
+  /* The PDF: the whole screen. */
+  .pdf-overlay { padding: 0; }
+  .pdf-modal {
+    max-width: none; height: 100dvh; border-radius: 0; border: 0;
+    padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+  }
+  /* The viewer's header: the title on its own row, then the zoom controls
+     and the actions sharing the second, each side filling its half. */
+  .pdf-header { flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
+  .pdf-title { flex: 1 1 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pdf-zoom-controls { margin: 0; flex: 1 1 auto; gap: 6px; }
+  .pdf-zoom-btn { min-width: 40px; height: 40px; }
+  .pdf-header-actions { flex: 1 1 auto; justify-content: flex-end; gap: 6px; }
+  .pdf-header-actions .pdf-action { flex: 1 1 auto; min-height: 40px; text-align: center; }
+
+  /* The synthesis: a sheet above the dock. */
+  .synthesis-panel {
+    left: 12px; right: 12px; width: auto; transform: none;
+    bottom: calc(env(safe-area-inset-bottom) + 72px);
+    max-height: 60dvh;
+    padding: 14px 16px 18px;
+    border-radius: 20px;
+  }
+  .synthesis-header { margin: -14px -16px 12px; padding: 14px 16px 10px; top: -14px; }
+
+  /* The assistant: a sheet that takes the screen. */
+  .assistant-panel {
+    left: 0; right: 0; bottom: 0; width: auto; max-width: none;
+    top: calc(env(safe-area-inset-top) + 12px); height: auto; max-height: none;
+    border-radius: 20px 20px 0 0; border-bottom: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* ── The accessibility settings, restated: this sheet loads after app.css,
+   so its glass would otherwise win over them. ─────────────────────────── */
+@media (prefers-reduced-transparency: reduce) {
+  .topbar, .dock, .status-hud, .results-header, .dock-panel, .modal-overlay > div,
+  .synthesis-panel, .assistant-panel, .dots-menu, .people-list, .scihub-alt-menu, .pdf-header,
+  .modal-overlay, .pdf-overlay {
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  .topbar, .dock, .status-hud, .results-header, .dock-panel, .modal-overlay > div,
+  .synthesis-panel, .assistant-panel, .dots-menu, .people-list, .scihub-alt-menu, .pdf-header {
+    background-color: var(--bg2); border-color: var(--border); box-shadow: 0 2px 10px rgba(64,64,64,0.08);
+  }
+  .modal-overlay { background: rgba(64,64,64,0.28); }
+  .search-btn, .btn-primary { background-color: var(--accent); }
+  .link-btn.zotero-btn, .action-btn, .pdf-action, .pdf-zoom-btn, .btn-secondary, .sources-chip,
+  .select-all-btn, .meta-tag.ptype, .mesh-tag, .onboard-dismiss, .expand-btn, .phone-sources-host .sources-chip,
+  .people-chip .people-chip-name, .people-chip .people-chip-x {
+    background: var(--bg2); border-color: var(--border2); -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  .link-btn.open-access, .link-btn.cite-btn { background-color: var(--green-tint); }
+  .link-btn.doi { background-color: var(--accent-tint); }
+  .link-btn.scihub, .scihub-alt-toggle { background-color: var(--yellow-tint); }
+  .link-btn.explain-btn, .action-btn.primary { background-color: var(--purple-tint); }
+  .meta-tag, .source-count { background-color: var(--bg3); }
+  html input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=submit]):not([type=button]), .filter-input, .assistant-input, textarea { background-color: var(--input-bg); }
+}
+@media (prefers-contrast: more) {
+  .topbar, .dock, .status-hud, .results-header, .dock-panel, .modal-overlay > div,
+  .synthesis-panel, .assistant-panel, .dots-menu, .people-list, .scihub-alt-menu, .pdf-header {
+    background-color: var(--bg2);
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+    border-color: var(--text3); box-shadow: none;
+  }
+  .link-btn, .action-btn, .sources-chip, .pdf-action, .pdf-zoom-btn, .btn-secondary, button, select,
+  .people-chip .people-chip-name, .people-chip .people-chip-x {
+    box-shadow: none; border-color: var(--text3);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-panel.open { animation: none; }
+}
+
+/* ── NATIVE CHROME (the iOS app, ios/src/medsearch/chrome.py). The shell
+   draws the search pill, the sources pill and the dock in the system's own
+   Liquid Glass over the page and adds this class before the page's script
+   runs; the page's three bars step aside and the results clear the native
+   ones instead (pill 56 under the status bar; dock 56 and pill 44 above the
+   home indicator). The sheets, menus and buttons stay the page's. ───────── */
+html.native-chrome .topbar, html.native-chrome .dock, html.native-chrome .phone-sources-host {
+  display: none !important;
+}
+/* The document itself never scrolls: the results do, inside .results-scroll. */
+html.native-chrome, html.native-chrome body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+/* WHERE THE NATIVE BARS END. The chrome sets these two on <html> from the
+   frames it drew (chrome.py): --chrome-top is the underside of the search
+   pill, --chrome-bottom the height from the screen's bottom to the top of
+   the sources pill. Until it has, the page's own safe-area reading stands
+   in: that reading put the status line inside the pill on his phone
+   (20 Oct) while the simulator agreed with it, so it is the fallback,
+   not the rule. */
+html.native-chrome {
+  --chrome-top: calc(env(safe-area-inset-top) + 64px);
+  --chrome-bottom: calc(env(safe-area-inset-bottom) + 116px);
+}
+html.native-chrome .status-hud { top: calc(var(--chrome-top) + 8px); }
+html.native-chrome .results-scroll {
+  padding-top: calc(var(--chrome-top) + 60px);
+  padding-bottom: calc(var(--chrome-bottom) + 20px);
+}
+html.native-chrome .toast { bottom: calc(var(--chrome-bottom) + 12px); }
+/* The author and institution suggestions sit in the screen's flow: a grouped
+   list, as the system's, not a floating card with a shadow (21 Oct). */
+html.native-chrome .people-list {
+  background: var(--bg2); border: 0; border-radius: 14px; box-shadow: none;
+  -webkit-backdrop-filter: none; backdrop-filter: none; padding: 0 0 0 14px;
+}
+html.native-chrome .people-option {
+  border-radius: 0; box-shadow: none; padding: 10px 14px 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+html.native-chrome .people-option:last-child { border-bottom: 0; }
+/* THE SCROLL EDGE (his ask, 21 Oct: what isn't Liquid Glass yet): as the
+   system's own scroll views under bars, the results fade out as they pass
+   under the search pill, the status line and the chips, and again under the
+   sources pill and the dock — they no longer run into the clock and through
+   the pills. A mask, so nothing is re-blurred while scrolling. */
+html.native-chrome .results-scroll {
+  --edge-top: calc(var(--chrome-top) + 44px + var(--filter-chips-h, 0px));
+  -webkit-mask-image: linear-gradient(to bottom,
+    transparent 0, transparent calc(var(--edge-top) - 14px), #000 calc(var(--edge-top) + 18px),
+    #000 calc(100% - var(--chrome-bottom) - 20px), transparent calc(100% - var(--chrome-bottom) + 28px));
+          mask-image: linear-gradient(to bottom,
+    transparent 0, transparent calc(var(--edge-top) - 14px), #000 calc(var(--edge-top) + 18px),
+    #000 calc(100% - var(--chrome-bottom) - 20px), transparent calc(100% - var(--chrome-bottom) + 28px));
+}
+/* The sides: an iPhone on its side has the Dynamic Island on one. */
+html.native-chrome .results-scroll {
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+}
+/* The filter chips, under the status line (app.js placeFilterChips), shown
+   only while one is set; the results move down to clear them. */
+html.native-chrome .native-filter-host {
+  position: fixed; z-index: 1300; left: 50%; transform: translateX(-50%);
+  top: calc(var(--chrome-top) + 44px);
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 12px;
+  max-width: calc(100vw - 32px);
+}
+html.native-chrome .native-filter-host .people-chips { display: contents; }
+html.native-chrome .native-filter-host:not(:has(.people-chip)) { display: none; }
+html.native-chrome:has(.native-filter-host .people-chip) .results-scroll {
+  padding-top: calc(var(--chrome-top) + 72px + var(--filter-chips-h, 36px));
+}
+/* A screen sliding out (.closing, app.js _sheetOut) no longer counts: the
+   chips come back with the bars, not a beat after them — that late pop-in
+   was the flinch on every close (his phone, 21 Oct). */
+html.native-chrome:has(.dock-panel:not([hidden]):not(.closing), .modal-overlay.open:not(:has(> .closing)),
+                       .pdf-overlay.open:not(:has(> .closing)),
+                       .assistant-panel.open:not(.closing), .synthesis-panel.open:not(.closing)) .native-filter-host {
+  visibility: hidden;          /* a screen has the display: the chips wait */
+}
+html.native-chrome .results-header { position: static; margin: 0 0 12px; padding: 0 0 10px;
+  background: none; -webkit-backdrop-filter: none; backdrop-filter: none;
+  border: 0; border-bottom: 1px solid var(--border); border-radius: 0; box-shadow: none; }
+/* Panels and the floating sheets rise above the native dock, centred: the
+   page's buttons that would have placed them are hidden. */
+html.native-chrome .dock-panel {
+  left: 50% !important; transform: translateX(-50%);
+  top: auto; bottom: calc(env(safe-area-inset-bottom) + 72px);
+}
+/* On an iPad the assistant and the synthesis are sheets in the middle, as
+   Settings is, closed by the native X: their own small close marks go on
+   every size (two closes on one screen, his iPad, 19 Oct). */
+html.native-chrome .assistant-close, html.native-chrome .synthesis-close,
+html.native-chrome .pdf-close-action { display: none; }
+/* Every button that only closes goes too: the native X does that (his phone,
+   20 Oct: the citation graph had the X and a Close). A footer left with
+   nothing in it goes with them. */
+html.native-chrome .close-action { display: none; }
+html.native-chrome .settings-footer:not(:has(button:not(.close-action))) { display: none; }
+html.native-chrome .pdf-title { padding-right: 60px; }
+
+/* THE PDF ON A PHONE, under the native bars (his phone, 20 Oct: the X sat on
+   Browser, and the controls were a flat bar). The title on its own beside the
+   X; the controls in a floating glass capsule above the home indicator, as
+   Safari's are, the pages scrolling on beneath it, which is what makes glass
+   look like glass. Save, Browser and Fit as their icons. */
+@media (max-width: 700px) {
+  html.native-chrome .pdf-modal { padding-top: 0; padding-bottom: 0; position: relative; }
+  html.native-chrome .pdf-title {
+    position: fixed; top: calc(env(safe-area-inset-top) + 14px); left: 16px; right: 72px;
+    height: 44px; line-height: 44px; padding: 0; font-size: 1rem; flex: none;
+  }
+  html.native-chrome .pdf-body {
+    margin-top: calc(env(safe-area-inset-top) + 66px);
+    padding-bottom: calc(env(safe-area-inset-bottom) + 80px);
+  }
+  html.native-chrome .pdf-header {
+    position: absolute; left: 12px; right: 12px; top: auto;
+    bottom: calc(env(safe-area-inset-bottom) + 8px);
+    flex-wrap: nowrap; justify-content: space-between; gap: 6px; padding: 6px;
+    border: 0; border-radius: 999px; background: none; box-shadow: none;
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+    z-index: 5;                    /* over the pages, which come after it */
+  }
+  /* The glass is the bar's own layer underneath, not the bar: a blur on the
+     bar would make it the frame of reference for the title above. */
+  html.native-chrome .pdf-header::before {
+    content: ''; position: absolute; inset: 0; border-radius: inherit;
+    background: var(--glass);
+    -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-edge);
+    box-shadow: var(--glass-rim), var(--glass-shadow);
+  }
+  html.native-chrome .pdf-zoom-controls, html.native-chrome .pdf-header-actions {
+    position: relative; flex: 0 0 auto; gap: 6px; margin: 0;
+  }
+  html.native-chrome .pdf-header-actions .pdf-action, html.native-chrome .pdf-fit-btn {
+    flex: none; font-size: 0; min-width: 44px; min-height: 44px; padding: 0 12px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  html.native-chrome .pdf-header-actions .pdf-action .ico, html.native-chrome .pdf-fit-btn .ico {
+    width: 20px; height: 20px;
+  }
+  html.native-chrome .pdf-zoom-btn { min-width: 44px; height: 44px; }
+  html.native-chrome .pdf-header-actions .pdf-action.pdf-close-action { display: none; }
+}
+/* Their own settle animation moves them by transform, which would undo the
+   centring while it runs: app.js fades them instead. */
+html.native-chrome .assistant-panel.open { animation: none; }
+html.native-chrome .synthesis-panel, html.native-chrome .assistant-panel {
+  left: 50%; right: auto; transform: translateX(-50%);
+  top: 50%; bottom: auto; transform: translate(-50%, -50%);
+  width: min(640px, calc(100vw - 48px)); max-width: none;
+  height: min(720px, calc(100vh - 120px)); max-height: none;
+}
+/* The page behind such a sheet steps back, as behind the system's. */
+html.native-chrome .results-scroll { transition: opacity 0.25s ease; }
+html.native-chrome:has(.assistant-panel.open, .synthesis-panel.open) .results-scroll { opacity: 0.45; }
+@media (max-width: 700px) {
+  html.native-chrome .dock-panel { width: auto !important; left: 12px !important; right: 12px; transform: none; }
+  html.native-chrome .assistant-panel { bottom: 0; }
+}
+
+/* ── NATIVE CHROME ON A PHONE: whatever a tab opens takes the whole screen
+   (his ask, 19 Oct: not a card over a page that still scrolls). The native
+   bars step aside, the native X at the top right closes it, and the results
+   beneath hold still. ───────────────────────────────────────────────────── */
+@media (max-width: 700px) {
+  html.native-chrome .dock-panel, html.native-chrome #panelOptions,
+  html.native-chrome .assistant-panel,
+  html.native-chrome .modal-overlay > div,
+  html.native-chrome .synthesis-panel {
+    position: fixed; inset: 0 !important;
+    width: auto !important; max-width: none; height: auto; max-height: none;
+    transform: none; border-radius: 0; border: 0;
+    padding: calc(var(--chrome-top) + 8px) 16px calc(env(safe-area-inset-bottom) + 16px);
+    box-shadow: none;
+    /* A screen is content, not glass over content: opaque, on the page's
+       own ground. The system keeps Liquid Glass for what floats above the
+       content (here the native bars and the X), and an opaque layer slides
+       in without the page behind it being re-blurred on every frame, which
+       was the roughness he saw (19 Oct). */
+    background: var(--bg);
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  html.native-chrome .modal-overlay, html.native-chrome .pdf-overlay {
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  html.native-chrome .synthesis-header { background: var(--bg); }
+  /* The screens slide up and down (app.js, _sheetIn): not the desktop's
+     settle, which the stylesheet gives the assistant. */
+  html.native-chrome .assistant-panel.open { animation: none; }
+  html.native-chrome .modal-overlay { padding: 0; align-items: stretch; }
+  html.native-chrome .modal-overlay > div { max-height: none; padding-left: 0; padding-right: 0; }
+  html.native-chrome .modal-header { padding-top: 0; }
+  html.native-chrome .dock-panel::before, html.native-chrome .assistant-panel::before,
+  html.native-chrome .synthesis-panel::before, html.native-chrome .modal-overlay > div::before {
+    display: none;            /* no grabber: this is a screen, not a sheet */
+  }
+  html.native-chrome .assistant-panel { padding: var(--chrome-top) 0 env(safe-area-inset-bottom); }
+  html.native-chrome .synthesis-panel { overflow-y: auto; }
+  /* The scroll edge on the screens too: a screen's lines fade under the
+     clock and the X, and a sheet's body under its own title, instead of
+     being cut there (21 Oct). */
+  html.native-chrome .dock-panel {
+    -webkit-mask-image: linear-gradient(to bottom, transparent env(safe-area-inset-top), #000 calc(var(--chrome-top) + 4px));
+            mask-image: linear-gradient(to bottom, transparent env(safe-area-inset-top), #000 calc(var(--chrome-top) + 4px));
+  }
+  html.native-chrome .settings-body {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+            mask-image: linear-gradient(to bottom, transparent 0, #000 18px, #000 calc(100% - 18px), transparent 100%);
+  }
+  html.native-chrome .synthesis-header { top: calc(-1 * (var(--chrome-top) + 8px)); }
+  /* The page beneath holds still while something has the screen. */
+  html.native-chrome:has(.dock-panel:not([hidden]), .modal-overlay.open, .pdf-overlay.open,
+                         .assistant-panel.open, .synthesis-panel.open) .results-scroll {
+    overflow: hidden;
+  }
+}
+
+/* ── NO TICKS UNDER A FINGER (his ask, 19 Oct): the box with the tick is a
+   mouse control. A labelled choice is a chip that fills with sage while it
+   is on, as the system's own filter chips; a bare one is a switch; a row of
+   the Databases list fills when it is ticked. The input stays, out of sight,
+   so the label still toggles it and VoiceOver still reads it. ────────────── */
+@media (pointer: coarse) {
+  label:has(> input[type=checkbox]) {
+    display: inline-flex; align-items: center; gap: 0;
+    min-height: 40px; padding: 8px 16px;
+    border-radius: 999px; border: 1px solid var(--glass-edge);
+    background-color: var(--glass); box-shadow: var(--glass-rim);
+    color: var(--text); cursor: pointer; user-select: none;
+    transition: background-color var(--transition), color var(--transition);
+  }
+  label:has(> input[type=checkbox]:checked) {
+    background-color: color-mix(in srgb, var(--accent) 88%, transparent);
+    border-color: rgba(255,255,255,0.45);
+    color: var(--on-accent);
+  }
+  label:has(> input[type=checkbox]:disabled) { opacity: 0.5; }
+  label > input[type=checkbox] {
+    position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; pointer-events: none;
+  }
+  /* A bare tick box becomes a switch. */
+  input[type=checkbox]:not(label > input):not(.db-item input) {
+    width: 46px; height: 28px; border-radius: 999px;
+    border: 1px solid var(--glass-edge); background: var(--bg4);
+    display: inline-block; position: relative; vertical-align: middle;
+    transition: background var(--transition);
+  }
+  input[type=checkbox]:not(label > input):not(.db-item input)::after {
+    content: ''; position: absolute; top: 2px; left: 2px; width: 22px; height: 22px;
+    border-radius: 50%; background: #fff; border: 0; transform: none;
+    box-shadow: 0 1px 3px rgba(64,64,64,0.3);
+    transition: left var(--transition);
+  }
+  input[type=checkbox]:not(label > input):not(.db-item input):checked { background: var(--accent); }
+  input[type=checkbox]:not(label > input):not(.db-item input):checked::after { left: 22px; }
+  /* The Databases list: the row fills, no box. */
+  .db-check { display: none; }
+  .db-item { border-radius: 999px; padding-left: 16px; padding-right: 12px; }
+  .db-item.checked { background-color: color-mix(in srgb, var(--accent) 18%, transparent); }
+  .db-item.checked .db-name { color: var(--accent-text); font-weight: 600; }
+}

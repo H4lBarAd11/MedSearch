@@ -1,0 +1,62 @@
+# MedSearch for iOS: the same Flask engine and web interface as the desktop app,
+# run inside the app by CPython for iOS and shown in a WKWebView (through Toga).
+# Built with Briefcase:  cd ios && briefcase create iOS && briefcase build iOS
+# && briefcase run iOS            (the simulator; -d "iPhone" picks a device)
+
+[tool.briefcase]
+project_name = "MedSearch"
+bundle = "com.halbarad"
+version = "2.3"
+url = "https://github.com/H4lBarAd11/MedSearch"
+license = "Apache-2.0"
+license-files = ["../LICENSE"]
+author = "Riccardo Nevoso"
+author_email = "279025724+H4lBarAd11@users.noreply.github.com"
+# icons/medsearch-<size>.png, every size iOS asks for, from the desktop's own
+# drawing: ../render_icon.py writes them (the tile to the edge, since iOS
+# rounds the corners itself; the launch screen's sizes without the tile, as
+# the Mac's splash draws it). Without these Briefcase ships its own bee.
+icon = "icons/medsearch"
+
+[tool.briefcase.app.medsearch]
+formal_name = "MedSearch"
+description = "The medical literature, sixteen sources at once."
+long_description = """One question goes to PubMed, Europe PMC, Cochrane, ClinicalTrials.gov,
+OpenAlex, Crossref, CORE, arXiv, Scopus, Web of Science, IEEE Xplore, Semantic Scholar and
+the book sources at the same time, and the answers come back as one list."""
+# The engine and its interface are the desktop app's own files, copied in beside
+# this shell: app.py finds templates/ and static/ next to itself, as on the desktop.
+sources = [
+    "src/medsearch",
+    "../app.py",
+    "../secrets_store.py",
+    "../secitem.py",
+    "../signins.py",
+    "../article_windows.py",
+    "../wincred.py",
+    "../static",
+    "../templates",
+    "../VERSION",
+]
+# certifi: CPython for iOS ships no root certificates of its own, and the
+# engine's fallback (the Mac's root Keychain) is not there on iOS.
+requires = [
+    "flask>=3.0",
+    "certifi",
+]
+
+[tool.briefcase.app.medsearch.iOS]
+requires = [
+    "toga-iOS~=0.5.0",
+]
+supported = true
+# The page is served by the app itself on 127.0.0.1, which App Transport
+# Security otherwise refuses as plain http.
+info."NSAppTransportSecurity" = { NSAllowsLocalNetworking = true }
+# The launch screen's ground: the interface's ivory (app.css --bg), under
+# the drawing of the book, as on the Mac. patch_xcode.py lays it out.
+splash_background_color = "#F9F8EF"
+# Exports and saved PDFs go to the app's Documents folder, which these two
+# keys show in the Files app.
+info."UIFileSharingEnabled" = true
+info."LSSupportsOpeningDocumentsInPlace" = true

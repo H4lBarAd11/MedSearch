@@ -28,6 +28,13 @@ macOS expects, so it sits at the same size as every other app in the Dock.
 
 THE LINE IS THE INTERFACE'S LINE. Same construction as the icons in the app:
 even stroke, round caps and joins, no fill inside the drawing.
+
+THE SAME DRAWING FOR iOS (ios/icons/, read by Briefcase through `icon` in
+ios/pyproject.toml). The app icon is the tile to the edge of the canvas, since
+iOS rounds the corners itself, at every size it asks for. The launch screen
+shows the drawing without its tile, as the Mac's splash draws it (splash.py):
+the book in the tile's sage, the magnifier in its caramel, on the interface's
+ivory.  `python render_icon.py ios` writes only that set.
 """
 from __future__ import annotations
 
@@ -71,16 +78,24 @@ def stroke(d, pts, fill, width, round_caps=True):
             d.ellipse([x - width / 2, y - width / 2, x + width / 2, y + width / 2], fill=fill)
 
 
-def draw(c: dict) -> Image.Image:
+def draw(c: dict, tile: bool = True, full: bool = False, size: int = OUT) -> Image.Image:
+    """The artwork. `tile`: on the sage tile (an icon) or alone, the book in
+    sage (a splash). `full`: the tile's body is the whole canvas, no margin
+    and no rounded corners (iOS). `size`: the pixels of the result."""
     img = Image.new("RGBA", (W, W), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     u = W / 1024                                   # one canvas unit
     m = (1 - BODY) / 2 * W                         # margin around the artwork
 
     # ── the ground: flat sage, Apple's corner radius (~22% of the body) ──
-    d.rounded_rectangle([m, m, W - m, W - m], radius=int(0.225 * BODY * W), fill=c["accent"])
+    if tile and full:
+        d.rectangle([0, 0, W, W], fill=c["accent"])
+    elif tile:
+        d.rounded_rectangle([m, m, W - m, W - m], radius=int(0.225 * BODY * W), fill=c["accent"])
 
-    ivory, caramel = c["bg"], c["yellow"]
+    # The line: ivory on the tile; sage without it, as the splash draws it,
+    # since ivory would vanish on a light ground.
+    ivory, caramel = (c["bg"] if tile else c["accent"]), c["yellow"]
     line_w, thin_w = int(30 * u), int(22 * u)
 
     # ── the open book, in ivory line ──
@@ -107,13 +122,19 @@ def draw(c: dict) -> Image.Image:
             for a in (i / 120 * 2 * math.pi for i in range(121))]
     # A sage disc under the ring keeps the page's lines out of the lens, so the
     # magnifier reads as an object on top rather than a circle drawn over text.
-    d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=c["accent"])
+    # Without the tile the lens is open: the ground shows through it, ivory
+    # by day and dark by night on the phone's launch screen, and no page
+    # line runs under it there.
+    if tile:
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=c["accent"])
     stroke(d, ring, caramel, int(34 * u), round_caps=False)
     handle_w = int(44 * u)
     a = math.pi / 4
     stroke(d, [(cx + r * math.cos(a), cy + r * math.sin(a)), (802 * u, 674 * u)],
            caramel, handle_w)
-    return img.resize((OUT, OUT), Image.LANCZOS)
+    if full:
+        img = img.crop((int(m), int(m), int(W - m), int(W - m)))
+    return img.resize((size, size), Image.LANCZOS)
 
 
 def icns(png: Path) -> Path:
@@ -150,13 +171,52 @@ def ico(png: Path) -> Path:
     return out
 
 
+#: ios/icons/: the app icon's sizes (iPhone and iPad, at every scale, and
+#: the Store's 1024) and the launch screen's three, as Briefcase's iOS
+#: template lists them.
+IOS_DIR = ROOT / "ios" / "icons"
+IOS_ICON_SIZES = (20, 29, 40, 58, 60, 76, 80, 87, 120, 152, 167, 180, 1024)
+IOS_SPLASH_SIZES = (640, 1280, 1920)
+SHELL_RES = ROOT / "ios" / "src" / "medsearch" / "resources"
+
+
+def ios(c: dict) -> Path:
+    """The iOS set: the tile to the edge (opaque: an iOS icon carries no
+    alpha) at each icon size, and the drawing alone at each splash size."""
+    IOS_DIR.mkdir(parents=True, exist_ok=True)
+    tile = draw(c, full=True).convert("RGB")
+    for px in IOS_ICON_SIZES:
+        tile.resize((px, px), Image.LANCZOS).save(IOS_DIR / f"medsearch-{px}.png")
+    # On nothing: the launch screen's ground is a named colour of its own
+    # (patch_xcode.py), ivory by day and the page's dark ground by night,
+    # and the drawing sits on either.
+    art = draw(c, tile=False, size=max(IOS_SPLASH_SIZES))
+    for px in IOS_SPLASH_SIZES:
+        art.resize((px, px), Image.LANCZOS).save(IOS_DIR / f"medsearch-{px}.png")
+    # The same drawing for the app's own splash (shell.py, Splash), drawn by
+    # the app over its window while the engine starts: 960 px, 320 points
+    # at the phone's 3x.
+    SHELL_RES.mkdir(parents=True, exist_ok=True)
+    art.resize((960, 960), Image.LANCZOS).save(SHELL_RES / "opening.png")
+    return IOS_DIR
+
+
 def main() -> None:
-    art = draw(palette())
+    import sys
+    c = palette()
+    if sys.argv[1:] == ["ios"]:
+        out = ios(c)
+        print(f"✓ {out.relative_to(ROOT)}: {len(IOS_ICON_SIZES)} icon sizes, "
+              f"{len(IOS_SPLASH_SIZES)} launch-screen sizes")
+        return
+    art = draw(c)
     preview = ROOT / "icon_preview.png"
     art.save(preview)
     out = icns(preview)
     win = ico(preview)
-    print(f"✓ {out.name}, {win.name} and {preview.name} ({OUT}px, {int(BODY * OUT)}px body)")
+    ios(c)
+    print(f"✓ {out.name}, {win.name} and {preview.name} ({OUT}px, {int(BODY * OUT)}px body); "
+          f"ios/icons/ too")
 
 
 if __name__ == "__main__":

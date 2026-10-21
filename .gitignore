@@ -29,3 +29,13 @@ dist/
 
 # Test cache
 .pytest_cache/
+
+# iOS build (Briefcase): the generated Xcode project and the simulator logs
+ios/build/
+ios/logs/
+ios/.briefcase/
+
+# The Mac provisioning probe (packaging/macsign): its generated Xcode project
+packaging/macsign/build/
+packaging/macsign/logs/
+packaging/macsign/.briefcase/
