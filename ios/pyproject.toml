@@ -6,7 +6,7 @@
 [tool.briefcase]
 project_name = "MedSearch"
 bundle = "com.halbarad"
-version = "2.3"
+version = "2.4"
 url = "https://github.com/H4lBarAd11/MedSearch"
 license = "Apache-2.0"
 license-files = ["../LICENSE"]

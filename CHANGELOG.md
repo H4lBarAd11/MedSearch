@@ -4,6 +4,17 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 2.4
+
+- Zotero without the Zotero app: add a Zotero API key in Settings, and Send to Zotero saves straight into your online library whenever the Zotero app isn't open. The items appear in the app at its next sync.
+- Every API key in Settings has a line or two on how to get it, with a link straight to the right page.
+- The AI tab in the bottom bar: the switch that turns the AI features on or off, what they have cost this month and the monthly limit, all in one place.
+- Exports on the Mac are kept inside MedSearch, and Show in Finder opens them. Earlier exports move in once, and updates carry them over.
+- The country picked under National guidelines is remembered as soon as you pick it. Before, it was kept only once its button was pressed, and an update brought back the first country in the list.
+- Clicks in the bottom-right corner of the window, where confirmation messages appear, sometimes did nothing: a message, once gone, still lay there and took them.
+- Saving Settings no longer erases an API key the Keychain hadn't handed over to MedSearch when it started, which could happen with the Keychain still locked.
+- The opening animation plays on the desktop where the window opens, not over an app in full screen.
+
 ## 2.3
 
 - Get it at your library: books and chapters have a button with your library's name, which opens the library's own page for the book in a MedSearch window. It says whether the library has the book or the e-book, and lets you request it or ask for an interlibrary loan when it hasn't. UniTN's catalogue is built in; for another library, add its catalogue address (OpenURL) in Settings, where its proxy is. Without one there is no button.
