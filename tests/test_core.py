@@ -515,6 +515,9 @@ def test_the_old_exports_move_into_the_app_once(monkeypatch, tmp_path):
     assert not old.exists()
 
 
+# chmod can't take writing away from a folder on Windows, and an app bundle
+# is a Mac's own: the Windows run failed here (release 2.4, 21 Oct).
+@pytest.mark.skipif(sys.platform == "win32", reason="chmod cannot make a folder read-only on Windows")
 def test_an_app_that_cannot_be_written_to_falls_back_to_the_home_folder(monkeypatch, tmp_path):
     app = _installed_mac(monkeypatch, tmp_path)
     app.joinpath("Contents").chmod(0o500)
