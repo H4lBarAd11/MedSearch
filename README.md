@@ -134,17 +134,22 @@ articles from an address on a hospital or university intranet.
 
 ## Install (Windows)
 
-For Windows 10 and 11, 64-bit. Nothing else is needed, and no administrator rights. On a PC
-with an ARM processor it runs too, under Windows' own emulation.
+For Windows 10 and 11, 64-bit. On most PCs nothing else is needed, and no administrator rights.
 
 1. Download **`MedSearch-<version>-Setup.exe`** from the
-   [latest release](https://github.com/H4lBarAd11/MedSearch/releases/latest).
+   [latest release](https://github.com/H4lBarAd11/MedSearch/releases/latest). On a PC with an
+   ARM processor (a Surface or another Copilot+ PC with Snapdragon, for example), download
+   **`MedSearch-<version>-Setup-arm64.exe`** instead. The other one runs there too, under
+   Windows' emulation, but more slowly.
 2. Run it. MedSearch is installed for you alone, with an entry in the Start menu and, unless
    you untick it, an icon on the Desktop.
 
 The first time, Windows warns that it *protected your PC*, because MedSearch is not signed
 with a paid certificate. Press **More info ▸ Run anyway**, once. Setup also installs
-Microsoft's WebView2, which draws MedSearch's window, on the rare PC that lacks it.
+Microsoft's WebView2, which draws MedSearch's window, on the rare PC that lacks it. The ARM
+Setup also needs Microsoft's .NET Desktop Runtime. If the PC doesn't have it, Setup downloads
+it and installs it first. This is the one step that asks for an administrator, and only
+the first time.
 
 ## On your iPhone or iPad (build it yourself)
 

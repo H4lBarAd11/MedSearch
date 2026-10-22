@@ -4,6 +4,10 @@ The newest version first. MedSearch shows the entry for a new version in the
 update prompt, so this file is what a user reads before choosing to update:
 one line per change, in plain words, no internals.
 
+## 2.7
+
+- Windows on ARM: MedSearch has its own Setup for PCs with an ARM processor, such as a Surface with Snapdragon, and runs there natively instead of under emulation. The first time, Setup installs Microsoft's .NET Desktop Runtime if the PC doesn't have it, which asks for an administrator. Once .NET is on the PC, updates move an ARM PC that ran the other Setup over to this one.
+
 ## 2.6
 
 - The AI can be used through OpenRouter as well as Anthropic: pick the one you want in Settings and paste its key. Both answer the same requests, and the OpenRouter models can be changed to any other model on OpenRouter.

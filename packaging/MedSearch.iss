@@ -19,6 +19,14 @@
 ; build-windows.ps1 passes when its Python is ARM64). Same AppId, same folder:
 ; an ARM PC that ran the x64 build under emulation moves to the native one at
 ; its next update. The x64 Setup keeps the name every earlier version looks for.
+;
+; .NET ON ARM. The ARM build draws its windows with Microsoft's .NET Desktop
+; Runtime (version 8 or later), which Windows doesn't come with: where it is
+; missing, the ARM Setup downloads Microsoft's installer for .NET 10 and runs
+; it first, which asks for an administrator once (MedSearch itself needs none).
+; Kept out of the Setup on purpose, to keep the Setup small (his pick, 22 Oct).
+; An in-app update, which runs quietly, never gets here: MedSearch picks the
+; ARM Setup only on a PC that has .NET already (app.py, _windows_setup_arch).
 #ifndef Arch
   #define Arch "x64"
 #endif
@@ -88,6 +96,8 @@ const
   WebView2Client = 'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
   WebView2Setup = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703';
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+  DotnetDesktopMin = 8;
+  DotnetDesktopSetup = 'https://aka.ms/dotnet/10.0/windowsdesktop-runtime-win-arm64.exe';
 
 var
   DownloadPage: TDownloadWizardPage;
@@ -117,12 +127,77 @@ begin
                                      SetupMessage(msgPreparingDesc), nil);
 end;
 
+{ A .NET Desktop Runtime for the PC's own processor, DotnetDesktopMin or newer,
+  no preview: a folder such as dotnet\shared\Microsoft.WindowsDesktop.App\10.0.13. }
+function HasDotnetDesktop(): Boolean;
+var
+  Found: TFindRec;
+begin
+  Result := False;
+  if FindFirst(ExpandConstant('{commonpf64}\dotnet\shared\Microsoft.WindowsDesktop.App\*'), Found) then
+  try
+    repeat
+      if (Found.Attributes and FILE_ATTRIBUTE_DIRECTORY <> 0) and (Pos('-', Found.Name) = 0) and
+         (StrToIntDef(Copy(Found.Name, 1, Pos('.', Found.Name) - 1), 0) >= DotnetDesktopMin) then
+        Result := True;
+    until Result or not FindNext(Found);
+  finally
+    FindClose(Found);
+  end;
+end;
+
+{ The ARM build only: install .NET's Desktop Runtime when it is missing. False
+  keeps Setup on its last page, where Install tries again. }
+function InstallDotnetDesktop(): Boolean;
+var
+  ResultCode: Integer;
+  Why: String;
+begin
+  Result := True;
+#if Arch == "arm64"
+  if HasDotnetDesktop() then
+    Exit;
+  Why := '';
+  DownloadPage.Clear;
+  DownloadPage.Add(DotnetDesktopSetup, 'windowsdesktop-runtime-win-arm64.exe', '');
+  DownloadPage.Show;
+  try
+    try
+      DownloadPage.Download;
+      { Microsoft's installer asks for an administrator itself. ShellExec, not
+        Exec, so that Windows lets it. }
+      if not ShellExec('', ExpandConstant('{tmp}\windowsdesktop-runtime-win-arm64.exe'),
+                       '/install /quiet /norestart', '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+        Why := SysErrorMessage(ResultCode)
+      else if (ResultCode <> 0) and (ResultCode <> 3010) then     { 3010: done, restart later }
+        Why := 'its installer ended with code ' + IntToStr(ResultCode);
+    except
+      Why := GetExceptionMessage;
+    end;
+  finally
+    DownloadPage.Hide;
+  end;
+  if HasDotnetDesktop() then
+    Exit;
+  if Why = '' then
+    Why := 'it is still missing';
+  SuppressibleMsgBox('MedSearch for Windows on ARM needs Microsoft''s .NET Desktop Runtime, ' +
+    'which could not be installed: ' + Why + '.' + #13#10#13#10 + 'Press Install to try ' +
+    'again (Windows asks for an administrator), or install ".NET Desktop Runtime" for Arm64 ' +
+    'from dotnet.microsoft.com and run this Setup again.', mbError, MB_OK, IDOK);
+  Result := False;
+#endif
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   ResultCode: Integer;
 begin
   Result := True;
-  if (CurPageID <> wpReady) or HasWebView2() then
+  if CurPageID <> wpReady then
+    Exit;
+  Result := InstallDotnetDesktop();
+  if (not Result) or HasWebView2() then
     Exit;
   DownloadPage.Clear;
   DownloadPage.Add(WebView2Setup, 'MicrosoftEdgeWebview2Setup.exe', '');

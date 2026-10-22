@@ -367,6 +367,7 @@ def test_an_arm_pc_takes_the_arm_installer_and_an_older_releases_x64_one(monkeyp
     assert A._asset_name("2.5", "darwin", "arm64") == "MedSearch-2.5-mac.dmg"
     monkeypatch.setattr(A.sys, "platform", "win32")
     monkeypatch.setattr(A, "_windows_machine", lambda: "arm64")
+    monkeypatch.setattr(A, "_dotnet_desktop_runtimes", lambda: [((10, 0, 13), "10.0.13")])
     monkeypatch.setattr(A, "_NO_ARM64", set())
     on_github = {"/v2.5/MedSearch-2.5-Setup-arm64.exe", "/v2.5/MedSearch-2.5-Setup.exe",
                  "/v2.4/MedSearch-2.4-Setup.exe"}
@@ -383,3 +384,55 @@ def test_an_arm_pc_takes_the_arm_installer_and_an_older_releases_x64_one(monkeyp
     assert asked == ["/v2.5/MedSearch-2.5-Setup-arm64.exe",
                      "/v2.4/MedSearch-2.4-Setup-arm64.exe", "/v2.4/MedSearch-2.4-Setup.exe"]
     assert A._release_published("2.6") is False                 # neither is there yet
+
+
+def test_an_arm_pc_without_dotnet_keeps_the_x64_installer(monkeypatch):
+    # Updates run Setup quietly, and installing .NET would stop one to ask for
+    # an administrator: without it the x64 build, which Windows emulates, goes on.
+    monkeypatch.setattr(A.sys, "platform", "win32")
+    monkeypatch.setattr(A, "_windows_machine", lambda: "arm64")
+    monkeypatch.setattr(A, "_dotnet_desktop_runtimes", lambda: [])
+    assert A._asset_name("2.7") == "MedSearch-2.7-Setup.exe"
+    monkeypatch.setattr(A, "_dotnet_desktop_runtimes", lambda: [((8, 0, 32), "8.0.32")])
+    assert A._asset_name("2.7") == "MedSearch-2.7-Setup-arm64.exe"
+    monkeypatch.setattr(A, "_windows_machine", lambda: "x64")
+    assert A._asset_name("2.7") == "MedSearch-2.7-Setup.exe"
+
+
+def test_the_dotnet_desktop_runtimes_found_are_8_or_newer_and_no_previews(monkeypatch, tmp_path):
+    shared = tmp_path / "dotnet" / "shared" / "Microsoft.WindowsDesktop.App"
+    for name in ("8.0.32", "10.0.13", "10.0.9", "7.0.20", "11.0.0-rc.2.25502.107"):
+        (shared / name).mkdir(parents=True)
+    (shared / "9.0.1").write_text("not a folder")
+    monkeypatch.setattr(A, "_dotnet_root", lambda: tmp_path / "dotnet")
+    assert A._dotnet_desktop_runtimes() == [((10, 0, 13), "10.0.13"), ((10, 0, 9), "10.0.9"),
+                                            ((8, 0, 32), "8.0.32")]
+    monkeypatch.setattr(A, "_dotnet_root", lambda: tmp_path / "nowhere")
+    assert A._dotnet_desktop_runtimes() == []
+
+
+def test_the_arm_build_starts_the_newest_dotnet_desktop_runtime(monkeypatch, tmp_path):
+    loaded = []
+    monkeypatch.setitem(sys.modules, "pythonnet", types.SimpleNamespace(
+        load=lambda kind, **params: loaded.append((kind, params))))
+    monkeypatch.setitem(sys.modules, "clr_loader", types.SimpleNamespace(
+        DotnetCoreRuntimeSpec=lambda name, version, path: (name, version, path)))
+    import platform
+    monkeypatch.setattr(A, "_dotnet_root", lambda: tmp_path)
+
+    monkeypatch.setattr(platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(A.sys, "platform", "win32")
+    assert A._start_dotnet_on_arm() is None and loaded == []     # x64: Windows' own .NET Framework
+
+    monkeypatch.setattr(platform, "machine", lambda: "ARM64")
+    monkeypatch.setattr(A, "_dotnet_desktop_runtimes", lambda: [])
+    missing = A._start_dotnet_on_arm()
+    assert "needs Microsoft's .NET Desktop Runtime" in missing and "Setup again" in missing
+    assert loaded == []
+
+    monkeypatch.setattr(A, "_dotnet_desktop_runtimes",
+                        lambda: [((10, 0, 13), "10.0.13"), ((8, 0, 32), "8.0.32")])
+    assert A._start_dotnet_on_arm() is None
+    path = tmp_path / "shared" / "Microsoft.WindowsDesktop.App" / "10.0.13"
+    assert loaded == [("coreclr", {"runtime_spec": ("Microsoft.WindowsDesktop.App", "10.0.13", path),
+                                   "dotnet_root": str(tmp_path)})]

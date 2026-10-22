@@ -4896,13 +4896,48 @@ def _windows_machine():
     import platform
     return "arm64" if platform.machine().upper() in ("ARM64", "AARCH64") else "x64"
 
-# Versions released without an ARM installer (2.4 and before): an ARM PC
+# The ARM build draws its windows with .NET's Desktop Runtime, which Windows
+# doesn't come with (see _start_dotnet_on_arm); its Setup installs it. Any
+# version from this one up will do: the newest one installed is used.
+DOTNET_DESKTOP_MIN = 8
+
+def _dotnet_root():
+    """Where Windows keeps .NET for the PC's own processor. On an ARM PC an
+    x64 .NET goes into dotnet\\x64 beneath it, so this folder is the ARM one,
+    whichever MedSearch asks."""
+    base = os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles") or r"C:\Program Files"
+    return Path(base) / "dotnet"
+
+def _dotnet_desktop_runtimes():
+    """The .NET Desktop Runtimes installed there, DOTNET_DESKTOP_MIN or newer
+    and no previews, newest first: [(version tuple, folder name)]."""
+    found = []
+    try:
+        for p in (_dotnet_root() / "shared" / "Microsoft.WindowsDesktop.App").iterdir():
+            m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", p.name)
+            if m and p.is_dir() and int(m.group(1)) >= DOTNET_DESKTOP_MIN:
+                found.append((tuple(int(g) for g in m.groups()), p.name))
+    except OSError:
+        pass
+    return sorted(found, reverse=True)
+
+def _windows_setup_arch():
+    """The Setup an update installs: the ARM one on an ARM PC that has the
+    .NET Desktop Runtime, else the x64 one. Updates run Setup quietly, and
+    installing .NET would ask for an administrator in the middle of one; an
+    ARM PC without it goes on with the x64 build, which Windows emulates,
+    until the ARM Setup is run by hand (it installs .NET first)."""
+    if _windows_machine() == "arm64" and _dotnet_desktop_runtimes():
+        return "arm64"
+    return "x64"
+
+# Versions released without an ARM installer (2.6 and before): an ARM PC
 # takes their x64 one, which Windows runs under emulation.
 _NO_ARM64 = set()
 
 def _asset_name(version, system=None, machine=None):
     if (system or sys.platform) == "win32":
-        if (machine or _windows_machine()) == "arm64" and version not in _NO_ARM64:
+        if (machine or _windows_setup_arch()) == "arm64" and version not in _NO_ARM64:
             return f"MedSearch-{version}-Setup-arm64.exe"
         return f"MedSearch-{version}-Setup.exe"
     return f"MedSearch-{version}-mac.dmg"
@@ -5204,6 +5239,36 @@ def _window_failed(e):
     except Exception as shown:
         print(f"  (the error dialog couldn't show either: {shown})")
     os._exit(1)
+
+def _start_dotnet_on_arm():
+    """On an ARM64 MedSearch for Windows, start .NET's Desktop Runtime before
+    the splash, the tray or pywebview import clr.
+
+    On an x64 PC pythonnet uses the .NET Framework that comes with Windows,
+    through clr-loader's ClrLoader.dll, which exists for x64 and x86 only.
+    Without it pywebview falls back to .NET (CoreCLR) but asks for its bare
+    runtime, which has no Windows Forms, and the window never opened (21 Oct).
+    Asked for the Desktop Runtime instead, .NET has them. Returns what is
+    missing, in words for the user, or None."""
+    import platform
+    if sys.platform != "win32" or platform.machine().upper() not in ("ARM64", "AARCH64"):
+        return None
+    runtimes = _dotnet_desktop_runtimes()
+    if not runtimes:
+        return (f"MedSearch for Windows on ARM needs Microsoft's .NET Desktop Runtime "
+                f"(version {DOTNET_DESKTOP_MIN} or later, Arm64), and this PC doesn't have it.\n\n"
+                "Run MedSearch's Setup again: it installs it first. Or install "
+                "\".NET Desktop Runtime\" for Arm64 from dotnet.microsoft.com/download/dotnet "
+                "and open MedSearch again.")
+    import pythonnet
+    from clr_loader import DotnetCoreRuntimeSpec
+    _, name = runtimes[0]
+    root = _dotnet_root()
+    spec = DotnetCoreRuntimeSpec("Microsoft.WindowsDesktop.App", name,
+                                 root / "shared" / "Microsoft.WindowsDesktop.App" / name)
+    pythonnet.load("coreclr", runtime_spec=spec, dotnet_root=str(root))
+    print(f"  .NET Desktop Runtime {name}")
+    return None
 
 def _self_command(*args):
     """The command that starts this MedSearch: the installers' app is its own
@@ -6660,6 +6725,16 @@ if __name__ == "__main__":
 
     def run_server():
         app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True, use_reloader=False)
+
+    # Windows on ARM: .NET's Desktop Runtime first, before anything imports clr.
+    try:
+        _missing = _start_dotnet_on_arm()
+    except Exception as e:
+        _window_failed(e)
+    if _missing:
+        print(f"  {_missing.splitlines()[0]}")
+        _tell_window_failed(_missing)
+        os._exit(1)
 
     # Try to open a native window via pywebview; fall back to a browser tab.
     try:

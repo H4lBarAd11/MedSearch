@@ -125,16 +125,18 @@ jobs:
           if-no-files-found: ignore
 
   windows:
-    # x64 only for now. An arm64 leg (runner: windows-11-arm) builds, but its
-    # window never opens: clr-loader (0.3.1) ships its .NET Framework loader
-    # for amd64 and x86 only, so pythonnet falls back to CoreCLR, which has no
-    # Windows Forms (21 Oct). ARM PCs run the x64 build under emulation, and
-    # the updater falls back to it (app.py, _NO_ARM64).
+    # x64, and arm64 for Windows on ARM. clr-loader (0.3.1) has its .NET
+    # Framework loader for amd64 and x86 only, so the ARM build starts .NET's
+    # Desktop Runtime itself (app.py, _start_dotnet_on_arm); its Setup installs
+    # that runtime where it is missing.
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: x64
             runner: windows-latest
+          - arch: arm64
+            runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -236,6 +238,8 @@ jobs:
             Get-Content "$h\.medsearch\medsearch.log" -Encoding utf8 -ErrorAction SilentlyContinue | Write-Host
             $wv = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue | Select-Object -First 1
             Write-Host "WebView2: $(if ($wv) { $wv.pv } else { 'not found' })"
+            $dd = Get-ChildItem "$env:ProgramFiles\dotnet\shared\Microsoft.WindowsDesktop.App" -ErrorAction SilentlyContinue
+            Write-Host ".NET Desktop Runtimes: $(if ($dd) { ($dd.Name -join ', ') } else { 'none' })"
             Write-Host "MedSearch running: $(-not $app.HasExited)"
             throw $why
           }
@@ -378,4 +382,4 @@ jobs:
           awk -v head="## $V" '$0 == head { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > notes.md
           [ -s notes.md ] || echo "MedSearch $V." > notes.md
           gh release create "v$V" --target "$GITHUB_SHA" --title "MedSearch $V" --notes-file notes.md \
-            "dist/MedSearch-$V-mac.dmg" "dist/MedSearch-$V-Setup.exe"
+            "dist/MedSearch-$V-mac.dmg" "dist/MedSearch-$V-Setup.exe" "dist/MedSearch-$V-Setup-arm64.exe"

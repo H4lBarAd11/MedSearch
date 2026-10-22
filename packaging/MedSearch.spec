@@ -35,7 +35,9 @@ if WINDOWS:
     datas.append((str(ROOT / "icon.ico"), "."))          # the tray and the windows
     # Imported only inside functions that run on Windows.
     hidden = ["tray", "splash_win", "webview.platforms.winforms",
-              "webview.platforms.edgechromium"]
+              "webview.platforms.edgechromium",
+              # The ARM build starts .NET itself (app.py, _start_dotnet_on_arm).
+              "pythonnet", "clr_loader", "clr_loader.hostfxr"]
 else:
     datas.append((str(ROOT / "menubar_icon.png"), "."))
     # Imported only inside functions that run on the Mac.

@@ -67,6 +67,7 @@ def test_the_release_waits_for_both_systems_and_publishes_both_installers():
     w = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     assert "paths: [VERSION]" in w                              # a VERSION bump releases (his choice)
     assert "needs: [mac, windows]" in w
-    assert 'MedSearch-$V-mac.dmg" "dist/MedSearch-$V-Setup.exe"' in w
+    assert 'MedSearch-$V-mac.dmg" "dist/MedSearch-$V-Setup.exe" "dist/MedSearch-$V-Setup-arm64.exe"' in w
+    assert "runner: windows-11-arm" in w                         # Windows on ARM, built natively
     assert "check_mac_app.py dist/MedSearch.app --archs x86_64 arm64 --min-macos 12.0" in w
     assert "MEDSEARCH_TARGET_ARCH: universal2" in w
