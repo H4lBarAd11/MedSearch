@@ -6935,8 +6935,13 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"  (tray icon unavailable: {e})")
                 return
-            for _ in range(100):                      # up to 10 s for the window
-                if getattr(_MAIN_WINDOW, "native", None) is not None:
+            # Up to 10 s for the window, and for Windows' own window behind
+            # it: Invoke refuses a form whose handle doesn't exist yet. The
+            # pywebview the ARM build uses (release.yml) sets `native` before
+            # that, and the icon failed (his VM, 22 Oct).
+            for _ in range(100):
+                native = getattr(_MAIN_WINDOW, "native", None)
+                if native is not None and native.IsHandleCreated:
                     break
                 time.sleep(0.1)
 
