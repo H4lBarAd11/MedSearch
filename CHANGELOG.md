@@ -7,6 +7,7 @@ one line per change, in plain words, no internals.
 ## 2.6
 
 - The AI can be used through OpenRouter as well as Anthropic: pick the one you want in Settings and paste its key. Both answer the same requests, and the OpenRouter models can be changed to any other model on OpenRouter.
+- In Options, "Matching" lines up with the Strict switch beside it. When the hint under the switch ran onto a second line, the label sat lower than the switch.
 
 ## 2.5
 
