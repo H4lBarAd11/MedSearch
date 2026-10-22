@@ -5248,8 +5248,11 @@ def _start_dotnet_on_arm():
     through clr-loader's ClrLoader.dll, which exists for x64 and x86 only.
     Without it pywebview falls back to .NET (CoreCLR) but asks for its bare
     runtime, which has no Windows Forms, and the window never opened (21 Oct).
-    Asked for the Desktop Runtime instead, .NET has them. Returns what is
-    missing, in words for the user, or None."""
+    Asked for the Desktop Runtime instead, .NET has them. It must be started
+    here, not left to pywebview: the splash and the tray import clr first.
+    pywebview from #1832 on (which the ARM build uses, release.yml) takes a
+    .NET already started as it is. Returns what is missing, in words for the
+    user, or None."""
     import platform
     if sys.platform != "win32" or platform.machine().upper() not in ("ARM64", "AARCH64"):
         return None
