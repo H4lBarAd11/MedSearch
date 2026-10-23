@@ -7,6 +7,7 @@ one line per change, in plain words, no internals.
 ## 2.7
 
 - Windows on ARM: MedSearch has its own Setup for PCs with an ARM processor, such as a Surface with Snapdragon, and runs there natively instead of under emulation. The first time, Setup installs Microsoft's .NET Desktop Runtime if the PC doesn't have it, which asks for an administrator. Once .NET is on the PC, updates move an ARM PC that ran the other Setup over to this one.
+- Ctrl+W on Windows closes the window you're in, as the close button does: an article window closes, and the MedSearch window closes the dialog or PDF open in it, or else hides by the clock.
 
 ## 2.6
 

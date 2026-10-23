@@ -31,7 +31,8 @@ gets a window MedSearch builds on the article window's own Edge environment and
 hands back, so the page stays its opener and the sign-in is shared; if that
 cannot be built, Edge's own popup window takes over, which keeps both too. A
 file goes to Downloads; a PDF opens in the PC's PDF app, anything else is shown
-in Explorer.
+in Explorer. Ctrl+W closes any of MedSearch's windows, as ⌘W does on the Mac
+(ctrl_w_closes).
 
 ONLY ARTICLE WINDOWS. MedSearch's own window keeps pywebview's behaviour: its
 plain DOI and PubMed links are meant to open in the browser.
@@ -469,6 +470,7 @@ def install_windows(is_article, on_page=None, on_message=None, downloads=None,
                     raise RuntimeError(str(e.InitializationException))
                 core = web.CoreWebView2
                 wire(core, form)
+                ctrl_w_closes(web, form)
                 args.NewWindow = core
                 args.Handled = True
             except Exception as err:
@@ -503,6 +505,11 @@ def install_windows(is_article, on_page=None, on_message=None, downloads=None,
             core.WebMessageReceived += lambda s, a: _quietly(on_message, s, a)
 
     class MedSearchArticleEdge(base):
+        def on_webview_ready(self, sender, args):
+            super().on_webview_ready(sender, args)
+            if args.IsSuccess:
+                ctrl_w_closes(self.webview, self.form)
+
         def on_navigation_start(self, sender, args):
             if not is_article(self.pywebview_window):
                 current = str(sender.Source) if sender.Source is not None else ""
@@ -524,6 +531,50 @@ def install_windows(is_article, on_page=None, on_message=None, downloads=None,
             download(args, self.form)
 
     edge.EdgeChrome = MedSearchArticleEdge
+
+
+VK_W = 0x57                           # the W key, as Windows numbers it
+
+
+def is_ctrl_w(key: int, keydown: bool, repeat: bool, ctrl: bool, shift: bool, alt: bool) -> bool:
+    """Ctrl+W alone, pressed now: not held down, not with Shift or Alt."""
+    return key == VK_W and keydown and not repeat and ctrl and not shift and not alt
+
+
+def ctrl_w_closes(web, form) -> None:
+    """Ctrl+W in a window does what its close button does: an article window
+    closes, the main window closes its top dialog or hides by the clock (tray.py).
+    The Mac's ⌘W comes from its menu bar, which Windows has no counterpart of, so
+    Ctrl+W did nothing at all (his ARM VM, 23 Oct).
+
+    Asked of Edge's controller, which sees the key before the page, a PDF
+    included, and lets the window keep it. The WinForms control keeps that
+    controller to itself, so it is read from the control's own field; a control
+    without it leaves Ctrl+W doing nothing, as before. The close waits until Edge
+    has finished with the key: an article window takes its Edge with it."""
+    try:
+        import System
+        import System.Windows.Forms as WinForms
+        from System.Reflection import BindingFlags
+        from Microsoft.Web.WebView2.Core import CoreWebView2KeyEventKind
+
+        field = web.GetType().GetField("_coreWebView2Controller",
+                                       BindingFlags.NonPublic | BindingFlags.Instance)
+        controller = field.GetValue(web) if field is not None else None
+        if controller is None:
+            raise RuntimeError("no Edge controller")
+
+        def pressed(sender, args):
+            mods = WinForms.Control.ModifierKeys
+            if is_ctrl_w(args.VirtualKey, args.KeyEventKind == CoreWebView2KeyEventKind.KeyDown,
+                         bool(args.PhysicalKeyStatus.WasKeyDown),
+                         mods.HasFlag(WinForms.Keys.Control), mods.HasFlag(WinForms.Keys.Shift),
+                         mods.HasFlag(WinForms.Keys.Alt)):
+                args.Handled = True
+                form.BeginInvoke(System.Action(form.Close))
+        controller.AcceleratorKeyPressed += pressed
+    except Exception as e:
+        print(f"  (Ctrl+W won't close this window: {e})")
 
 
 def _dpi_scale(form) -> float:

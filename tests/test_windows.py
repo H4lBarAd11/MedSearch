@@ -353,6 +353,28 @@ def test_a_failed_download_says_why_in_words():
     assert AW.interrupted_because("") == "It stopped for no given reason."
 
 
+# ── Ctrl+W ───────────────────────────────────────────────────────────────────
+def test_ctrl_w_alone_closes_a_window_once():
+    assert AW.is_ctrl_w(0x57, keydown=True, repeat=False, ctrl=True, shift=False, alt=False)
+    assert not AW.is_ctrl_w(0x57, keydown=True, repeat=True, ctrl=True, shift=False, alt=False)
+    assert not AW.is_ctrl_w(0x57, keydown=False, repeat=False, ctrl=True, shift=False, alt=False)
+    assert not AW.is_ctrl_w(0x57, keydown=True, repeat=False, ctrl=False, shift=False, alt=False)
+    assert not AW.is_ctrl_w(0x57, keydown=True, repeat=False, ctrl=True, shift=True, alt=False)
+    assert not AW.is_ctrl_w(0x57, keydown=True, repeat=False, ctrl=True, shift=False, alt=True)
+    assert not AW.is_ctrl_w(0x51, keydown=True, repeat=False, ctrl=True, shift=False, alt=False)
+
+
+def test_ctrl_w_is_wired_into_every_window_medsearch_builds_on_windows():
+    src = Path(AW.__file__).read_text(encoding="utf-8")
+    assert "ctrl_w_closes(self.webview, self.form)" in src      # pywebview's windows, the main one too
+    assert "ctrl_w_closes(web, form)" in src                    # a page's new tab
+
+
+def test_ctrl_w_without_edge_leaves_the_window_as_it_was(capsys):
+    AW.ctrl_w_closes(object(), object())
+    assert "Ctrl+W won't close this window" in capsys.readouterr().out
+
+
 # ── the app on Windows ───────────────────────────────────────────────────────
 def _on_windows(monkeypatch, **extra):
     """app.py's own `sys` as Windows'; the real one is left alone."""
